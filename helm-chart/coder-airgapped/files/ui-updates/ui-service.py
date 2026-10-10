@@ -3,6 +3,7 @@
   GET  /__coder-ui/<file>                 the dashboard add-ons (dashboard.js, views, ..., the Workspaces icon), revalidated on every use
   GET  /__coder-ui/refresh                clears the browser's cached Coder JavaScript (Clear-Site-Data) and returns to /
   GET  /__coder-ui/healthz
+  GET  /__icons/<file>                   the workspace template's app icons (TEMPLATE_ICONS_DIR), public, cacheable
 
   Announcement receipts
   GET  /__coder-ui/api/me?id=X            signed in? and did they confirm announcement X
@@ -171,6 +172,13 @@ DEFAULTS_DIR = os.environ.get(
     "DEFAULTS_DIR", "/app/defaults"
 )  # <dir>/logo/logo.<ext>, <dir>/avatar/avatar.<ext>
 BASE = "/__coder-ui"
+# Icons bundled with the workspace template (charts/coder-workspace/files/icons/, mounted from its ConfigMap), served
+# at /__icons/<file> on Coder's hostname for coder_app.icon (Traefik routes /__icons/ here).
+TEMPLATE_ICONS_PATH = "/__icons/"
+TEMPLATE_ICONS_DIR = os.environ.get("TEMPLATE_ICONS_DIR", "")
+TEMPLATE_ICON_TYPES = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                       ".gif": "image/gif", ".webp": "image/webp", ".ico": "image/x-icon"}
+TEMPLATE_ICON_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SESSION_COOKIE = "coder_session_token"
 CSRF_HEADER = ("X-Requested-With", "coder-ui")
 AUTH_TTL, BANNER_TTL, USERS_TTL = 60, 5, 60
@@ -5387,11 +5395,35 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def template_icon(self, name):
+        """A file of TEMPLATE_ICONS_DIR: plain names only, images only, public and cacheable (no session needed:
+        the dashboard loads them as <img>)."""
+        name = urllib.parse.unquote(name)
+        ctype = TEMPLATE_ICON_TYPES.get(os.path.splitext(name)[1].lower())
+        file = os.path.join(TEMPLATE_ICONS_DIR, name) if TEMPLATE_ICONS_DIR else ""
+        if not (ctype and TEMPLATE_ICON_RE.match(name) and os.path.isfile(file)):
+            return self.send(404, "not found\n")
+        with open(file, "rb") as f:
+            body = f.read()
+        etag = '"%s"' % hashlib.sha256(body).hexdigest()[:20]
+        headers = {"Cache-Control": "public, max-age=3600", "ETag": etag,
+                   # an SVG opened directly runs in a sandbox: no scripts on Coder's origin
+                   "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"}
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", "0")
+            return self.end_headers()
+        return self.send(200, body, ctype, headers)
+
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
         path = url.path
         if path == BASE + "/healthz":
             return self.send(200, "ok\n")
+        if path.startswith(TEMPLATE_ICONS_PATH):
+            return self.template_icon(path[len(TEMPLATE_ICONS_PATH):])
         if path == BASE + "/refresh":
             return self.send(
                 302,

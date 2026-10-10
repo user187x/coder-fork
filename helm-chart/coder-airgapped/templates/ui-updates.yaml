@@ -118,6 +118,7 @@ spec:
             - {name: LOGS_DB_SECRET, value: {{ .Values.secrets.logsDb.name | quote }}}
             - {name: LOGS_DB_URL, value: {{ printf "postgresql://logs:{password}@coder-ui-logs-db.%s.svc.cluster.local:5432/logs?sslmode=disable" $ns | quote }}}
             - {name: DEFAULTS_DIR, value: /app/defaults}
+            - {name: TEMPLATE_ICONS_DIR, value: /app/template-icons}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
             - {name: PYTHONUNBUFFERED, value: "1"}
           ports:
@@ -144,6 +145,7 @@ spec:
             - {name: db-ca, mountPath: /etc/coder-ui/db-ca, readOnly: true}
             - {name: default-logo, mountPath: /app/defaults/logo, readOnly: true}
             - {name: default-avatar, mountPath: /app/defaults/avatar, readOnly: true}
+            - {name: template-icons, mountPath: /app/template-icons, readOnly: true}
       volumes:
         - name: code
           configMap:
@@ -178,6 +180,9 @@ spec:
           configMap: {name: {{ $ui.defaults.logoConfigMap }}, optional: true}
         - name: default-avatar
           configMap: {name: {{ $ui.defaults.avatarConfigMap }}, optional: true}
+        # The workspace template's icons (charts/coder-workspace/files/icons/), served at /__icons/.
+        - name: template-icons
+          configMap: {name: {{ $ui.templateIconsConfigMap }}, optional: true}
 ---
 apiVersion: v1
 kind: Service

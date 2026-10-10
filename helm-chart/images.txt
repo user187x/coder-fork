@@ -9,7 +9,6 @@ ghcr.io/user187x/coder-platform:2.0.0-platform.4-airgap   sha256:269a88f126c12bf
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage
 docker.io/library/python:3.13-alpine                      sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a   coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor)
-nginxinc/nginx-unprivileged:1.30.5-alpine                 sha256:15c994d10d6d78658721c3bcafff14cb281fba2a4bdf9d5ba92c416a472516e3   coder-workspace icons (reference cluster runs an older build of the tag, sha256:ed04ec1f...)
 ghcr.io/coder/coder:latest                                sha256:38a4cfc548b096484d6d1743e5f1a5af18301ed9a7ffde5150663822f9887026   coder-workspace push-template Job (floating tag, pinned here)
 codercom/enterprise-base:ubuntu                           sha256:96f02cb6ca6a6d23a7f75c36134e8df1854de27a5e6ce0290175bd99e7493605   workspace pods (ubuntu-vnc-desktop)
 

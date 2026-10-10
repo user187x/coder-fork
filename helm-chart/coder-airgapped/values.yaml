@@ -263,6 +263,9 @@ uiUpdates:
   defaults:
     logoConfigMap: coder-ui-updates-default-logo
     avatarConfigMap: coder-ui-updates-default-avatar
+  # The workspace template's icons ConfigMap (coder-workspace, <namePrefix>-icons). This service serves them at
+  # https://<coder host>/__icons/<file>; the route is coder-workspace's (icons.backend below points here).
+  templateIconsConfigMap: '{{ index .Values "coder-workspace" "namePrefix" }}-icons'
   # Buffer database for streamed workspace logs (Monitoring), on an emptyDir.
   logsDb:
     image: '{{ include "platform.image" (list . "ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie") }}'
@@ -319,8 +322,11 @@ coder-workspace:
   template:
     name: ubuntu-vnc-desktop
   icons:
-    image: '{{ include "platform.image" (list . "nginxinc/nginx-unprivileged:1.30.5-alpine") }}'
     host: ""
+    # Served by the platform service (coder-ui-updates); Traefik routes /__icons/ there. No separate web server.
+    backend:
+      name: coder-ui-updates
+      port: 80
     gateway:
       name: '{{ .Values.global.gateway.name }}'
       namespace: '{{ .Values.global.gateway.namespace }}'

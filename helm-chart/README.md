@@ -1,4 +1,4 @@
-# coder-airgapped 1.4.0: portable Helm chart of the live Coder fork
+# coder-airgapped 1.5.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -122,7 +122,7 @@ Plain Helm works too: `helm upgrade --install coder ./coder-airgapped -n coder -
 
 Use namespace `coder` and release `coder`: the workspace template refuses other namespaces.
 
-What happens: Coder, its database, the banner, the platform service and the icon server start. Then the
+What happens: Coder, its database, the banner and the platform service start. Then the
 `coder-bootstrap-first-user` hook creates Coder's first user (owner) from Secret `coder-init-auth` if Coder has
 none, with the password `global.firstUser.password` (`admin`). With password sign-in off it instead links that owner
 to Keycloak by email. Every run it mints a 30-minute API token into Secret `coder-workspace-push-token`. Finally
@@ -141,6 +141,9 @@ to Keycloak by email. Every run it mints a 30-minute API token into Secret `code
   **every** password login, owners included (`coderd/userauth.go`). Default here: `"false"`, so the admin can use
   its password; OIDC users have no password, so they still sign in with Keycloak only. With `"true"` the Job switches
   the admin to OIDC instead (Coder links a Keycloak sign-in to an existing OIDC user by email).
+* **No nginx** (live: an nginx Deployment served the template's icons at `/__icons/`). Traefik routes `/__icons/` to
+  the platform service (`coder-ui-updates`), which mounts the icons ConfigMap and serves them (`TEMPLATE_ICONS_DIR`;
+  images only, cacheable, SVGs sandboxed). One pod and one image fewer.
 * **The banner starts blank** (live: a published maintenance notice). An owner publishes one at `/__banner/admin`.
 * **`agent-audit.tf` is off by default** (`coder-workspace.agentAudit`). The live active template version (Sep 28)
   is `main.tf` + `certificates.tf`, byte-identical to the chart's. `agent-audit.tf` was added later and never went
@@ -189,24 +192,24 @@ to Keycloak by email. Every run it mints a 30-minute API token into Secret `code
   default name in any reference. The chart was pushed to an OCI registry with `mirror-images.sh chart`, pulled back
   with `helm pull`, and rendered with the Application's values, identical to the local chart (49 objects).
 
-## End-to-end air-gap test (1.3.0)
+## End-to-end air-gap test (1.5.0)
 
-DEPLOY.md was followed step by step, from a fresh extraction of `coder-airgapped-1.3.0.tar.gz`. The target was a
+DEPLOY.md was followed step by step, from a fresh extraction of `coder-airgapped-1.5.0.tar.gz`. The target was a
 kind cluster (Kubernetes 1.37) whose node had **all non-private egress blocked** (both pulls from Docker Hub and pod
 traffic to github.com fail). The registry was empty and the node had no cached images. Step 3 ran in a docker with
-no images at all: all 8 images were loaded from `images/` (none pulled). Prerequisites in place beforehand: Gateway
+no images at all: all 7 images were loaded from `images/` (none pulled). Prerequisites in place beforehand: Gateway
 API v1.5.1 CRDs, Traefik 41.4.0 (`prereqs/`) with the rewrite-body plugin, Argo CD 3.5.2, Keycloak 26.4 with client
 `coder`, and wildcard DNS.
 
 * Steps 1–7: every step succeeded. Argo CD reached **Synced / Healthy / Succeeded** in under 3 minutes. Every
-  container (Coder, database, banner, add-ons, logs DB, icons, workspace) ran from the mirror registry, with no
+  container (Coder, database, banner, add-ons, logs DB, workspace) ran from the mirror registry, with no
   pull errors.
 * Step 8, as a browser inside the network, **22/22 checks**. Coder answers over HTTPS through the Gateway.
   `admin@admin.com` / `admin` signs in as owner `admin` (a wrong password is refused). A Keycloak user signs in and
   gets a normal account. The banner starts blank (hidden, no message). The template was pushed. `/__coder-ui/`,
   `/__banner/`, `/__icons/` and the dashboard load. A workspace builds and its agent connects. The workspace's apps
   were unhealthy, as expected (first gap below).
-* Not re-run in 1.3.0: `global.disablePasswordAuth: "true"` (Keycloak only). 1.2.0 tested it; the bootstrap code
+* Not re-run since 1.3.0: `global.disablePasswordAuth: "true"` (Keycloak only). 1.2.0 tested it; the bootstrap code
   for it was reorganized since (same steps).
 
 Problems the 1.2.0 run found, all fixed in 1.2.0: no owner could ever sign in and the template push failed

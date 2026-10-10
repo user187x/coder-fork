@@ -6,14 +6,14 @@ loads them from here and pushes them to your registry – no internet needed.
 | Folder | What | Size | Keep? |
 |---|---|---:|---|
 | `custom/` | The fork's Coder server image. **On no public registry.** | 297 MB | **Always keep** – nothing else can replace it |
-| `public/chart/` | Public images the chart runs (database, Python add-ons, icons, template push, workspace) | 908 MB | Remove if your registry already has them |
+| `public/chart/` | Public images the chart runs (database, Python add-ons, template push, workspace) | 884 MB | Remove if your registry already has them |
 | `public/prereqs/` | CloudNativePG operator, Traefik – for the charts in `../prereqs/` | 87 MB | Remove if those are already installed |
 | `public/platform/` | Argo CD and Keycloak as the reference cluster runs them – reference only, not pushed by default | 986 MB | Remove if you have Argo CD and Keycloak |
 
 ## Make the bundle smaller
 
 ```bash
-rm -rf images/public              # keeps only custom/: ~300 MB instead of ~2.3 GB
+rm -rf images/public              # keeps only custom/: ~300 MB instead of ~2.2 GB
 # or just one folder:  rm -rf images/public/platform
 ```
 
@@ -41,7 +41,6 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 |---|---|---:|---|
 | `ghcr.io_cloudnative-pg_postgresql_18.4-system-trixie.tar.gz` | `ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie` | 249 MB | database, uiUpdates.logsDb, uiUpdates.pgImage |
 | `docker.io_library_python_3.13-alpine.tar.gz` | `docker.io/library/python:3.13-alpine` | 19 MB | coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor) |
-| `nginxinc_nginx-unprivileged_1.30.5-alpine.tar.gz` | `nginxinc/nginx-unprivileged:1.30.5-alpine` | 24 MB | coder-workspace icons (reference cluster runs an older build of the tag, sha256:ed04ec1f...) |
 | `ghcr.io_coder_coder_latest.tar.gz` | `ghcr.io/coder/coder:latest` | 244 MB | coder-workspace push-template Job (floating tag, pinned here) |
 | `codercom_enterprise-base_ubuntu.tar.gz` | `codercom/enterprise-base:ubuntu` | 371 MB | workspace pods (ubuntu-vnc-desktop) |
 

@@ -36,8 +36,12 @@ agentAudit: false
 
 # Custom app icons (files/icons/*), served at https://<host>/__icons/<file> (templates/icons.yaml)
 icons:
-  image: "nginxinc/nginx-unprivileged:1.30.5-alpine"
   host: ""            # default: coder.url without https://
+  # The Service that serves files/icons/ (mounted from the ConfigMap below) at /__icons/<file>. In coder-airgapped
+  # that is the platform service, coder-ui-updates.
+  backend:
+    name: coder-ui-updates
+    port: 80
   gateway:
     name: traefik-gateway
     namespace: traefik

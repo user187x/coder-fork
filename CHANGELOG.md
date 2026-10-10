@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0 – 2026-10-10
+
+* No nginx: the workspace template's icons (`/__icons/<file>`) are served by the platform service
+  (`coder-ui-updates`) from the icons ConfigMap, and Traefik's Gateway routes `/__icons/` to it
+  (`coder-workspace.icons.backend`). The nginx Deployment and Service and the `nginxinc/nginx-unprivileged` image are
+  gone (one pod and ~24 MB fewer). Responses: images only, plain file names, `Cache-Control: public, max-age=3600`,
+  ETag, and SVGs sandboxed by a Content-Security-Policy. Upgrading removes the old Deployment and Service.
+
 ## 1.4.0 – 2026-10-10
 
 * `./make --deploy`: guided install for Minikube or EKS. Asks the domain (derives `coder.`, `*.`, `keycloak.`),
