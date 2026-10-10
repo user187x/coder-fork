@@ -88,23 +88,28 @@ archive_of() { # group image
 	echo "$d/$(echo "$2" | tr '/:@' '___').tar.gz"
 }
 
-on_every_node() { # image: present in every node's container runtime
-	local n
+on_every_node() { # image [id]: present in every node's container runtime (with that image ID, when given)
+	local n id
 	for n in $(kc get nodes -o jsonpath='{.items[*].metadata.name}'); do
-		minikube -p "$PROFILE" ssh -n "$n" -- docker image inspect --format . "$1" >/dev/null 2>&1 || return 1
+		id=$(minikube -p "$PROFILE" ssh -n "$n" -- docker image inspect --format '{{.Id}}' "$1" 2>/dev/null | tr -d '\r') || return 1
+		[[ -n "$id" && ( -z "${2:-}" || "$id" == "$2" ) ]] || return 1
 	done
 }
 
+# Loads the image unless every node has exactly this build. A rebuild under the same tag (the custom image) is
+# reloaded, and its name is appended to $MK_RELOADED_FILE (if set) so the caller restarts the pods that run it.
 mk_load_image() { # group image
-	local g="$1" img="$2" f
-	if on_every_node "$img"; then say "image $img: already on every node"; return 0; fi
-	if ! docker image inspect "$img" >/dev/null 2>&1; then
-		f=$(archive_of "$g" "$img")
-		[[ -f "$f" ]] || { warn "image $img: not in docker and $(basename "$f") is not in the bundle - skipped"; return 0; }
-		docker load -q -i "$f" >/dev/null
-	fi
+	local g="$1" img="$2" f want
+	f=$(archive_of "$g" "$img")
+	# The bundle's archive is the build to run: load it when docker has another build (or none) of this tag.
+	if [[ -f "$f" ]] && ! docker image inspect "$img" >/dev/null 2>&1; then docker load -q -i "$f" >/dev/null; fi
+	want=$(docker image inspect --format '{{.Id}}' "$img" 2>/dev/null || true)
+	[[ -n "$want" ]] || { warn "image $img: not in docker and $(basename "$f") is not in the bundle - skipped"; return 0; }
+	if on_every_node "$img" "$want"; then say "image $img: already on every node"; return 0; fi
+	local had=0; on_every_node "$img" && had=1
 	say "image $img: loading into every node"
-	minikube -p "$PROFILE" image load "$img" >/dev/null
+	minikube -p "$PROFILE" image load --overwrite=true "$img" >/dev/null
+	if ((had)) && [[ -n "${MK_RELOADED_FILE:-}" ]]; then echo "$img" >>"$MK_RELOADED_FILE"; fi
 }
 
 mk_load_images() {

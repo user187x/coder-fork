@@ -5,7 +5,7 @@ loads them from here and pushes them to your registry – no internet needed.
 
 | Folder | What | Size | Keep? |
 |---|---|---:|---|
-| `custom/` | The fork's Coder server image. **On no public registry.** | 297 MB | **Always keep** – nothing else can replace it |
+| `custom/` | The fork's Coder server image. **On no public registry.** | 311 MB | **Always keep** – nothing else can replace it |
 | `public/chart/` | Public images the chart runs (database, Python add-ons, template push, workspace) | 884 MB | Remove if your registry already has them |
 | `public/prereqs/` | CloudNativePG operator, Traefik – for the charts in `../prereqs/` | 87 MB | Remove if those are already installed |
 | `public/platform/` | Argo CD and Keycloak as the reference cluster runs them – reference only, not pushed by default | 986 MB | Remove if you have Argo CD and Keycloak |
@@ -33,7 +33,7 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
-| `ghcr.io_user187x_coder-platform_2.0.0-platform.4-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.4-airgap` | 297 MB | coder (server); = the fork's platform.4 + Terraform provider mirror |
+| `ghcr.io_user187x_coder-platform_2.0.0-platform.5-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.5-airgap` | 311 MB | coder (server); = the fork's platform.5 (ea80521c2) + Terraform provider mirror |
 
 ### `public/chart/`
 

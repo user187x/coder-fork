@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.0 – 2026-10-10
+
+* Coder image `2.0.0-platform.5-airgap` (fork commit `ea80521c2`). The Admin menu starts with Settings and an add row
+  (+) only (no more fixed Accounts / Health links). The + opens General's categories not linked yet (Accounts, Super
+  Intelligence, Announcement, Authentication, Classification, Customize, Health, Monitoring, Network, Notifications,
+  OAuth2 Applications, Observability, Overview, Persistence, Security); each quick link shows its category on the left
+  and a remove button and a drag handle on the right (drag, or Enter + arrow keys + Enter, to reorder). Saved per user
+  at once; as many links as there are categories (server limit raised from 8 to 32).
+* `minikube-support`: an image rebuilt under the same tag is reloaded (compared by image ID), and `./make --deploy`
+  restarts the Deployments that run it.
+
 ## 1.5.0 – 2026-10-10
 
 * No nginx: the workspace template's icons (`/__icons/<file>`) are served by the platform service

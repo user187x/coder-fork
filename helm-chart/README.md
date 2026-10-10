@@ -1,4 +1,4 @@
-# coder-airgapped 1.5.0: portable Helm chart of the live Coder fork
+# coder-airgapped 1.6.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -32,7 +32,7 @@ install.sh                       Secrets from files, default logo/avatar ConfigM
 mirror-images.sh                 push / save / verify / list the images in images.txt; `chart REPO` pushes the chart to OCI
 images.txt                       every image by group, with the digest saved and tested
 images/                          every image as a docker-save archive, linux/amd64 (images/README.md):
-  custom/                          the fork's Coder image, air-gap build (platform.4 + Terraform provider mirror) –
+  custom/                          the fork's Coder image, air-gap build (platform.5 + Terraform provider mirror) –
                                    on no public registry, always keep
   public/chart|prereqs|platform/   public images – delete for a smaller bundle (the -slim tarball has none)
 defaults/                        default logo + avatar (kept out of the chart: Helm's 1 MiB release record)

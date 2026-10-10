@@ -4,7 +4,7 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.4-airgap   sha256:269a88f126c12bff36108b2e8ea178fed87a3809a29422682518410560e501c9   coder (server); = the fork's platform.4 + Terraform provider mirror
+ghcr.io/user187x/coder-platform:2.0.0-platform.5-airgap   sha256:0f489d3c3ea6712fddb7fbf7b341a55bbadf86da8350fc03b4997b46a5617208   coder (server); = the fork's platform.5 (ea80521c2) + Terraform provider mirror
 
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage

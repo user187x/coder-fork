@@ -242,7 +242,8 @@ prepare_minikube() {
 	ask PROFILE "minikube profile" coder nonempty
 	plan_sudo
 	"${here}/minikube-support" ensure "$PROFILE"
-	"${here}/minikube-support" load-images "$PROFILE"
+	RELOADED="${STATE}/reloaded-images"; : >"$RELOADED"
+	MK_RELOADED_FILE="$RELOADED" "${here}/minikube-support" load-images "$PROFILE"
 	REGISTRY="" STORAGE_CLASS="local-path" METHOD=helm   # local-path: see minikube-support mk_storage
 
 	step "Prerequisites"
@@ -371,6 +372,18 @@ install_argocd() {
 	warn "Argo CD is not Synced/Healthy yet ($s): kubectl -n argocd get application coder"
 }
 
+# A rebuilt image under an unchanged tag does not change any Deployment, so restart the ones that run it.
+restart_reloaded() {
+	[[ -s "${RELOADED:-}" ]] || return 0
+	local img d
+	while read -r img; do
+		for d in $(kube -n coder get deploy -o jsonpath="{range .items[?(@.spec.template.spec.containers[*].image=='${img}')]}{.metadata.name}{' '}{end}"); do
+			say "restarting deploy/$d (new build of $img)"
+			kube -n coder rollout restart "deploy/$d" >/dev/null && kube -n coder rollout status "deploy/$d" --timeout=10m >/dev/null
+		done
+	done <"$RELOADED"
+}
+
 summary() {
 	local url="https://coder.${DOMAIN}"
 	step "Done"
@@ -445,6 +458,7 @@ deploy() {
 	write_values
 	secret_args
 	if [[ "$METHOD" == argocd ]]; then install_argocd; else install_helm; fi
+	restart_reloaded
 
 	[[ "$TARGET" != minikube ]] || run_sudo_steps
 	summary

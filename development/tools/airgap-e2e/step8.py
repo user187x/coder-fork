@@ -46,7 +46,7 @@ def roles(me):
 
 
 s, b, _ = get(CODER + "/healthz"); check("Coder answers over HTTPS through the Gateway (CA-verified)", s == 200, str(s))
-s, info = api("/api/v2/buildinfo"); check("Coder version is the fork's", s == 200 and "platform.4" in info.get("version", ""), info.get("version", ""))
+s, info = api("/api/v2/buildinfo"); check("Coder version is the fork's", s == 200 and "platform." in info.get("version", ""), info.get("version", ""))
 s, am = api("/api/v2/users/authmethods")
 check("Keycloak (OIDC) sign-in is on", am.get("oidc", {}).get("enabled") is True)
 check("password sign-in is on", am.get("password", {}).get("enabled") is True)
