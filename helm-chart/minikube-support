@@ -121,7 +121,7 @@ mk_load_images() {
 # Traefik gets it as its ClusterIP, so existing name resolution keeps working unchanged.
 mk_pin_ip() {
 	local ip a b
-	ip=$(getent ahostsv4 "coder.$1" 2>/dev/null | awk 'NR==1{print $1}')
+	ip=$({ getent ahostsv4 "coder.$1" 2>/dev/null || true; } | awk 'NR==1{print $1}')
 	[[ -n "$ip" ]] || return 0
 	IFS=. read -r a b _ <<<"$ip"
 	((a == 10 && b >= 96 && b <= 111)) && echo "$ip" || true
@@ -216,7 +216,7 @@ EOF
 }
 
 # ---- exposing the cluster on this machine -------------------------------------------------------------------
-tunnel_pid() { pgrep -f "minikube.* tunnel" -a 2>/dev/null | awk -v p="$1" '$0 ~ ("(-p|--profile)[ =]" p "( |$)") {print $1; exit}'; }
+tunnel_pid() { { pgrep -f "minikube.* tunnel" -a 2>/dev/null || true; } | awk -v p="$1" '$0 ~ ("(-p|--profile)[ =]" p "( |$)") {print $1; exit}'; }
 
 minikube_expose_services() {
 	local pid other log="${XDG_RUNTIME_DIR:-/tmp}/minikube-tunnel-${PROFILE}.log" ip
@@ -244,7 +244,7 @@ minikube_sync_hosts() {
 	[[ -n "$ip" ]] || die "no LoadBalancer IP yet: run minikube-expose-services first"
 	names=$( { echo "coder.$domain"; echo "keycloak.$domain"
 		kc get httproute -A -o jsonpath='{range .items[*]}{range .spec.hostnames[*]}{@}{"\n"}{end}{end}' 2>/dev/null; } |
-		grep -v '[*]' | grep -E "(^|\.)${domain//./\\.}$" | sort -u)
+		{ grep -v '[*]' || true; } | { grep -E "(^|\.)${domain//./\\.}$" || true; } | sort -u)
 	beg="# --- coder-airgapped minikube:${PROFILE} (minikube-support) ---"; end="# --- end coder-airgapped minikube:${PROFILE} ---"
 	tmp=$(mktemp); trap 'rm -f "$tmp"' RETURN
 	awk -v b="$beg" -v e="$end" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$HOSTS_FILE" >"$tmp"

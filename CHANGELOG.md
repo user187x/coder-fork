@@ -8,6 +8,9 @@
 * Minikube: the sudo steps (tunnel, `/etc/hosts`, trusting the CA) are planned and agreed to up front; sudo asks
   for the password once, then and there, and the steps run at the end unattended. Steps already done are skipped;
   without sudo the exact commands are printed.
+* `./make --deploy` writes a log (`.deploy/deploy.log`, follow it with `tail -F`) and, when a step fails, names the
+  failing command and the log instead of exiting silently. Fixed: the deploy exited silently (exit 1) before
+  starting the tunnel when no tunnel was running yet.
 * `minikube-support`: profile, `local-path` storage as default (minikube's hostpath class breaks CloudNativePG
   replicas on multi-node clusters), image loading, CoreDNS rewrite of `*.<domain>` to Traefik, a development
   Keycloak with client `coder`, `minikube-expose-services` / `minikube-sync-hosts` (profile-aware versions of the

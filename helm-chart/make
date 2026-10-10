@@ -15,7 +15,7 @@
 #
 # Helpers in this directory: x509-support (certificates), minikube-support (Minikube), install.sh (secrets + chart),
 # mirror-images.sh (images, chart push). Generated files (certificates, values, secrets) go to .deploy/.
-set -euo pipefail
+set -eEuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=x509-support
@@ -210,7 +210,6 @@ plan_sudo() {
 		fi
 	fi
 	( while kill -0 "$$" 2>/dev/null; do sudo -n -v 2>/dev/null; sleep 50; done ) & SUDO_KEEPALIVE=$!
-	trap '[[ -n "$SUDO_KEEPALIVE" ]] && kill "$SUDO_KEEPALIVE" 2>/dev/null' EXIT
 	DO_SUDO=1; say "sudo: OK"
 }
 run_sudo_steps() {
@@ -389,7 +388,34 @@ summary() {
 	return 0
 }
 
+# ---- log + exit handling ------------------------------------------------------------------------------------
+# Everything shown on the terminal also goes to .deploy/deploy-<time>.log (.deploy/deploy.log = the latest), so the
+# progress can be followed from another terminal with `tail -F .deploy/deploy.log`. On failure the failing command and the log are named.
+LOG="" TEE_PID="" FAILED_CMD="" FAILED_LINE=""
+start_log() {
+	mkdir -p "$STATE_ROOT"; chmod 700 "$STATE_ROOT"
+	LOG="${STATE_ROOT}/deploy-$(date +%Y%m%d-%H%M%S).log"; : >"$LOG"; chmod 600 "$LOG"
+	ln -sfn "$(basename "$LOG")" "${STATE_ROOT}/deploy.log"
+	exec 3>&1 4>&2
+	exec > >(tee -a "$LOG" >&3) 2>&1
+	TEE_PID=$!
+}
+on_err() { FAILED_CMD="$BASH_COMMAND" FAILED_LINE="$1"; }
+on_exit() {
+	local rc=$?
+	[[ -z "$SUDO_KEEPALIVE" ]] || kill "$SUDO_KEEPALIVE" 2>/dev/null || true
+	if ((rc != 0)) && [[ -n "$LOG" ]]; then
+		printf '\n\033[31mERROR: the deploy stopped (exit %s)%s\033[0m\n' "$rc" "${FAILED_CMD:+ at: ${FAILED_CMD} (make, line ${FAILED_LINE})}"
+		printf '       Full log: %s\n       Fix the cause and run ./make --deploy again: finished steps are skipped or repeated safely.\n' "$LOG"
+	fi
+	if [[ -n "$TEE_PID" ]]; then exec >&3 2>&4; wait "$TEE_PID" 2>/dev/null || true; fi
+	exit "$rc"
+}
+
 deploy() {
+	start_log
+	trap 'on_err $LINENO' ERR
+	trap on_exit EXIT
 	# answers given as environment variables are fixed; remembered answers are only defaults
 	local v; for v in "${VARS[@]}"; do [[ -n "${!v:-}" ]] && FIXED[$v]=1; done
 	if [[ -f "$ANSWERS" ]]; then
@@ -397,6 +423,7 @@ deploy() {
 	fi
 	need kubectl helm openssl
 	bold "coder-airgapped $(sed -n 's/^version: *//p' "${here}/coder-airgapped/Chart.yaml") - deploy"
+	say "Log: ${LOG}  (follow it from another terminal: tail -F ${STATE_ROOT}/deploy.log)"
 	((INTERACTIVE)) && say "Press Enter to take the [default]."
 
 	step "Where"

@@ -27,6 +27,8 @@ ones still needed (it skips a running tunnel, names your DNS already resolves, a
 once. Say yes and sudo asks for your password then; the steps run at the end of the install with no further
 questions. Say no and it prints the exact commands instead.
 
+Progress shows in the terminal and in `.deploy/deploy.log` (from a second terminal: `tail -F .deploy/deploy.log`).
+
 `./make --deploy --yes` takes every remembered answer without asking. Helpers it uses, which also work on their own:
 `./x509-support` (certificates), `./minikube-support` (e.g. `./minikube-support expose coder <domain>` after a
 reboot), `./install.sh`, `./mirror-images.sh`.
