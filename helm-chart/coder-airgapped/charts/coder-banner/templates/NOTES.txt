@@ -8,7 +8,7 @@ Coder banner installed in namespace {{ include "coder-banner.namespace" . }}.
 The values above are only the DEFAULTS. Once an admin publishes from the admin page, that takes over
 (and survives `helm upgrade`) until "use the chart defaults" is pressed there.
 
-Requires the Traefik "{{ .Values.plugin.name }}" plugin (support/traefik/rewrite-body-plugin.yaml).
+Requires the Traefik "{{ .Values.plugin.name }}" plugin (traefik-plugin/rewrite-body-plugin.yaml).
 {{- if .Values.menu.enabled }}
 
 User menu: "Codernauts" is replaced by "{{ .Values.menu.label }}" ({{ if .Values.menu.adminOnly }}admins only{{ else }}everyone{{ end }}), which opens the admin page.

@@ -2,7 +2,7 @@
 namespace: ""   # defaults to the release namespace (helm -n <coder namespace> / Argo CD destination)
 
 coder:
-  host: coder.xxx.com
+  host: coder.grey-marshall.com
   service:
     name: coder
     port: 80
@@ -10,10 +10,16 @@ coder:
 gateway:
   name: traefik-gateway
   namespace: traefik
+  # The Gateway listener the banner route attaches to (parentRefs[].sectionName). Empty = EVERY listener of the Gateway,
+  # which is how Coder's own route is usually attached. Set it to the HTTPS listener (e.g. "https") when the Gateway also
+  # has a plain-HTTP listener with an HTTP->HTTPS redirect route: the banner rule is more specific than a redirect rule
+  # (it has a header match), so on a listener both attach to it would answer HTML page loads instead of redirecting.
+  # ./banner-guide suggests the value from Coder's own route and the Gateway's listeners.
+  sectionName: ""
 
 plugin:
   # Must match the key under `experimental.plugins` in Traefik's static config
-  # (see ../support/traefik/rewrite-body-plugin.yaml).
+  # (see ../traefik-plugin/rewrite-body-plugin.yaml).
   name: rewrite-body
 
 # Path prefixes that are never rewritten. Workspace apps (code-server, noVNC, ...) serve their
@@ -32,6 +38,7 @@ image:
   digest: ""            # optional "sha256:..." - when set it is used instead of the tag
   pullPolicy: IfNotPresent
 imagePullSecrets: []    # e.g. [{name: internal-registry}]
+nodeSelector: {}        # e.g. {kubernetes.io/arch: amd64} when the image is single-architecture
 
 # Live push: open Coder tabs hold a WebSocket to the banner service, so a published banner appears at once
 # (without it tabs poll every banner.refreshSeconds). One replica holds thousands of idle tabs cheaply.

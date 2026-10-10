@@ -19,6 +19,9 @@ spec:
       kind: Gateway
       name: {{ .Values.gateway.name }}
       namespace: {{ .Values.gateway.namespace }}
+      {{- with .Values.gateway.sectionName }}
+      sectionName: {{ . | quote }}
+      {{- end }}
   rules:
     # Loader script + banner.json + admin page
     - matches:

@@ -51,7 +51,7 @@ data:
     {{- $.Files.Get (printf "files/vendor/%s" $name) | nindent 4 }}
   {{- end }}
 ---
-# The emoji list for the admin page's emoji picker: one generated script (support/build-emoji-data), in its own
+# The emoji list for the admin page's emoji picker: one generated script (build-emoji-data), in its own
 # ConfigMap because of its size.
 apiVersion: v1
 kind: ConfigMap

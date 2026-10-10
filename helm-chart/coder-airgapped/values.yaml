@@ -286,6 +286,11 @@ coder-banner:
     repository: library/python
     tag: 3.13-alpine
   imagePullSecrets: []
+  # A fresh install shows no banner: it starts empty and hidden until an owner writes and publishes a message on
+  # https://<coder host>/__banner/admin. What is published is kept in ConfigMap coder-banner-state, never in values.
+  banner:
+    enabled: false
+    message: ""
 
 # ---------------------------------------------------------------------------------------------------------------
 # Workspace template ubuntu-vnc-desktop + /__icons/ server (Helm release coder/coder-workspace).

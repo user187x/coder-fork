@@ -23,10 +23,11 @@ dependencies:
     version: 2.37.3-platform.1
     repository: file://charts/coder
     condition: coder.enabled
-  # Announcement banner 0.4.1 (oci://harbor.grey-marshall.com/library/coder-banner) + the platform patch.
+  # Announcement banner 0.4.3 (unreleased; its source is development/legacy/banner-update/banner-chart) + the
+  # platform patch.
   # Values under `coder-banner:`.
   - name: coder-banner
-    version: 0.4.1-platform.1
+    version: 0.4.3-platform.1
     repository: file://charts/coder-banner
     condition: coder-banner.enabled
   # Workspace template + icon server (charts/coder-workspace, source: devbox workspaces/workspace-chart).
