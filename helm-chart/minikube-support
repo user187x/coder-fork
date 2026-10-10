@@ -291,7 +291,8 @@ mk_trust_ca() {
 
 mk_status() {
 	minikube -p "$PROFILE" status 2>/dev/null | sed 's/^/    /' || true
-	local pid; pid=$(tunnel_pid "$PROFILE"); say "tunnel: ${pid:+running (PID $pid)}${pid:-not running}"
+	local pid; pid=$(tunnel_pid "$PROFILE")
+	if [[ -n "$pid" ]]; then say "tunnel: running (PID $pid)"; else say "tunnel: not running"; fi
 	say "traefik: $(kc -n traefik get svc traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo -)"
 }
 
