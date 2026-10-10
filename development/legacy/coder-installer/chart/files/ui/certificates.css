@@ -1,0 +1,38 @@
+code { font-family: ui-monospace, monospace; font-size: 12px; }
+.how ul { margin: 12px 0 0; padding-left: 18px; display: grid; gap: 8px; color: var(--muted); font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: var(--muted); padding: 8px 12px; border-bottom: 1px solid var(--border); }
+td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+tbody tr:last-child td { border-bottom: 0; }
+td .sub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+td.actions { white-space: nowrap; text-align: right; }
+td.actions .btn { margin-left: 6px; }
+.btn-danger-quiet { color: var(--danger); }
+.btn-danger-quiet:hover:not(:disabled) { border-color: var(--danger); }
+.empty { color: var(--muted); padding: 18px 0 6px; text-align: center; }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; margin-left: 6px; }
+.badge.warn { color: var(--warn); } .badge.error { color: var(--danger); } .badge.ok { color: var(--ok); } .badge.muted { color: var(--muted); }
+dialog { width: min(680px, calc(100vw - 32px)); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin: 16px auto auto;
+  background: hsl(var(--coder-surface-secondary, 240 6% 10%)); color: var(--text); box-shadow: 0 24px 64px rgb(0 0 0 / .45); }
+dialog::backdrop { background: rgb(0 0 0 / .55); }
+dialog h2 { margin-bottom: 16px; }
+body:has(dialog[open]) { min-height: 760px; }
+.drop { display: flex; align-items: center; justify-content: center; text-align: center; min-height: 110px; padding: 16px; margin-bottom: 16px;
+  border: 2px dashed hsl(var(--coder-border-secondary, var(--coder-border-default))); border-radius: 10px; cursor: pointer; }
+.drop:hover, .drop.over, .drop:focus-visible { border-color: var(--link); outline: none; }
+.drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.drop small { color: var(--muted); }
+.label em { color: var(--muted); font-weight: 400; font-style: normal; }
+input[type=password] { width: 100%; padding: 8px 11px; border: 1px solid hsl(var(--coder-border-secondary, var(--coder-border-default)));
+  border-radius: 6px; background: transparent; color: var(--text); font: inherit; }
+.field .hint { display: block; margin-top: 4px; font-size: 12px; }
+.facts { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 4px 0 8px; display: grid; gap: 6px; font-size: 13px; }
+.fact { display: flex; gap: 10px; }
+.fact .k { width: 150px; flex-shrink: 0; color: var(--muted); }
+.fact.ok .v { color: var(--ok); } .fact.warn .v { color: var(--warn); } .fact.error .v { color: var(--danger); }
+.end { justify-content: flex-end; margin-top: 12px; }
+
+/* Fitted to the visible part of the frame by the page's script; the buttons stay reachable while the body scrolls. */
+dialog { overflow: auto; }
+dialog .end, dialog .actions.end { position: sticky; bottom: -24px; margin-bottom: -24px; padding: 12px 0 24px;
+  background: hsl(var(--coder-surface-secondary, 240 6% 10%)); }

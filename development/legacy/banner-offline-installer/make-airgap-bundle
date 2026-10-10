@@ -1,0 +1,122 @@
+#!/bin/bash
+# Builds the sneaker-net bundle: everything needed to install the banner on an air-gapped cluster that
+# already runs Coder. Run this on a machine WITH internet access, carry the resulting .tar.gz across, and
+# follow INSTALL.md inside it.
+#
+#   ./make-airgap-bundle [--out DIR] [--no-images] [--with-traefik-chart[=VERSION]] [--image REF]...
+#
+#   --out DIR                 output directory (default: this folder, banner-offline-installer/)
+#   --no-images               skip pulling/saving container images (you provide them another way)
+#   --with-traefik-chart[=V]  also pack the Traefik chart archive (default: the installed release's version).
+#                             NOT needed for the air-gapped deployment: it patches the RUNNING Traefik (whatever version) and
+#                             needs no chart. Only useful for the connected-cluster "download" variant (enable-plugin without --airgap).
+#   --image REF               add an extra image to the bundle (repeatable)
+#
+# Needs: helm, docker (or podman), tar, sha256sum. The result is self-checking (SHA256SUMS).
+set -euo pipefail
+CALLER_PWD=${PWD}
+cd "$(dirname "$0")"
+SRC=../banner-update # the banner chart, its scripts and docs
+UTIL=../util         # fetch-coder-domain
+
+OUT="" # default: this folder
+pull_images=1
+traefik_chart=""
+extra_images=()
+while [[ $# -gt 0 ]]; do
+ case "$1" in
+  --out)
+   OUT="$2"
+   shift 2
+   ;;
+  --no-images)
+   pull_images=0
+   shift
+   ;;
+  --with-traefik-chart)
+   traefik_chart="installed"
+   shift
+   ;;
+  --with-traefik-chart=*)
+   traefik_chart="${1#*=}"
+   shift
+   ;;
+  --image)
+   extra_images+=("$2")
+   shift 2
+   ;;
+  *)
+   echo "unknown option: $1" >&2
+   exit 2
+   ;;
+ esac
+done
+
+if [[ -z "${OUT}" ]]; then OUT=.; elif [[ "${OUT}" != /* ]]; then OUT="${CALLER_PWD}/${OUT}"; fi # --out is relative to the caller
+
+engine=$(command -v docker || command -v podman || true)
+[[ ${pull_images} -eq 0 || -n "${engine}" ]] || {
+ echo "docker or podman is needed to save images (or use --no-images)" >&2
+ exit 1
+}
+
+version=$(helm show chart "${SRC}/banner-chart" | awk '/^version:/ {print $2}')
+name="coder-banner-airgap-${version}"
+stage="${OUT}/${name}"
+rm -rf "${stage}" "${OUT}/${name}.tar.gz"
+mkdir -p "${stage}/traefik-plugin" "${stage}/images" "${stage}/argocd"
+
+echo "1/6 chart"
+helm lint "${SRC}/banner-chart" >/dev/null
+helm package "${SRC}/banner-chart" --destination "${stage}" >/dev/null
+helm repo index "${stage}" >/dev/null # index.yaml, so the folder can also be served as a static chart repository
+
+echo "2/6 images"
+mapfile -t images < <({
+ helm template x "${SRC}/banner-chart" -n coder | awk '/^ +image: /{print $2}'
+ printf '%s\n' "${extra_images[@]+"${extra_images[@]}"}"
+} | sort -u | sed '/^$/d')
+printf '%s\n' "${images[@]}" >"${stage}/images/images.txt"
+if [[ ${pull_images} -eq 1 ]]; then
+ for image in "${images[@]}"; do
+  echo "   pulling ${image}"
+  "${engine}" pull -q "${image}" >/dev/null
+ done
+ "${engine}" save -o "${stage}/images/images.tar" "${images[@]}"
+else
+ echo "   (skipped: images listed in images/images.txt)"
+fi
+
+echo "3/6 Traefik plugin (vendored source: nothing is downloaded on the air-gapped side)"
+cp "${SRC}"/traefik-plugin/{enable-plugin,disable-plugin,plugin-lib.sh,plugin-health.sh,rewrite-body-plugin.yaml,rewrite-body-plugin-airgap.yaml,gen-airgap-plugin-values} "${stage}/traefik-plugin/"
+cp -r "${SRC}/traefik-plugin/plugin-src" "${stage}/traefik-plugin/"
+if [[ -n "${traefik_chart}" ]]; then
+ if [[ "${traefik_chart}" == "installed" ]]; then
+  traefik_chart=$(helm list -n traefik --filter '^traefik$' -o yaml 2>/dev/null | sed -n 's/^ *chart: traefik-//p' | head -1)
+  [[ -n "${traefik_chart}" ]] || {
+   echo "could not detect the installed Traefik chart version; use --with-traefik-chart=VERSION" >&2
+   exit 1
+  }
+ fi
+ echo "   packing Traefik chart ${traefik_chart}"
+ helm pull traefik/traefik --version "${traefik_chart}" --destination "${stage}" >/dev/null
+fi
+
+echo "4/6 scripts, Argo CD Application, documentation"
+cp "${SRC}"/{banner-guide,install-banner-chart,uninstall-banner-chart,preflight-banner,verify-menu,banner-set,chart-path.sh,coder-ca.sh,existing-objects} "${stage}/"
+cp "${UTIL}/fetch-coder-domain" "${stage}/"
+cp "${SRC}/coder-banner-argocd.yaml" "${stage}/argocd/coder-banner-application.yaml"
+cp "${SRC}/BANNER-AIRGAP.md" "${stage}/INSTALL.md"
+cp "${SRC}/BANNER-AGENT-BRIEF.md" "${stage}/AGENTS.md" # for an AI assistant helping on the air-gapped side: intent, limits, what to do when something goes wrong
+chmod +x "${stage}"/{banner-guide,install-banner-chart,uninstall-banner-chart,preflight-banner,verify-menu,banner-set,fetch-coder-domain,existing-objects} "${stage}"/traefik-plugin/{enable-plugin,disable-plugin,gen-airgap-plugin-values}
+
+echo "5/6 checksums"
+(cd "${stage}" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum >SHA256SUMS)
+
+echo "6/6 archive"
+tar -C "${OUT}" -czf "${OUT}/${name}.tar.gz" "${name}"
+(cd "${OUT}" && sha256sum "${name}.tar.gz" | tee "${name}.tar.gz.sha256")
+echo
+echo "Bundle ready: ${OUT}/${name}.tar.gz  ($(du -h "${OUT}/${name}.tar.gz" | cut -f1))"
+echo "Images in it:"
+sed 's/^/  /' "${stage}/images/images.txt"

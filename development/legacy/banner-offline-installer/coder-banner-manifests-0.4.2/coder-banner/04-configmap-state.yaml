@@ -1,0 +1,13 @@
+# What an admin publishes from the admin page (state.json). This manifest carries only metadata, never `data`,
+# so re-running `kubectl apply` cannot overwrite a published banner. Never `kubectl replace` / delete+create it:
+# that wipes what the admin published.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-banner-state
+  namespace: coder
+  labels:
+    app.kubernetes.io/name: coder-banner
+    app.kubernetes.io/instance: coder-banner
+    app.kubernetes.io/part-of: coder
+    app.kubernetes.io/managed-by: kubectl

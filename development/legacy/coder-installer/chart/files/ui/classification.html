@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Classification · Coder</title>
+  <link rel="stylesheet" href="/__coder-ui/view.css">
+  <link rel="stylesheet" href="/__coder-ui/classification.css">
+  <style id="coder-ui-theme"></style>
+</head>
+<body>
+<main>
+  <section class="card" aria-labelledby="preview-h">
+    <div class="card-head">
+      <h2 id="preview-h">Classification banners</h2>
+      <label class="switch" for="enabled">
+        <input type="checkbox" role="switch" id="enabled" aria-describedby="enabled-state">
+        <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+        <span>Show on every page</span><span class="switch-state" id="enabled-state"></span>
+      </label>
+    </div>
+    <div class="mock" aria-label="Preview">
+      <div class="mock-bar" id="bar-top"></div>
+      <div class="mock-page"><span>Coder dashboard</span></div>
+      <div class="mock-bar" id="bar-bottom"></div>
+    </div>
+    <p class="hint center">Both bars always match: same text, height and colours, glued to the top and bottom of every Coder page (sign-in page included).</p>
+  </section>
+
+  <section class="card" aria-labelledby="settings-h">
+    <div class="card-head"><h2 id="settings-h">Marking</h2></div>
+
+    <label class="field"><span class="label">Classification text</span>
+      <input type="text" id="text" maxlength="120" placeholder="e.g. UNCLASSIFIED" autocomplete="off" spellcheck="false"></label>
+
+    <div class="field">
+      <label class="label" for="height">Banner height (top and bottom)</label>
+      <div class="range-row"><input type="range" id="height" min="12" max="64" step="1"><output id="height-out" for="height"></output></div>
+    </div>
+
+    <div class="grid2">
+      <fieldset class="field">
+        <legend class="label">Background colour (both banners)</legend>
+        <div class="swatches" id="bg-swatches" role="group" aria-label="Background presets"></div>
+        <div class="colour-row">
+          <input type="color" class="colour-input" id="bg" aria-label="Background colour">
+          <button type="button" class="btn btn-small eyedropper" data-for="bg" title="Pick the background colour from the screen">💧 Eyedropper</button>
+          <input type="text" class="hex" id="bg-hex" maxlength="7" spellcheck="false" aria-label="Background colour (hex)">
+        </div>
+      </fieldset>
+      <fieldset class="field">
+        <legend class="label">Text colour (both banners)</legend>
+        <div class="swatches" id="fg-swatches" role="group" aria-label="Text colour presets"></div>
+        <div class="colour-row">
+          <input type="color" class="colour-input" id="fg" aria-label="Text colour">
+          <button type="button" class="btn btn-small eyedropper" data-for="fg" title="Pick the text colour from the screen">💧 Eyedropper</button>
+          <input type="text" class="hex" id="fg-hex" maxlength="7" spellcheck="false" aria-label="Text colour (hex)">
+        </div>
+      </fieldset>
+    </div>
+    <p class="hint" id="contrast" aria-live="polite"></p>
+
+    <div class="row actions">
+      <button type="button" class="btn btn-primary" id="save" disabled>Save</button>
+      <button type="button" class="btn" id="revert" disabled>Discard changes</button>
+      <span class="hint" id="dirty" aria-live="polite"></span>
+    </div>
+    <p class="hint meta" id="meta"></p>
+  </section>
+</main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script type="module" src="/__coder-ui/classification-view.js"></script>
+</body>
+</html>

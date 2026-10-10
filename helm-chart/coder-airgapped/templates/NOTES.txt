@@ -1,0 +1,11 @@
+{{- include "ca.values" . -}}
+coder-airgapped {{ .Chart.Version }} (Coder image {{ .Values.coder.coder.image.repo }}:{{ .Values.coder.coder.image.tag }}) in namespace {{ .Release.Namespace }}.
+
+Open:            {{ .Values.uiUpdates.accessUrl }}
+Sign in:         Keycloak (OIDC). Owner: the Keycloak account with email {{ .Values.secrets.initAuth.email }}
+Database:        kubectl -n {{ .Release.Namespace }} get cluster {{ .Values.database.name }}
+Template push:   kubectl -n {{ .Release.Namespace }} logs job/{{ index .Values "coder-workspace" "namePrefix" | default .Release.Name }}-push-template
+{{- if or (eq .Release.Namespace "coder" | not) }}
+
+WARNING: the workspace template only accepts namespace "coder"; this release is in {{ .Release.Namespace }}.
+{{- end }}

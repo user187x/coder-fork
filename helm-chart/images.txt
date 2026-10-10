@@ -1,0 +1,26 @@
+# Every image this solution runs, as on the reference cluster 2026-10-09 (linux/amd64).
+# The bundle carries all of them as docker-save archives under images/<folder>/ (see images/README.md).
+# A [section] names the group and its folder. Columns: <image as referenced>  <digest saved and tested>  <used by>
+# mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
+
+[custom]    images/custom/             NOT on any public registry - always keep in the bundle
+ghcr.io/user187x/coder-platform:2.0.0-platform.4-airgap   sha256:269a88f126c12bff36108b2e8ea178fed87a3809a29422682518410560e501c9   coder (server); = the fork's platform.4 + Terraform provider mirror
+
+[chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
+ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage
+docker.io/library/python:3.13-alpine                      sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a   coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor)
+nginxinc/nginx-unprivileged:1.30.5-alpine                 sha256:15c994d10d6d78658721c3bcafff14cb281fba2a4bdf9d5ba92c416a472516e3   coder-workspace icons (reference cluster runs an older build of the tag, sha256:ed04ec1f...)
+ghcr.io/coder/coder:latest                                sha256:38a4cfc548b096484d6d1743e5f1a5af18301ed9a7ffde5150663822f9887026   coder-workspace push-template Job (floating tag, pinned here)
+codercom/enterprise-base:ubuntu                           sha256:96f02cb6ca6a6d23a7f75c36134e8df1854de27a5e6ce0290175bd99e7493605   workspace pods (ubuntu-vnc-desktop)
+
+[prereqs]   images/public/prereqs/     public; only if you install these from prereqs/
+ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0              sha256:a2701eb97cdd2a34b1fdb2cb51987f544b706e40bec72ae7146cd8580efefebb   CloudNativePG operator (prereqs/cloudnative-pg-0.29.0.tgz, install.sh --cnpg)
+docker.io/traefik:v3.7.12                                 sha256:9c2a54d87f76f5c2f5f2682c68394af92fb12c0a2686798d6462a3f84bd78eaf   Traefik (prereqs/traefik-41.4.0.tgz)
+
+[platform]  images/public/platform/    public; reference only - Argo CD + Keycloak as the reference cluster runs them (not pushed unless asked)
+quay.io/argoproj/argocd:v3.5.2                            sha256:e2aadfae709d904e87f46ba4aa49601d827b3022db22cd4d03aae816a2e7097b   Argo CD (server, repo-server, controller, applicationset)
+ghcr.io/dexidp/dex:v2.45.1                                sha256:8499afd690c437f52301efd2b05b2455da5bd2dfc20332cd697dc9937f808462   Argo CD dex
+ecr-public.aws.com/docker/library/redis:8.6.4-alpine      sha256:2cc044fc5a07c9b701f8f1255a309ae9ad7856e694ac03513bf3648c01e40763   Argo CD redis
+quay.io/keycloak/keycloak-operator:26.7.3                 sha256:3172bf49511c60ca59df3a9d93945415ed35d2af51a775a0d723d766d0437d5c   Keycloak operator
+quay.io/keycloak/keycloak:26.7.3                          sha256:29be7252db0a106f1cd2ac17b9a56ff2668073da645638a38b9fc67deeb2d6c4   Keycloak
+ghcr.io/cloudnative-pg/postgresql:17                      sha256:70664ebcfa1100361b5bdc28bbf06fdbe08db2dc4ad7bd14de33c5e05fe8ea8e   Keycloak's database (CNPG Cluster keycloak-db)

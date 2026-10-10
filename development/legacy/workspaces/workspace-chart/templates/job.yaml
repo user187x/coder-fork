@@ -1,0 +1,93 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-push-template
+  namespace: {{ .Values.namespace | default "coder" }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    # Removed once it has pushed the template; a failed run stays for its logs until the next install, or an hour.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    spec:
+      containers:
+        - name: coder-cli
+          image: ghcr.io/coder/coder:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              CODER_URL={{ required "CODER_URL must be provided!" .Values.coder.url | quote }}
+              # The session token comes from a Secret (install-workspace-chart creates it for the duration of the
+              # install), never from Helm values: those are stored in the release record.
+              if [ -z "${CODER_SESSION_TOKEN:-}" ]; then
+                echo "No token Secret. Logging in with coder-init-auth..."
+
+                JSON_PAYLOAD=$(jq -n \
+                  --arg email "$CODER_EMAIL" \
+                  --arg password "$CODER_PASSWORD" \
+                  '{email: $email, password: $password}')
+
+                CODER_SESSION_TOKEN=$(curl --cacert /etc/ssl/certs/coder/ca.crt -sSL -X POST "${CODER_URL}/api/v2/users/login" \
+                  -H "Content-Type: application/json" \
+                  -d "$JSON_PAYLOAD" | jq -r '.session_token // empty')
+
+                if [ -z "$CODER_SESSION_TOKEN" ]; then
+                  echo "Authentication failed."
+                  exit 1
+                fi
+              fi
+
+              export CODER_SESSION_TOKEN
+              export CODER_URL
+              export SSL_CERT_FILE="/etc/ssl/certs/coder/ca.crt"
+              export WORKSPACE="/tmp/workspace"
+
+              # Create the target workspace directory
+              mkdir -p "${WORKSPACE}"
+
+              # Copy the ConfigMap's files (main.tf, certificates.tf) as physical files
+              cp /tmp/tf-code/*.tf "${WORKSPACE}"/
+
+              # Push the physical directory
+              coder templates push {{ .Values.template.name }} \
+                --directory "${WORKSPACE}" \
+                --message "Deployed via Helm release {{ .Release.Name }}" \
+                --variable namespace="{{ .Values.namespace | default "coder" }}" \
+                --yes
+
+          env:
+            - name: CODER_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.coder.tokenSecret | quote }}
+                  key: token
+                  optional: true
+            - name: CODER_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: coder-init-auth
+                  key: email
+                  optional: true
+            - name: CODER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: coder-init-auth
+                  key: password
+                  optional: true
+          volumeMounts:
+            - name: tf-code
+              mountPath: /tmp/tf-code
+            - name: tls-ca
+              mountPath: /etc/ssl/certs/coder
+              readOnly: true
+      restartPolicy: Never
+      volumes:
+        - name: tf-code
+          configMap:
+            name: {{ .Release.Name }}-terraform
+        - name: tls-ca
+          secret:
+            secretName: tls-ca

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Customize · Coder</title>
+  <link rel="stylesheet" href="/__coder-ui/view.css">
+  <link rel="stylesheet" href="/__coder-ui/logo.css">
+  <style id="coder-ui-theme"></style>
+</head>
+<body>
+<main>
+  <section class="card" aria-labelledby="current-h">
+    <div class="card-head">
+      <h2 id="current-h">Current logo</h2>
+      <span class="pill info" id="state">Loading…</span>
+    </div>
+    <div class="previews">
+      <figure class="preview dark"><div class="navbar-mock"><span class="logo-slot" id="p-dark"></span><span class="nav-words">Workspaces · Templates</span></div><figcaption>Dark theme</figcaption></figure>
+      <figure class="preview light"><div class="navbar-mock"><span class="logo-slot" id="p-light"></span><span class="nav-words">Workspaces · Templates</span></div><figcaption>Light theme</figcaption></figure>
+    </div>
+    <p class="hint" id="meta"></p>
+    <div class="row actions">
+      <button type="button" class="btn btn-primary" id="open">Upload a new logo…</button>
+      <button type="button" class="btn" id="reset" hidden>Restore the Coder logo</button>
+    </div>
+    <p class="hint">Stored in Coder's own PostgreSQL database, so it survives restarts and upgrades. Everyone sees it after their next page load.</p>
+  </section>
+</main>
+
+<dialog id="dialog" aria-labelledby="dialog-h">
+  <form method="dialog" id="form">
+    <h2 id="dialog-h">Upload a new logo</h2>
+    <label class="drop" id="drop" tabindex="0">
+      <input type="file" id="file" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif">
+      <span class="drop-text" id="drop-text"><b>Choose an image</b> or drop it here<br><small>PNG, JPEG, SVG, WebP or GIF · up to 1 MB · a wide logo about 3–4× as wide as it is tall works best</small></span>
+    </label>
+    <div class="previews" id="new-previews" hidden>
+      <figure class="preview dark"><div class="navbar-mock"><span class="logo-slot" id="n-dark"></span><span class="nav-words">Workspaces · Templates</span></div><figcaption>Navigation bar (dark)</figcaption></figure>
+      <figure class="preview light"><div class="navbar-mock"><span class="logo-slot" id="n-light"></span><span class="nav-words">Workspaces · Templates</span></div><figcaption>Navigation bar (light)</figcaption></figure>
+      <figure class="preview dark signin"><div class="signin-mock"><span class="logo-slot big" id="n-signin"></span><span class="nav-words">Sign in to Coder</span></div><figcaption>Sign-in page</figcaption></figure>
+    </div>
+    <p class="hint" id="file-info" aria-live="polite"></p>
+    <div class="row actions end">
+      <button type="button" class="btn" id="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="save" disabled>Save logo</button>
+    </div>
+  </form>
+</dialog>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script type="module" src="/__coder-ui/logo-view.js"></script>
+</body>
+</html>

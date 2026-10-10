@@ -1,0 +1,335 @@
+{{- if .Values.bootstrap.enabled }}
+{{- $name := "coder-platform-bootstrap" }}
+{{- $b := .Values.bootstrap }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+rules:
+  # create can't be limited by resourceNames; the Job only creates the Secrets and the ConfigMap named below.
+  - apiGroups: [""]
+    resources: [secrets, configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ $b.secretName | quote }}, coder-platform-automation]
+    verbs: [get, patch]
+  # Coder's password sign-in switch (read by the Coder Deployment), and restarting Coder when it changes.
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [coder-platform-auth]
+    verbs: [get, patch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [{{ include "cp.coderDeployment" . | quote }}]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+# Runs on every install / upgrade / Argo CD sync; every step is idempotent:
+#   1. Secret <bootstrap.secretName> exists (a password is generated the first time, never rotated)
+#   2. Coder answers on its in-cluster Service (no DNS, TLS or Gateway involved)
+#   3. the bootstrap admin is Coder's first user
+#   4. an API token for these steps (Secret coder-platform-automation), made once with the admin's password while
+#      password sign-in is still on (a new installation starts with it on; step 7 turns it off)
+#   5. each of `admins` exists as a Keycloak (OIDC) user with the owner role
+#   6. the workspace template is pushed, only when its files changed (the version message carries their checksum)
+#   7. password sign-in is set to oidc.disablePasswordAuth (ConfigMap coder-platform-auth); Coder restarts if it changed
+# Argo CD: Sync hook in wave 3 (after Coder, wave 2, is healthy; before the routes, wave 4). Helm: post-install/upgrade.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: {{ add $b.waitSeconds 1200 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      {{- include "cp.imagePullSecrets" . | nindent 6 }}
+      {{- include "cp.nodeSelector" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: {{ include "cp.coderImage" . | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          {{- with $b.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - {name: SECRET_NAME, value: {{ $b.secretName | quote }}}
+            - {name: DEFAULT_USERNAME, value: {{ $b.username | quote }}}
+            - {name: DEFAULT_EMAIL, value: {{ $b.email | default (printf "coder-admin@%s" (include "cp.domain" .)) | quote }}}
+            - {name: FULL_NAME, value: {{ $b.fullName | quote }}}
+            - {name: CODER_URL, value: {{ include "cp.coderServiceURL" . | quote }}}
+            - {name: CODER_DEPLOYMENT, value: {{ include "cp.coderDeployment" . | quote }}}
+            # attach: an existing Coder. No first user / bootstrap admin; the owner token in Secret
+            # coder-platform-automation (./upgrade token) is used and rotated; password sign-in is left alone.
+            - {name: ATTACH, value: {{ ternary "true" "false" .Values.attach.enabled | quote }}}
+            - {name: DISABLE_PASSWORD_AUTH, value: {{ ternary "true" "false" (and .Values.oidc.enabled .Values.oidc.disablePasswordAuth) | quote }}}
+            - {name: WAIT_SECONDS, value: {{ $b.waitSeconds | quote }}}
+            # "username email" per line
+            - name: ADMINS
+              value: |
+                {{- range .Values.admins }}
+                {{ required "admins[].username is required" .username }} {{ required "admins[].email is required" .email }}
+                {{- end }}
+            - {name: TEMPLATE_NAME, value: {{ ternary .Values.workspaces.template.name "" .Values.workspaces.template.enabled | quote }}}
+            - {name: TEMPLATE_DISPLAY_NAME, value: {{ .Values.workspaces.template.displayName | quote }}}
+            - {name: TEMPLATE_DESCRIPTION, value: {{ .Values.workspaces.template.description | quote }}}
+            - {name: TEMPLATE_ICON, value: {{ .Values.workspaces.template.icon | quote }}}
+            - {name: HOME, value: /tmp}
+            - {name: TMPDIR, value: /tmp}
+            - {name: CODER_TELEMETRY, value: "false"}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            {{- if .Values.workspaces.template.enabled }}
+            - {name: template, mountPath: /template, readOnly: true}
+            {{- end }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              SA=/var/run/secrets/kubernetes.io/serviceaccount
+              NS=$(cat "$SA/namespace")
+              SECRET_URL="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NS}/secrets"
+              kube() { curl -sS --cacert "$SA/ca.crt" -H "Authorization: Bearer $(cat "$SA/token")" "$@"; }
+              json_str() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+              # First string value of "key" in a JSON file (the API server and Coder may pretty-print: optional space).
+              json_get() { grep -o "\"$1\": *\"[^\"]*\"" "$2" | head -n 1 | sed 's/.*: *"\(.*\)"/\1/' || true; }
+              secret_field() { json_get "$1" /tmp/secret.json | base64 -d 2>/dev/null || true; }
+              step() { echo; echo "== $*"; }
+
+              if [ "$ATTACH" != true ]; then
+              step "bootstrap admin credentials (Secret $SECRET_NAME)"
+              code=$(kube -o /tmp/secret.json -w '%{http_code}' "$SECRET_URL/$SECRET_NAME")
+              if [ "$code" = 404 ]; then
+                pass="$(openssl rand -hex 4)-$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | cut -c1-20)"
+                body=$(printf '{"apiVersion":"v1","kind":"Secret","type":"Opaque","metadata":{"name":%s,"labels":{"app.kubernetes.io/part-of":"coder","app.kubernetes.io/created-by":"coder-platform-bootstrap"}},"stringData":{"username":%s,"email":%s,"password":%s}}' \
+                  "$(json_str "$SECRET_NAME")" "$(json_str "$DEFAULT_USERNAME")" "$(json_str "$DEFAULT_EMAIL")" "$(json_str "$pass")")
+                code=$(kube -o /tmp/create.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$body" "$SECRET_URL")
+                case "$code" in 201|409) echo "generated a password" ;; *) echo "creating the Secret failed (HTTP $code):"; cat /tmp/create.json; exit 1 ;; esac
+                code=$(kube -o /tmp/secret.json -w '%{http_code}' "$SECRET_URL/$SECRET_NAME")
+              fi
+              [ "$code" = 200 ] || { echo "reading Secret $SECRET_NAME failed (HTTP $code)"; cat /tmp/secret.json; exit 1; }
+              username=$(secret_field username); username=${username:-$DEFAULT_USERNAME}
+              email=$(secret_field email); email=${email:-$DEFAULT_EMAIL}
+              password=$(secret_field password)
+              [ -n "$password" ] || { echo "Secret $SECRET_NAME has no 'password' key"; exit 1; }
+              echo "admin: $username <$email>"
+              fi
+
+              step "waiting up to ${WAIT_SECONDS}s for Coder ($CODER_URL)"
+              deadline=$(( $(date +%s) + WAIT_SECONDS ))
+              until curl -fsS -m 5 -o /dev/null "$CODER_URL/healthz"; do
+                [ "$(date +%s)" -lt "$deadline" ] || { echo "Coder did not become healthy in time"; exit 1; }
+                sleep 5
+              done
+              echo "Coder is up"
+
+              if [ "$ATTACH" = true ]; then
+                echo; echo "== existing Coder (attach): no first user or bootstrap admin; using the owner token"
+              else
+              step "first user"
+              code=$(curl -sS -m 15 -o /tmp/first.json -w '%{http_code}' "$CODER_URL/api/v2/users/first")
+              case "$code" in
+                200) echo "Coder already has its first user" ;;
+                404)
+                  body=$(printf '{"email":%s,"username":%s,"name":%s,"password":%s,"trial":false}' \
+                    "$(json_str "$email")" "$(json_str "$username")" "$(json_str "$FULL_NAME")" "$(json_str "$password")")
+                  code=$(curl -sS -m 30 -o /tmp/r.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$body" "$CODER_URL/api/v2/users/first")
+                  case "$code" in 200|201) echo "created $username (owner)" ;; *) echo "creating the first user failed (HTTP $code):"; cat /tmp/r.json; exit 1 ;; esac ;;
+                *) echo "GET /api/v2/users/first returned HTTP $code:"; cat /tmp/first.json; exit 1 ;;
+              esac
+              fi
+
+              api() { curl -sS -m 60 -H "Coder-Session-Token: $CODER_SESSION_TOKEN" -H 'Content-Type: application/json' "$@"; }
+              export CODER_URL CODER_SESSION_TOKEN=""
+              CM_URL="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NS}/configmaps"
+              DEP_URL="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/apis/apps/v1/namespaces/${NS}/deployments/${CODER_DEPLOYMENT}"
+
+              rollout_done() {   # Coder's Deployment is fully rolled out and Coder answers
+                kube -o /tmp/d.json "$DEP_URL" || return 1
+                d=$(tr -d ' \n' < /tmp/d.json)
+                num() { printf '%s' "$d" | grep -o "\"$1\":[0-9]*" | head -n 1 | cut -d: -f2; }
+                printf '%s' "$d" | grep -q '"unavailableReplicas"' && return 1
+                [ "$(num observedGeneration)" = "$(num generation)" ] && [ "$(num updatedReplicas)" = "$(num replicas)" ] \
+                  && [ "$(num availableReplicas)" = "$(num replicas)" ] && curl -fsS -m 5 -o /dev/null "$CODER_URL/healthz"
+              }
+              set_password_auth_off() {   # set_password_auth_off true|false: ConfigMap coder-platform-auth; restart Coder if it changed
+                code=$(kube -o /tmp/cm.json -w '%{http_code}' "$CM_URL/coder-platform-auth")
+                current=""; [ "$code" = 200 ] && current=$(json_get CODER_DISABLE_PASSWORD_AUTH /tmp/cm.json)
+                [ "$current" != "$1" ] || { echo "password sign-in off: $1 (unchanged)"; return 0; }
+                data="{\"CODER_DISABLE_PASSWORD_AUTH\":\"$1\"}"
+                if [ "$code" = 404 ]; then
+                  code=$(kube -o /tmp/r.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+                    -d "{\"apiVersion\":\"v1\",\"kind\":\"ConfigMap\",\"metadata\":{\"name\":\"coder-platform-auth\",\"labels\":{\"app.kubernetes.io/part-of\":\"coder\",\"app.kubernetes.io/created-by\":\"coder-platform-bootstrap\"}},\"data\":$data}" "$CM_URL")
+                else
+                  code=$(kube -o /tmp/r.json -w '%{http_code}' -X PATCH -H 'Content-Type: application/merge-patch+json' -d "{\"data\":$data}" "$CM_URL/coder-platform-auth")
+                fi
+                case "$code" in 200|201) ;; *) echo "writing ConfigMap coder-platform-auth failed (HTTP $code): $(cat /tmp/r.json)"; exit 1 ;; esac
+                # Restart Coder to read it (the annotation `kubectl rollout restart` sets).
+                code=$(kube -o /tmp/r.json -w '%{http_code}' -X PATCH -H 'Content-Type: application/strategic-merge-patch+json' \
+                  -d "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/restartedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}}}}" "$DEP_URL")
+                case "$code" in 200) ;; *) echo "restarting Coder failed (HTTP $code): $(cat /tmp/r.json)"; exit 1 ;; esac
+                echo "password sign-in off: $1; Coder is restarting"
+                deadline=$(( $(date +%s) + WAIT_SECONDS )); sleep 5
+                until rollout_done; do
+                  [ "$(date +%s)" -lt "$deadline" ] || { echo "Coder did not come back in time"; exit 1; }
+                  sleep 5
+                done
+                echo "Coder is back"
+              }
+              password_login() {   # prints the session token
+                body=$(printf '{"email":%s,"password":%s}' "$(json_str "$email")" "$(json_str "$password")")
+                code=$(curl -sS -m 30 -o /tmp/login.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$body" "$CODER_URL/api/v2/users/login")
+                [ "$code" = 201 ] || [ "$code" = 200 ] || return 1
+                json_get session_token /tmp/login.json
+              }
+              new_token() {   # a fresh coder-platform-<time> token in Secret coder-platform-automation; older ones deleted
+                name="coder-platform-$(date +%s)"; token=""
+                # Coder caps admins' tokens (default 7 days): the longest accepted wins; every run replaces it.
+                for life in 31536000000000000 2592000000000000 604800000000000 86400000000000; do
+                  code=$(api -o /tmp/tok.json -w '%{http_code}' -X POST -d "{\"token_name\":\"$name\",\"lifetime\":$life}" "$CODER_URL/api/v2/users/me/keys/tokens")
+                  [ "$code" = 201 ] && { token=$(json_get key /tmp/tok.json); break; }
+                done
+                [ -n "$token" ] || { echo "creating an API token failed (HTTP $code): $(cat /tmp/tok.json)"; exit 1; }
+                b64=$(printf '%s' "$token" | base64 | tr -d '\n')
+                code=$(kube -o /tmp/s.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+                  -d "{\"apiVersion\":\"v1\",\"kind\":\"Secret\",\"type\":\"Opaque\",\"metadata\":{\"name\":\"coder-platform-automation\",\"labels\":{\"app.kubernetes.io/part-of\":\"coder\",\"app.kubernetes.io/created-by\":\"coder-platform-bootstrap\"}},\"data\":{\"token\":\"$b64\"}}" "$SECRET_URL")
+                [ "$code" = 409 ] && code=$(kube -o /tmp/s.json -w '%{http_code}' -X PATCH -H 'Content-Type: application/merge-patch+json' -d "{\"data\":{\"token\":\"$b64\"}}" "$SECRET_URL/coder-platform-automation")
+                case "$code" in 200|201) ;; *) echo "storing the token failed (HTTP $code): $(cat /tmp/s.json)"; exit 1 ;; esac
+                CODER_SESSION_TOKEN=$token
+                api "$CODER_URL/api/v2/users/me/keys/tokens" | tr -d '\n' | sed 's/},{/}\n{/g' | grep '"token_name": *"coder-platform-' \
+                  | grep -v "\"$name\"" | grep -o '"id": *"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' \
+                  | while read -r kid; do api -o /dev/null -X DELETE "$CODER_URL/api/v2/users/me/keys/$kid" || true; done || true
+                echo "new token $name (expires in $(( life / 86400000000000 )) days; replaced on every run)"
+              }
+
+              step "API token (Secret coder-platform-automation)"
+              code=$(kube -o /tmp/auto.json -w '%{http_code}' "$SECRET_URL/coder-platform-automation")
+              [ "$code" = 200 ] && CODER_SESSION_TOKEN=$(json_get token /tmp/auto.json | base64 -d 2>/dev/null || true)
+              if [ -n "$CODER_SESSION_TOKEN" ] && [ "$(api -o /dev/null -w '%{http_code}' "$CODER_URL/api/v2/users/me")" = 200 ]; then
+                new_token
+              elif [ "$ATTACH" = true ]; then
+                echo "No valid owner token in Secret coder-platform-automation. It is made by ./upgrade token (an owner's API"
+                echo "token) and renewed on every run; it expires only when nothing ran for longer than its lifetime."
+                echo "Run ./upgrade token, then the install/sync again."
+                exit 1
+              else
+                # No valid token (a new installation, or none of these runs for longer than a token lives): sign in
+                # with the admin's password, turning password sign-in on for a moment if it is off.
+                session=$(password_login) || {
+                  grep -q 'Password authentication is disabled' /tmp/login.json || { echo "signing in as $username failed: $(cat /tmp/login.json)"; exit 1; }
+                  echo "no valid token and password sign-in is off: turning it on until a new token exists"
+                  set_password_auth_off false
+                  session=$(password_login) || { echo "signing in as $username failed: $(cat /tmp/login.json)"; exit 1; }
+                }
+                CODER_SESSION_TOKEN=$session
+                new_token
+                curl -sS -m 10 -o /dev/null -X POST -H "Coder-Session-Token: $session" "$CODER_URL/api/v2/users/logout" || true
+              fi
+
+              step "owners (Keycloak users)"
+              api -o /tmp/org.json "$CODER_URL/api/v2/organizations/default" >/dev/null
+              org=$(json_get id /tmp/org.json)
+              [ -n "$org" ] || { echo "reading the default organization failed: $(cat /tmp/org.json)"; exit 1; }
+              printf '%s\n' "$ADMINS" | while read -r u e; do
+                [ -n "${u:-}" ] || continue
+                code=$(api -o /tmp/u.json -w '%{http_code}' "$CODER_URL/api/v2/users/$u")
+                if [ "$code" = 404 ] || [ "$code" = 400 ]; then
+                  body=$(printf '{"username":%s,"email":%s,"login_type":"oidc","organization_ids":[%s]}' "$(json_str "$u")" "$(json_str "$e")" "$(json_str "$org")")
+                  code=$(api -o /tmp/u.json -w '%{http_code}' -X POST -d "$body" "$CODER_URL/api/v2/users")
+                  case "$code" in 200|201) echo "created $u <$e> (signs in with Keycloak)" ;; *) echo "creating $u failed (HTTP $code):"; cat /tmp/u.json; exit 1 ;; esac
+                elif [ "$code" != 200 ]; then
+                  echo "looking up $u failed (HTTP $code):"; cat /tmp/u.json; exit 1
+                fi
+                code=$(api -o /tmp/r.json -w '%{http_code}' -X PUT -d '{"roles":["owner"]}' "$CODER_URL/api/v2/users/$u/roles")
+                case "$code" in 200) echo "$u is an owner" ;; *) echo "granting owner to $u failed (HTTP $code):"; cat /tmp/r.json; exit 1 ;; esac
+              done
+
+              if [ -n "$TEMPLATE_NAME" ]; then
+                step "workspace template $TEMPLATE_NAME"
+                mkdir -p /tmp/template && cp /template/*.tf /tmp/template/
+                sum=$(cat /tmp/template/*.tf | sha256sum | cut -c1-16)
+                current=""
+                code=$(api -o /tmp/t.json -w '%{http_code}' "$CODER_URL/api/v2/organizations/default/templates/$TEMPLATE_NAME")
+                if [ "$code" = 200 ]; then
+                  vid=$(json_get active_version_id /tmp/t.json)
+                  api -o /tmp/v.json "$CODER_URL/api/v2/templateversions/$vid" >/dev/null
+                  current=$(json_get message /tmp/v.json)
+                fi
+                if [ "$current" = "coder-platform $sum" ]; then
+                  echo "already the active version ($sum)"
+                else
+                  /opt/coder templates push "$TEMPLATE_NAME" --directory /tmp/template --message "coder-platform $sum" --yes
+                  /opt/coder templates edit "$TEMPLATE_NAME" --display-name "$TEMPLATE_DISPLAY_NAME" \
+                    --description "$TEMPLATE_DESCRIPTION" --icon "$TEMPLATE_ICON" --yes >/dev/null
+                  echo "pushed ($sum)"
+                fi
+              fi
+              if [ "$ATTACH" != true ]; then
+                step "password sign-in"
+                set_password_auth_off "$DISABLE_PASSWORD_AUTH"
+              fi
+              echo; echo "bootstrap complete"
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.workspaces.template.enabled }}
+        - name: template
+          configMap:
+            name: coder-platform-template
+        {{- end }}
+{{- end }}

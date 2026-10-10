@@ -1,0 +1,55 @@
+# The route for the platform build of Coder (ghcr.io/user187x/coder-platform), whose dashboard has every add-on built
+# in: the service's API and files at /__coder-ui/, and nothing rewritten. httproute.yaml would add each add-on a second
+# time (two Avatar menu items, two account avatars, two Terminal drop-downs, ...).
+#
+# The entry chunk and the page loads are still claimed here, passed to Coder unchanged: the same precedence as
+# httproute.yaml (see there) keeps the coder-banner route from rewriting them, so its loader and menu item don't
+# duplicate the dashboard's own banner either.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: coder-ui-updates
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  hostnames:
+    - "@@HOST@@"
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: @@GATEWAY_NAME@@
+      namespace: @@GATEWAY_NAMESPACE@@
+@@SECTION_NAME@@
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /__coder-ui/
+      backendRefs:
+        - name: coder-ui-updates
+          port: 80
+    - matches:
+        - path:
+            type: RegularExpression
+            value: '^/assets/index-[A-Za-z0-9_-]{4,64}\.js$'
+      backendRefs:
+        - name: @@CODER_SERVICE@@
+          port: @@CODER_PORT@@
+    - matches:
+        - path:
+            type: RegularExpression
+            value: '^/([^@_].*)?$'
+          headers:
+            - type: RegularExpression
+              name: Accept
+              value: '.*text/html.*'
+        - path:
+            type: RegularExpression
+            value: '^/@[^/]+/[^/]+(/builds/[0-9]+|/settings(/[a-z-]+)?|/terminal)?/?$'
+          headers:
+            - type: RegularExpression
+              name: Accept
+              value: '.*text/html.*'
+      backendRefs:
+        - name: @@CODER_SERVICE@@
+          port: @@CODER_PORT@@

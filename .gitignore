@@ -1,0 +1,21 @@
+# Build output
+/dist/
+*.part
+# Image archives (pinned by images.txt + SHA256SUMS; rebuilt with mirror-images.sh save / tools/build-airgap-image.sh)
+/helm-chart/images/**/*.tar
+/helm-chart/images/**/*.tar.gz
+# Filled by tools/build-airgap-image.sh
+/development/airgap-image/template/
+# Never commit private material (it lives in ~/coder-airgapped-private/)
+*.dump
+*.bundle
+*.key
+*.pem
+/development/tools/airgap-e2e/kubeconfig
+/development/tools/airgap-e2e/pki/
+/development/tools/airgap-e2e/*.log
+# Local
+__pycache__/
+*.pyc
+*.swp
+.DS_Store

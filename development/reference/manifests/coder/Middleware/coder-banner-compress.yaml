@@ -1,0 +1,15 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: '1'
+    argocd.argoproj.io/tracking-id: coder-banner:traefik.io/Middleware:coder/coder-banner-compress
+  labels:
+    app.kubernetes.io/instance: coder-banner
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: coder-banner
+    app.kubernetes.io/part-of: coder
+  name: coder-banner-compress
+  namespace: coder
+spec:
+  compress: {}

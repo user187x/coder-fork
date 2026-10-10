@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Certificates · Coder</title>
+  <link rel="stylesheet" href="/__coder-ui/view.css">
+  <link rel="stylesheet" href="/__coder-ui/certificates.css">
+  <style id="coder-ui-theme"></style>
+</head>
+<body>
+<main>
+  <section class="card" aria-labelledby="list-h">
+    <div class="card-head">
+      <h2 id="list-h">Your certificate</h2>
+      <button type="button" class="btn btn-primary" id="add">Upload certificate…</button>
+    </div>
+    <div id="list"><p class="hint">Loading…</p></div>
+  </section>
+
+  <section class="card how" aria-labelledby="how-h">
+    <h2 id="how-h">How it works</h2>
+    <ul>
+      <li>Every workspace you start gets your certificate as <code id="target">~/.cert/&lt;username&gt;.p12</code>, named after your Coder username and readable only by you (<code>0600</code>). Nothing else is placed in <code>~/.cert</code>. Restart a running workspace to pick up a new or replaced certificate.</li>
+      <li>It is stored as your own Coder secret: only you can upload, replace or delete it, its contents can never be read back through Coder, and it is delivered only to workspaces you own. Every change is in Coder's audit log.</li>
+      <li>The optional password check happens in this page only. The password is never sent or stored: keep using it wherever the certificate is opened.</li>
+    </ul>
+  </section>
+</main>
+
+<dialog id="dialog" aria-labelledby="dialog-h">
+  <form method="dialog" id="form" autocomplete="off">
+    <h2 id="dialog-h">Upload your certificate</h2>
+    <label class="drop" id="drop" tabindex="0">
+      <input type="file" id="file" accept=".p12,.pfx,application/x-pkcs12">
+      <span id="drop-text"><b>Choose a .p12 / .pfx file</b> or drop it here<br><small>PKCS#12, up to 18 KB</small></span>
+    </label>
+    <label class="field"><span class="label">Password <em>(optional, only to check the file)</em></span>
+      <input type="password" id="password" autocomplete="off" data-1p-ignore data-lpignore="true" spellcheck="false">
+      <span class="hint">Checked here in your browser. Never sent or stored.</span></label>
+    <div class="facts" id="facts" hidden></div>
+    <div class="row actions end">
+      <button type="button" class="btn" id="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="save" disabled>Upload</button>
+    </div>
+  </form>
+</dialog>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script type="module" src="/__coder-ui/certificates-view.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+#!/bin/bash
+# Prints Coder's access URL (https://coder.example.com). CODER_URL overrides everything; otherwise it is read
+# from the Coder Deployment's CODER_ACCESS_URL. Environment: CODER_NAMESPACE [coder], CODER_DEPLOYMENT
+# [CODER_SERVICE, else coder].
+if [[ -n "${CODER_URL:-}" ]]; then echo "${CODER_URL%/}"; exit 0; fi
+kubectl get deployment "${CODER_DEPLOYMENT:-${CODER_SERVICE:-coder}}" -n "${CODER_NAMESPACE:-coder}" \
+ -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name=='CODER_ACCESS_URL')].value}" | sed 's|/*$||'

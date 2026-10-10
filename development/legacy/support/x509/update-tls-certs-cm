@@ -1,0 +1,9 @@
+#!/bin/bash
+
+DOMAIN="coder.xxx.com"
+CA_CRT_PATH="ca.crt"
+
+kubectl patch configmap argocd-tls-certs-cm \
+ -n argocd \
+ --type merge \
+ -p "{\"data\": {\"coder.xxx.com\": \"$(cat "${CA_CRT_PATH}" | sed ':a;N;$!ba;s/\n/\\n/g')\"}}"

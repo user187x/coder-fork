@@ -1,0 +1,7 @@
+Coder {{ .Chart.AppVersion }} (forked image {{ .Values.coder.coder.image.repo }}:{{ .Values.coder.coder.image.tag }}) is installing in namespace {{ .Release.Namespace }}.
+
+  Address:    https://{{ .Values.coderHost }}
+  Pods:       kubectl -n {{ .Release.Namespace }} get pods
+  Template:   kubectl -n {{ .Release.Namespace }} logs job/coder-workspace-push-template
+
+Restore users, templates, workspaces and the add-ons' settings from a backup with ../restore.sh <backup-dir>.

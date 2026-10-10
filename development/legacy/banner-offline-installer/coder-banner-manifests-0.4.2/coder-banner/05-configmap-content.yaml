@@ -1,0 +1,27 @@
+# Chart defaults for the banner (from values.yaml), used until an admin publishes something.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-banner-content
+  namespace: coder
+  labels:
+    app.kubernetes.io/name: coder-banner
+    app.kubernetes.io/instance: coder-banner
+    app.kubernetes.io/part-of: coder
+    app.kubernetes.io/managed-by: kubectl
+data:
+  banner.json: |
+    {
+      "dismissible": true,
+      "effect": "none",
+      "enabled": false,
+      "id": "b8206e29c7dc",
+      "level": "info",
+      "linkText": "",
+      "linkUrl": "",
+      "message": "",
+      "refreshSeconds": 60,
+      "repeat": false,
+      "showOnLoginPage": true,
+      "title": ""
+    }

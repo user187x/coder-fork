@@ -1,0 +1,24 @@
+#!/bin/bash
+
+CODER_URL="https://coder.xxx.com"
+
+CODER_PASSWORD=$(kubectl get secret -n coder coder-init-auth -o jsonpath='{.data.password}' | base64 -d | tr -d '\n')
+CODER_EMAIL=$(kubectl get secret -n coder coder-init-auth -o jsonpath='{.data.email}' | base64 -d | tr -d '\n')
+
+JSON_PAYLOAD=$(jq -n \
+ --arg email "$CODER_EMAIL" \
+ --arg password "$CODER_PASSWORD" \
+ '{email: $email, password: $password}')
+
+CODER_TOKEN=$(curl --cacert <(kubectl get secret tls-ca -n coder -o jsonpath='{.data.ca\.crt}' | base64 -d) -sSL -X POST "${CODER_URL}/api/v2/users/login" \
+ -H "Content-Type: application/json" \
+ -d "$JSON_PAYLOAD" | jq -r '.session_token // empty')
+
+if [ -z "$CODER_TOKEN" ]; then
+ echo "Authentication failed. Raw API response:"
+ echo "$RAW_RESPONSE" | jq .
+ exit 1
+else
+ echo "$CODER_TOKEN"
+ exit 0
+fi

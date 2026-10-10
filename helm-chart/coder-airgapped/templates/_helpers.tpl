@@ -1,0 +1,107 @@
+{{/* Labels of everything this chart creates itself (subcharts label their own objects). */}}
+{{- define "ca.labels" -}}
+app.kubernetes.io/part-of: coder
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
+{{- end -}}
+
+{{- define "ca.uiLabels" -}}
+app.kubernetes.io/name: coder-ui-updates
+{{ include "ca.labels" . }}
+{{- end -}}
+
+{{/* Value of a generated secret key: the given value, else the one already in the cluster, else random. */}}
+{{- define "ca.secretValue" -}}
+{{- $given := index . 0 -}}{{- $ctx := index . 1 -}}{{- $name := index . 2 -}}{{- $key := index . 3 -}}
+{{- if $given -}}
+{{- $given -}}
+{{- else -}}
+{{- $existing := lookup "v1" "Secret" $ctx.Release.Namespace $name -}}
+{{- if and $existing $existing.data (hasKey $existing.data $key) -}}
+{{- index $existing.data $key | b64dec -}}
+{{- else -}}
+{{- randAlphaNum 24 -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* In-cluster URL of a Service in the release namespace. */}}
+{{- define "ca.svcUrl" -}}
+{{- printf "http://%s.%s.svc.cluster.local:%v" (index . 0) (index . 1).Release.Namespace (index . 2) -}}
+{{- end -}}
+
+{{/* ------------------------------------------------------------------------------------------------------------
+Settings shared by every chart in the tree (named templates are global, so the subcharts' templated values call
+these too). All derive from .Values.global; see values.yaml > global.
+------------------------------------------------------------------------------------------------------------ */}}
+{{- define "platform.coderHost" -}}
+{{ .Values.global.coderHost | default (printf "coder.%s" .Values.global.domain) }}
+{{- end -}}
+
+{{- define "platform.wildcardHost" -}}
+{{ .Values.global.wildcardHost | default (printf "*.%s" .Values.global.domain) }}
+{{- end -}}
+
+{{- define "platform.accessUrl" -}}
+https://{{ include "platform.coderHost" . }}
+{{- end -}}
+
+{{- define "platform.oidcIssuer" -}}
+{{ .Values.global.oidc.issuerUrl | default (printf "https://keycloak.%s/realms/master" .Values.global.domain) }}
+{{- end -}}
+
+{{- define "platform.firstUserEmail" -}}
+{{ .Values.global.firstUser.email | default (printf "%s@%s" .Values.global.firstUser.username .Values.global.domain) }}
+{{- end -}}
+
+{{/* (list $ "ghcr.io/org/image:tag"): the reference as is, or global.registry/<path> (the source registry host
+     dropped), which is where ../mirror-images.sh push puts it. */}}
+{{- define "platform.image" -}}
+{{- $ctx := index . 0 -}}{{- $ref := index . 1 -}}
+{{- $reg := trimSuffix "/" ($ctx.Values.global.registry | default "") -}}
+{{- if $reg -}}
+{{- $parts := splitList "/" $ref -}}
+{{- if and (gt (len $parts) 1) (or (contains "." (first $parts)) (contains ":" (first $parts)) (eq (first $parts) "localhost")) -}}
+{{- $ref = join "/" (rest $parts) -}}
+{{- end -}}
+{{- printf "%s/%s" $reg $ref -}}
+{{- else -}}
+{{- $ref -}}
+{{- end -}}
+{{- end -}}
+
+{{/* (list $ "default.registry.host"): global.registry when set, else the default. */}}
+{{- define "platform.registryHost" -}}
+{{- trimSuffix "/" ((index . 0).Values.global.registry | default (index . 1)) -}}
+{{- end -}}
+
+{{/* Renders the templated strings in this chart's own sections (the subcharts render theirs: platform patch),
+     then applies global.imagePullSecrets. Called first by every template of this chart. */}}
+{{- define "ca.walk" -}}
+{{- $node := index . 0 -}}{{- $ctx := index . 1 -}}
+{{- if kindIs "map" $node -}}
+{{- range $k, $v := $node -}}
+{{- if and (kindIs "string" $v) (contains "{{" $v) -}}
+{{- $_ := set $node $k (tpl $v $ctx) -}}
+{{- else if or (kindIs "map" $v) (kindIs "slice" $v) -}}
+{{- include "ca.walk" (list $v $ctx) -}}
+{{- end -}}
+{{- end -}}
+{{- else if kindIs "slice" $node -}}
+{{- range $node -}}
+{{- if or (kindIs "map" .) (kindIs "slice" .) -}}
+{{- include "ca.walk" (list . $ctx) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ca.values" -}}
+{{- range $section := list "database" "secrets" "bootstrap" "uiUpdates" -}}
+{{- include "ca.walk" (list (index $.Values $section) $) -}}
+{{- end -}}
+{{- if and .Values.global.imagePullSecrets (not .Values.uiUpdates.imagePullSecrets) -}}
+{{- $_ := set .Values.uiUpdates "imagePullSecrets" .Values.global.imagePullSecrets -}}
+{{- end -}}
+{{- end -}}

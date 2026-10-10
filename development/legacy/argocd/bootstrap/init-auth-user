@@ -1,0 +1,19 @@
+#!/bin/bash
+
+#PASSWORD=$(openssl rand -base64 15)
+
+# DEMO PURPOSE
+PASSWORD="ChangeIt123!"
+
+kubectl delete \
+ secret \
+ coder-init-auth \
+ --namespace coder >/dev/null 2>&1
+
+kubectl create \
+ secret \
+ generic \
+ coder-init-auth \
+ --namespace coder \
+ --from-literal=email="admin@xxx.com" \
+ --from-literal=password="${PASSWORD}"

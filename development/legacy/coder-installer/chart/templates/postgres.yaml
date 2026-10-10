@@ -1,0 +1,22 @@
+{{- /* Coder's database: the CloudNativePG Cluster the coder Argo CD Application rendered through extraTemplates. */ -}}
+{{- if .Values.postgres.enabled }}
+{{- $pg := .Values.postgres }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $pg.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ci.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep   # uninstalling the release never deletes Coder's data
+spec:
+  instances: {{ $pg.instances }}
+  primaryUpdateStrategy: {{ $pg.primaryUpdateStrategy }}
+  imageName: {{ $pg.image }}
+  storage:
+    size: {{ $pg.storage.size }}
+    {{- with $pg.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,118 @@
+{{- include "coder-workspace.platform.values" . -}}
+{{- $url := .Values.coder.internalUrl | default (required "CODER_URL must be provided!" .Values.coder.url) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "coder-workspace.prefix" . }}-push-template
+  namespace: {{ .Values.namespace | default "coder" }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    # Removed once it has pushed the template; a failed run stays for its logs until the next install, or an hour.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # The session token comes from a Secret (install-workspace-chart creates it for the duration of the install),
+      # never from Helm values: those are stored in the release record. Without that Secret this init container
+      # signs in with coder-init-auth. (0.1.0 did that with curl + jq in the coder image, which has neither.)
+      initContainers:
+        - name: login
+          image: {{ .Values.loginImage }}
+          command: ["python3", "-c"]
+          args:
+            - |
+              import json, os, ssl, sys, urllib.request
+              if os.environ.get("CODER_SESSION_TOKEN"):
+                  open("/shared/token", "w").write(os.environ["CODER_SESSION_TOKEN"]); sys.exit(0)
+              print("No token Secret. Logging in with coder-init-auth...")
+              ctx = ssl.create_default_context(cafile="/etc/ssl/certs/coder/ca.crt") if os.path.exists("/etc/ssl/certs/coder/ca.crt") else None
+              body = json.dumps({"email": os.environ.get("CODER_EMAIL", ""), "password": os.environ.get("CODER_PASSWORD", "")}).encode()
+              req = urllib.request.Request(os.environ["CODER_URL"].rstrip("/") + "/api/v2/users/login", data=body,
+                                           method="POST", headers={"Content-Type": "application/json"})
+              try:
+                  token = json.load(urllib.request.urlopen(req, timeout=30, context=ctx)).get("session_token")
+              except Exception as e:
+                  sys.exit(f"Authentication failed: {e}")
+              if not token:
+                  sys.exit("Authentication failed.")
+              open("/shared/token", "w").write(token)
+          env:
+            - name: CODER_URL
+              value: {{ $url | quote }}
+            - name: CODER_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.coder.tokenSecret | quote }}
+                  key: token
+                  optional: true
+            - name: CODER_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.initAuth | quote }}
+                  key: email
+                  optional: true
+            - name: CODER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.initAuth | quote }}
+                  key: password
+                  optional: true
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+            - name: tls-ca
+              mountPath: /etc/ssl/certs/coder
+              readOnly: true
+      containers:
+        - name: coder-cli
+          image: {{ .Values.cliImage }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              CODER_URL={{ $url | quote }}
+              CODER_SESSION_TOKEN="$(cat /shared/token)"
+
+              export CODER_SESSION_TOKEN
+              export CODER_URL
+              export SSL_CERT_FILE="/etc/ssl/certs/coder/ca.crt"
+              export WORKSPACE="/tmp/workspace"
+
+              # Create the target workspace directory
+              mkdir -p "${WORKSPACE}"
+
+              # Copy the ConfigMap's files (main.tf, certificates.tf, agent-audit.tf) as physical files
+              cp /tmp/tf-code/*.tf "${WORKSPACE}"/
+
+              # Push the physical directory
+              coder templates push {{ .Values.template.name }} \
+                --directory "${WORKSPACE}" \
+                --message "Deployed via Helm release {{ .Release.Name }}" \
+                --variable namespace="{{ .Values.namespace | default "coder" }}" \
+                --yes
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+              readOnly: true
+            - name: tf-code
+              mountPath: /tmp/tf-code
+            - name: tls-ca
+              mountPath: /etc/ssl/certs/coder
+              readOnly: true
+      restartPolicy: Never
+      volumes:
+        - name: shared
+          emptyDir:
+            medium: Memory
+        - name: tf-code
+          configMap:
+            name: {{ include "coder-workspace.prefix" . }}-terraform
+        - name: tls-ca
+          secret:
+            secretName: {{ .Values.secrets.tlsCa | quote }}

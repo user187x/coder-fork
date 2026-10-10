@@ -1,0 +1,46 @@
+{{- /*
+Coder's settings, derived from the values (the coder subchart reads them through coder.coder.envFrom). Changing this
+ConfigMap doesn't restart Coder by itself: ./install passes its checksum as a pod annotation, and `kubectl -n <ns>
+rollout restart deploy/coder` does the same by hand.
+Not settable here: CODER_EXTERNAL_AUTH_GITHUB_DEFAULT_PROVIDER_ENABLE. Coder reads every CODER_EXTERNAL_AUTH_<n>_*
+variable as an external-auth provider and refuses to start ("parse number: GITHUB_DEFAULT_PROVIDER_ENABLE").
+*/ -}}
+{{- if not .Values.attach.enabled }}
+{{- $env := dict
+  "CODER_ACCESS_URL" (include "cp.accessURL" .)
+  "CODER_TELEMETRY_ENABLE" "false"
+  "CODER_UPDATE_CHECK" "false"
+  "CODER_DERP_SERVER_STUN_ADDRESSES" "disable"
+  "CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE" "false"
+  "SSL_CERT_DIR" "/etc/ssl/certs:/etc/keycloaking/ca"
+}}
+{{- with include "cp.wildcardHost" . }}{{ $_ := set $env "CODER_WILDCARD_ACCESS_URL" . }}{{ end }}
+{{- if .Values.oidc.enabled }}
+{{- $o := .Values.oidc }}
+{{- $_ := set $env "CODER_OIDC_ISSUER_URL" (required "oidc.issuerURL is required (or set oidc.enabled: false)" $o.issuerURL) }}
+{{- $_ := set $env "CODER_OIDC_CLIENT_ID" $o.clientID }}
+{{- $_ := set $env "CODER_OIDC_SCOPES" $o.scopes }}
+{{- $_ := set $env "CODER_OIDC_USERNAME_FIELD" $o.usernameField }}
+{{- $_ := set $env "CODER_OIDC_EMAIL_FIELD" $o.emailField }}
+{{- $_ := set $env "CODER_OIDC_IGNORE_EMAIL_VERIFIED" (toString $o.ignoreEmailVerified) }}
+{{- $_ := set $env "CODER_OIDC_SIGN_IN_TEXT" $o.signInText }}
+{{- $_ := set $env "CODER_OIDC_ICON_URL" $o.iconURL }}
+{{- $_ := set $env "CODER_OIDC_ALLOW_SIGNUPS" (toString $o.allowSignups) }}
+{{- with $o.groupField }}{{ $_ := set $env "CODER_OIDC_GROUP_FIELD" . }}{{ end }}
+{{- with $o.allowedGroups }}{{ $_ := set $env "CODER_OIDC_ALLOWED_GROUPS" (join "," .) }}{{ end }}
+{{- if and $o.allowedGroups (not $o.groupField) }}{{ fail "oidc.allowedGroups needs oidc.groupField (the token claim with the groups, e.g. groups)" }}{{ end }}
+{{- /* CODER_DISABLE_PASSWORD_AUTH: set by the bootstrap Job (ConfigMap coder-platform-auth), see bootstrap.yaml */}}
+{{- end }}
+{{- range $k, $v := .Values.coderEnv }}{{ $_ := set $env $k (toString $v) }}{{ end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-platform-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+data:
+  {{- toYaml $env | nindent 2 }}
+{{- end }}

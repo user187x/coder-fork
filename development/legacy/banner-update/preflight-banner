@@ -1,0 +1,131 @@
+#!/bin/bash
+# Read-only checks to run BEFORE installing the banner on a cluster (nothing is changed).
+#   ./preflight-banner
+# Environment (defaults in brackets):
+#   CODER_NAMESPACE [coder]   CODER_SERVICE [coder]   CODER_HOST [coder.xxx.com]
+#   GATEWAY_NAME [traefik-gateway]   GATEWAY_NAMESPACE [traefik]   TRAEFIK_NAMESPACE [traefik]   TRAEFIK_DEPLOYMENT [traefik]
+#   BANNER_IMAGE [docker.io/library/python:3.13-alpine]   (the image the chart will run)
+#   GATEWAY_SECTION []   (the Gateway listener the banner route will attach to; empty = every listener)
+set -uo pipefail
+cd "$(dirname "$0")" || exit 1   # so ./traefik-plugin/plugin-health.sh is found wherever this is called from
+
+NS="${CODER_NAMESPACE:-coder}"; SVC="${CODER_SERVICE:-coder}"; HOST="${CODER_HOST:-coder.xxx.com}"
+GW="${GATEWAY_NAME:-traefik-gateway}"; GWNS="${GATEWAY_NAMESPACE:-traefik}"; TNS="${TRAEFIK_NAMESPACE:-traefik}"
+IMAGE="${BANNER_IMAGE:-docker.io/library/python:3.13-alpine}"
+TDEP="${TRAEFIK_DEPLOYMENT:-traefik}"; SECTION="${GATEWAY_SECTION:-}"
+TESTED_CODER="v2.36.0"
+fail=0; warn=0
+ok()   { echo "  OK    $*"; }
+bad()  { echo "  FAIL  $*"; fail=$((fail+1)); }
+note() { echo "  WARN  $*"; warn=$((warn+1)); }
+
+echo "Cluster"
+kubectl version >/dev/null 2>&1 && ok "kubectl can reach the cluster" || { bad "kubectl cannot reach the cluster"; exit 1; }
+
+echo "Required APIs"
+for crd in httproutes.gateway.networking.k8s.io middlewares.traefik.io; do
+ kubectl get crd "${crd}" >/dev/null 2>&1 && ok "CRD ${crd}" || bad "CRD ${crd} is missing (the banner uses the Traefik Gateway API paradigm only)"
+done
+
+echo "Gateway"
+prog=$(kubectl -n "${GWNS}" get gateway "${GW}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null)
+[[ "${prog}" == "True" ]] && ok "Gateway ${GWNS}/${GW} is programmed" || bad "Gateway ${GWNS}/${GW} not found or not programmed (set GATEWAY_NAME / GATEWAY_NAMESPACE)"
+# The banner route is a NEW route beside Coder's own. Show where it will attach and whether the Gateway accepts it there.
+gwjson=$(kubectl -n "${GWNS}" get gateway "${GW}" -o json 2>/dev/null || true)
+if [[ -n "${gwjson}" ]]; then
+ found_section=0; sect_proto=""
+ while IFS='|' read -r ln lproto lport lfrom; do
+  [[ -n "${ln}" ]] || continue
+  if [[ -n "${SECTION}" && "${ln}" != "${SECTION}" ]]; then echo "  --    listener ${ln} (${lproto}, port ${lport}): not used by the banner route"; continue; fi
+  echo "  --    listener ${ln} (${lproto}, port ${lport}, accepts routes from: ${lfrom}): the banner route attaches here"
+  [[ "${ln}" == "${SECTION}" ]] && { found_section=1; sect_proto=${lproto}; }
+  if [[ "${lfrom}" == Same && "${GWNS}" != "${NS}" ]]; then bad "listener ${ln} only accepts routes from namespace ${GWNS}: the banner route in ${NS} would not be accepted"
+  elif [[ "${lfrom}" == Selector ]]; then note "listener ${ln} only accepts routes from namespaces matching a label selector: make sure namespace ${NS} matches it"; fi
+ done < <(jq -r '.spec.listeners[]? | "\(.name)|\(.protocol)|\(.port)|\(.allowedRoutes.namespaces.from // "Same")"' <<<"${gwjson}")
+ if [[ -n "${SECTION}" && ${found_section} -eq 0 ]]; then bad "the Gateway has no listener named '${SECTION}' (gateway.sectionName): the banner route would attach to nothing"; fi
+ # An HTTP->HTTPS redirect route is the one existing route the banner route could shadow: the banner rule is more specific
+ # (it has a header match), so on a listener that both routes attach to it would answer HTML page loads instead of redirecting.
+ redirects=$(kubectl get httproute -A -o json 2>/dev/null | jq -r --arg h "${HOST}" '.items[] | select(any(.spec.rules[]?.filters[]?; .type == "RequestRedirect")) | select((.spec.hostnames // []) | (length == 0 or index($h) != null)) | "\(.metadata.namespace)/\(.metadata.name)"' | paste -sd, -)
+ if [[ -n "${redirects}" ]]; then
+  if [[ -z "${SECTION}" ]]; then note "existing redirect route(s) for ${HOST}: ${redirects}. The banner route attaches to EVERY listener and is more specific, so on the plain-HTTP listener it could answer instead of redirecting: bind it to the HTTPS listener (gateway.sectionName)"
+  elif [[ "${sect_proto}" == HTTP ]]; then note "existing redirect route(s) for ${HOST}: ${redirects}, but the banner route is bound to the plain-HTTP listener '${SECTION}': it could answer instead of redirecting"
+  else ok "existing redirect route(s) for ${HOST} (${redirects}) keep handling plain HTTP: the banner route is bound to '${SECTION}' only"; fi
+ fi
+fi
+
+echo "Coder"
+kubectl -n "${NS}" get service "${SVC}" >/dev/null 2>&1 && ok "Service ${NS}/${SVC}" || bad "Service ${NS}/${SVC} not found (set CODER_NAMESPACE / CODER_SERVICE, and coder.service.name in the chart values)"
+avail=$(kubectl -n "${NS}" get deployment "${SVC}" -o jsonpath='{.status.availableReplicas}' 2>/dev/null)
+[[ "${avail:-0}" -ge 1 ]] && ok "Coder is running (${avail} replica(s))" || bad "Coder Deployment ${NS}/${SVC} has no available replicas"
+img=$(kubectl -n "${NS}" get deployment "${SVC}" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)
+ver="${img##*:}"
+if [[ "${ver}" == "${TESTED_CODER}" ]]; then ok "Coder version ${ver} (the one the menu rewrite was tested against)"
+else note "Coder is ${ver:-unknown}, the menu rewrite was tested on ${TESTED_CODER}: after installing run ./verify-menu (if it does not match, Coder just keeps its stock menu)"; fi
+routes=$(kubectl -n "${NS}" get httproute -o json 2>/dev/null | jq -r --arg h "${HOST}" '[.items[] | select(.spec.hostnames // [] | index($h)) | .metadata.name] | join(",")')
+[[ -n "${routes}" ]] && ok "HTTPRoute(s) for ${HOST}: ${routes}" || bad "no HTTPRoute serves ${HOST} in ${NS} (set CODER_HOST, and coder.host in the chart values)"
+[[ "${routes}" == *coder-banner* ]] && note "an HTTPRoute named coder-banner already exists (a previous install?)"
+
+echo "Existing objects (the install must not overwrite anything that is not the banner's)"
+chart=""; [[ -f ./chart-path.sh ]] && chart=$( . ./chart-path.sh >/dev/null 2>&1 && echo "${CHART}" )
+if [[ -z "${chart}" ]] || ! rendered=$(helm template coder-banner "${chart}" -n "${NS}" 2>/dev/null); then
+ note "could not render the chart here, so name collisions were not checked"
+else
+ total=0; mine_n=0; clash=0
+ while read -r kind name; do
+  [[ -n "${kind}" ]] || continue
+  total=$((total+1))
+  case "${kind}" in HTTPRoute) type=httproute.gateway.networking.k8s.io ;; Middleware) type=middlewares.traefik.io ;; *) type=$(tr 'A-Z' 'a-z' <<<"${kind}") ;; esac
+  obj=$(kubectl -n "${NS}" get "${type}" "${name}" -o json 2>/dev/null) || continue      # not there yet: exactly what we want
+  if [[ "$(jq -r '((.metadata.annotations["meta.helm.sh/release-name"] // "") == "coder-banner") or ((.metadata.labels["app.kubernetes.io/name"] // "") == "coder-banner")' <<<"${obj}")" == true ]]; then mine_n=$((mine_n+1))
+  else clash=$((clash+1)); bad "${kind} ${NS}/${name} already exists and does NOT belong to the banner: installing would fail or overwrite it"; fi
+ done < <(awk '/^---/ { kind = ""; inmeta = 0; next } /^kind:/ { kind = $2 } /^metadata:/ { inmeta = 1; next } /^[^ #]/ { inmeta = 0 } inmeta && /^  name:/ && kind { print kind, $2; kind = "" }' <<<"${rendered}")
+ if (( clash == 0 )); then
+  if (( mine_n > 0 )); then ok "${mine_n} of the ${total} objects the banner manages already belong to it (an upgrade); the other $((total-mine_n)) are new, nothing foreign is touched"
+  else ok "none of the ${total} objects the banner creates exists yet: nothing can be overwritten"; fi
+ fi
+fi
+
+echo "Traefik plugin"
+args=$(kubectl -n "${TNS}" get deployment "${TDEP}" -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null)
+tchart=$(kubectl -n "${TNS}" get deployment "${TDEP}" -o jsonpath='{.metadata.labels.helm\.sh/chart}' 2>/dev/null)
+echo "  --    Traefik Helm chart: ${tchart:-not labelled as Helm-installed} (the plugin step patches the running Deployment: it adapts to any version and needs no chart)"
+grep -qiE -- '--configfile' <<<"${args}" && bad "Traefik is started with --configFile: it then ignores command-line arguments, so the plugin has to be added to that file instead"
+tmanaged=$(kubectl -n "${TNS}" get deployment "${TDEP}" -o jsonpath='{.metadata.labels.argocd\.argoproj\.io/instance}{"|"}{.metadata.annotations.argocd\.argoproj\.io/tracking-id}{"|"}{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/name}{"|"}{.metadata.labels.helm\.toolkit\.fluxcd\.io/name}' 2>/dev/null)
+[[ -n "${tmanaged//|/}" ]] && note "Traefik's Deployment is managed by a GitOps controller (${tmanaged//|/ }): a change made directly to it would be reverted. Give its owners traefik-plugin/rewrite-body-plugin-airgap.yaml and enable the plugin there"
+pstate=none
+if grep -q 'experimental.localPlugins.rewrite-body' <<<"${args}"; then
+ if grep -q 'experimental.plugins.rewrite-body' <<<"${args}"; then
+  pstate=conflict; bad "rewrite-body is defined TWICE (download AND local): Traefik refuses a plugin name used twice and switches ALL plugins off. Fix: ./traefik-plugin/enable-plugin --airgap (it removes the duplicate)"
+ else pstate=local; ok "rewrite-body plugin enabled from LOCAL source (air-gap ready)"; fi
+elif grep -q 'experimental.plugins.rewrite-body' <<<"${args}"; then pstate=download; note "rewrite-body plugin enabled, but Traefik DOWNLOADS it from GitHub at start-up: in an air-gapped cluster use ./traefik-plugin/enable-plugin --airgap"
+else note "the rewrite-body plugin is not enabled yet: ./install-banner-chart (or ./traefik-plugin/enable-plugin [--airgap]) will do it"; fi
+# Configured is not the same as working: Traefik stays Ready after it has switched its plugins off.
+if [[ "${pstate}" != none && -f ./traefik-plugin/plugin-health.sh ]]; then
+ . ./traefik-plugin/plugin-health.sh
+ hout=$(plugin_health "${TNS}" "${TDEP}")
+ case "${hout%%$'\n'*}" in
+  loaded) ok "Traefik reports that its plugins are loaded" ;;
+  disabled) [[ "${pstate}" == conflict ]] || bad "Traefik has switched its plugins OFF: $(sed -n 2p <<<"${hout}")" ;;
+  *) note "could not confirm from Traefik's log that the plugin loaded (check: kubectl -n ${TNS} logs deploy/${TDEP} | grep -i plugin)" ;;
+ esac
+fi
+ready=$(kubectl -n "${TNS}" get deployment "${TDEP}" -o jsonpath='{.status.availableReplicas}' 2>/dev/null)
+[[ "${ready:-0}" -ge 1 ]] && ok "Traefik is running" || bad "Traefik has no available replicas"
+ver=$(kubectl -n "${TNS}" get deployment "${TDEP}" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null); echo "  --    Traefik image: ${ver} (tested with v3.7.12)"
+
+echo "Image"
+# Runtimes name Docker Hub images differently (docker: python:3.13-alpine, containerd: docker.io/library/python:...),
+# so compare with the docker.io/ and library/ prefixes stripped from both sides.
+norm() { sed -E 's#^docker\.io/##; s#^library/##' <<<"$1"; }
+want=$(norm "${IMAGE}")
+# (no `grep -q` at the end of a pipeline: under pipefail its early exit makes the pipeline report failure)
+have=$(kubectl get nodes -o json | jq -r '.items[].status.images[].names[]?' | while read -r n; do norm "${n}"; done)
+if grep -qxF "${want}" <<<"${have}"; then
+ ok "${IMAGE} is already on a node"
+else
+ note "${IMAGE} is not on any node yet: it must be pullable from your registry (air-gap: load and push it, see BANNER-AIRGAP.md; set image.registry)"
+fi
+
+echo
+echo "Result: ${fail} failure(s), ${warn} warning(s)."
+exit $((fail>0))

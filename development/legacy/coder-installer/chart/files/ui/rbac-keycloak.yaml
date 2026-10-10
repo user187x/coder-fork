@@ -1,0 +1,31 @@
+# Keycloak's namespace: its address (the Keycloak resource) and the operator's admin credentials, used by the
+# service to read and repair Coder's OIDC client through Keycloak's admin API. Never sent to browsers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coder-ui-updates
+  namespace: @@KEYCLOAK_NAMESPACE@@
+  labels: @@LABELS@@
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [@@KEYCLOAK_ADMIN_SECRET@@]
+    verbs: [get]
+  - apiGroups: [k8s.keycloak.org]
+    resources: [keycloaks]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coder-ui-updates
+  namespace: @@KEYCLOAK_NAMESPACE@@
+  labels: @@LABELS@@
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coder-ui-updates
+subjects:
+  - kind: ServiceAccount
+    name: coder-ui-updates
+    namespace: @@NAMESPACE@@

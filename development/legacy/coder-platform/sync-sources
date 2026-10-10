@@ -1,0 +1,64 @@
+#!/bin/bash
+# Copies the parts of this repository the coder-platform chart is built from into the chart, so the chart (and the
+# air-gap bundle) is self-contained. One source of truth for each part:
+#   ../coder-ui-updates/resources/     -> chart/coder-platform/files/ui/          (dashboard add-ons, service, rewrites)
+#   ../banner-update/banner-chart/     -> chart/coder-platform/charts/coder-banner-<version>.tgz
+#   ../coder-ui-updates/resources/workspace-certificates.tf -> files/workspace/certificates.tf
+# The workspace template itself (files/workspace/main.tf) lives in the chart: it is the chart's own source.
+#
+#   ./sync-sources           copy
+#   ./sync-sources --check   exit 1 (and list the files) if the chart is out of step; changes nothing
+set -euo pipefail
+cd "$(dirname "$0")"
+CHART=chart/coder-platform
+UI_SRC=../coder-ui-updates/resources
+BANNER_SRC=../banner-update/banner-chart
+check=0; [[ "${1:-}" == "--check" ]] && check=1
+
+# Files the chart uses from coder-ui-updates (the script-only helpers there are not needed).
+UI_FILES=(ui-service.py pgwire.py certinfo.py middlewares.yaml httproute.yaml httproute-native.yaml ui-service.yaml logs-db.yaml rbac.yaml rbac-workspaces.yaml rbac-cluster.yaml rbac-keycloak.yaml
+ dashboard.js dashboard.css classification.js ack.js banner-enhance.js banner-dock.js views.js admin-embed.js announcement-embed.css
+ view.css classification.html classification.css classification-view.js keycloak.html keycloak.css keycloak-view.js
+ logo.html logo.css logo-view.js monitoring.html monitoring.css monitoring-view.js
+ workspace-health.js workspace-health.html workspace-health.css workspace-health-view.js
+ pkcs12.js certificates.html certificates.css certificates-view.js network.html network.css network-view.js theme-toggle.js avatar.js avatar.css
+ agent-terminal.js agent-terminal.css chat.js chat.css users-row.js html2canvas.min.js
+ cluster-gauge.js account-avatar.js workspaces-icon.png)
+
+stale=()
+sync_file() {   # sync_file <src> <dst>
+ if ! cmp -s "$1" "$2"; then
+  stale+=("$2")
+  [[ ${check} -eq 1 ]] || { mkdir -p "$(dirname "$2")"; cp "$1" "$2"; }
+ fi
+}
+for f in "${UI_FILES[@]}"; do sync_file "${UI_SRC}/${f}" "${CHART}/files/ui/${f}"; done
+# ui-service.py and friends are read by .Files.Get; anything else in files/ui/ is a leftover.
+for f in "${CHART}"/files/ui/*; do
+ name=${f##*/}
+ printf '%s\n' "${UI_FILES[@]}" | grep -qxF "${name}" || { stale+=("${f} (not a source file)"); [[ ${check} -eq 1 ]] || rm -f "${f}"; }
+done
+sync_file "${UI_SRC}/workspace-certificates.tf" "${CHART}/files/workspace/certificates.tf"
+
+# The banner chart: packaged into charts/ (Helm's own dependency format), compared by its files' checksums.
+banner_version=$(sed -n 's/^version: *//p' "${BANNER_SRC}/Chart.yaml")
+want=$(cd "${BANNER_SRC}" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
+have=$(cat "${CHART}/charts/.coder-banner.sum" 2>/dev/null || true)
+if [[ "${want}" != "${have}" || ! -f "${CHART}/charts/coder-banner-${banner_version}.tgz" ]]; then
+ stale+=("${CHART}/charts/coder-banner-${banner_version}.tgz")
+ if [[ ${check} -eq 0 ]]; then
+  rm -f "${CHART}"/charts/coder-banner-*.tgz
+  helm package "${BANNER_SRC}" -d "${CHART}/charts" >/dev/null
+  echo "${want}" > "${CHART}/charts/.coder-banner.sum"
+ fi
+fi
+grep -q "name: coder-banner" "${CHART}/Chart.yaml" && ! grep -A2 "name: coder-banner" "${CHART}/Chart.yaml" | grep -q "version: ${banner_version}$" \
+ && { echo "error: ${CHART}/Chart.yaml pins a different coder-banner version than ${BANNER_SRC} (${banner_version})" >&2; exit 1; }
+
+if [[ ${#stale[@]} -eq 0 ]]; then echo "chart sources are up to date"; exit 0; fi
+if [[ ${check} -eq 1 ]]; then
+ echo "the chart is out of step with its sources (run ./sync-sources):" >&2
+ printf '  %s\n' "${stale[@]}" >&2
+ exit 1
+fi
+printf 'updated %s\n' "${stale[@]}"

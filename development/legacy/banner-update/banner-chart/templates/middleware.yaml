@@ -1,0 +1,113 @@
+# 1. Coder serves its HTML zstd/gzip-compressed and rewrite-body cannot rewrite compressed bodies,
+#    so ask the backend for identity encoding. Only applied to HTML page loads (see httproute.yaml),
+#    so assets and API calls keep their compression. Conditional headers are dropped so a stale
+#    un-injected copy can never be revalidated into a 304.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-banner-identity-encoding
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+spec:
+  headers:
+    customRequestHeaders:
+      Accept-Encoding: ""
+      If-None-Match: ""
+      If-Modified-Since: ""
+---
+# 2. Add the loader script just before </head>. It is a same-origin <script src> (Coder's CSP is
+#    script-src 'self', so an inline script would be blocked). rewrite-body has no content-type filter:
+#    it rewrites whatever body reaches it, so what it touches is decided only by the HTTPRoute rules.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-banner-inject
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+spec:
+  plugin:
+    {{ .Values.plugin.name }}:
+      rewrites:
+        - regex: "</head>"
+          replacement: '<script src="/__banner/banner.js" defer></script></head>'
+---
+# 3. Ordered chain referenced by the HTTPRoute.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-banner
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+spec:
+  chain:
+    middlewares:
+      - name: coder-banner-identity-encoding
+      - name: coder-banner-inject
+{{- if .Values.menu.enabled }}
+{{- if not (regexMatch "^[A-Za-z0-9 _-]{1,30}$" .Values.menu.label) }}
+{{- fail "menu.label may only contain letters, digits, spaces, '_' and '-' (max 30 characters)" }}
+{{- end }}
+---
+# 4. Compress the (rewritten) JavaScript again. rewrite-body needs an uncompressed body, so the
+#    identity-encoding middleware strips Accept-Encoding for the backend; this sits outermost, sees the
+#    browser's original Accept-Encoding, and compresses the result so users still get a small download.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-banner-compress
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+spec:
+  compress: {}
+---
+# 5. Second response-body writer: replace the "Codernauts" user-menu item with a "Banner" link to the
+#    admin page (see _menu.tpl for how and why it is written this way).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-banner-menu-rewrite
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+spec:
+  plugin:
+    {{ .Values.plugin.name }}:
+      rewrites:
+        {{- if .Values.menu.adminOnly }}
+        - regex: {{ include "coder-banner.menu.adminRegex" . | toJson }}
+          replacement: {{ include "coder-banner.menu.adminReplacement" . | toJson }}
+        {{- end }}
+        - regex: {{ include "coder-banner.menu.itemRegex" . | toJson }}
+          replacement: {{ include "coder-banner.menu.itemReplacement" . | toJson }}
+---
+# 6. Ordered chain referenced by the HTTPRoute.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-banner-menu
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+spec:
+  chain:
+    middlewares:
+      - name: coder-banner-compress
+      - name: coder-banner-identity-encoding
+      - name: coder-banner-menu-rewrite
+{{- end }}

@@ -1,0 +1,141 @@
+#!/bin/bash
+# End-to-end test of the air-gap bundle on a throwaway kind cluster that has NO internet access while it installs:
+#
+#   ./test/e2e-kind up        kind cluster + the production prerequisites: Traefik v3 (Gateway API, Gateway with a
+#                             wildcard certificate from a test CA), Keycloak (realm "cp"), a private registry, and DNS
+#                             inside the cluster for *.cp.test (CoreDNS rewrite to Traefik)
+#   ./test/e2e-kind airgap    cut the node (and its pods) off from everything but private addresses
+#   ./test/e2e-kind install   unpack dist/coder-platform-airgap-*.tar.gz and run its ./install all, as an operator would
+#   ./test/e2e-kind env       print the settings the browser test needs
+#   ./test/e2e-kind down      delete the cluster and the registry
+#
+# ARGOCD=1 (up and install): also install Argo CD (v3.5.2, a prerequisite like Traefik) and deploy with DEPLOY=argocd.
+#
+# Browsers reach https://*.cp.test at 127.0.0.2:443 (kind port mapping), e.g. chromium
+#   --host-resolver-rules="MAP *.cp.test 127.0.0.2" --ignore-certificate-errors-spki-list=... (or trust test/.state/ca.crt)
+set -euo pipefail
+cd "$(dirname "$0")"
+TEST=$(pwd); ROOT=$(cd .. && pwd)
+STATE="${STATE:-${TEST}/.state}"
+CLUSTER=cp-e2e; REG=cp-e2e-registry; DOMAIN=cp.test; ADDR=127.0.0.2
+mkdir -p "${STATE}"
+# Its own kubeconfig: never touches ~/.kube/config or the current context of the machine's real cluster.
+export KUBECONFIG="${STATE}/kubeconfig"
+ctx() { kubectl "$@"; }
+node() { docker exec -i "${CLUSTER}-control-plane" "$@"; }
+
+up() {
+ cat > "${STATE}/kind.yaml" <<EOF
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - {containerPort: 30443, hostPort: 443, listenAddress: "${ADDR}"}
+EOF
+ kind get clusters 2>/dev/null | grep -qx "${CLUSTER}" || kind create cluster --name "${CLUSTER}" --kubeconfig "${KUBECONFIG}" --config "${STATE}/kind.yaml" --wait 120s
+ # private registry on the kind network (plain HTTP), reachable from this host and from the node by IP
+ docker inspect "${REG}" >/dev/null 2>&1 || docker run -d --name "${REG}" --network kind --restart unless-stopped registry:2 >/dev/null
+ local ip; ip=$(docker inspect -f '{{(index .NetworkSettings.Networks "kind").IPAddress}}' "${REG}")
+ echo "${ip}:5000" > "${STATE}/registry"
+ node mkdir -p "/etc/containerd/certs.d/${ip}:5000"
+ printf 'server = "http://%s:5000"\n[host."http://%s:5000"]\n  capabilities = ["pull", "resolve"]\n' "${ip}" "${ip}" | node tee "/etc/containerd/certs.d/${ip}:5000/hosts.toml" >/dev/null
+
+ # test CA + wildcard certificate for *.cp.test
+ if [[ ! -f "${STATE}/ca.crt" ]]; then
+  openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=cp-e2e test CA" -keyout "${STATE}/ca.key" -out "${STATE}/ca.crt" \
+   -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+  openssl req -newkey rsa:2048 -nodes -subj "/CN=*.${DOMAIN}" -keyout "${STATE}/tls.key" -out "${STATE}/tls.csr" 2>/dev/null
+  openssl x509 -req -in "${STATE}/tls.csr" -CA "${STATE}/ca.crt" -CAkey "${STATE}/ca.key" -CAcreateserial -days 30 \
+   -extfile <(printf 'subjectAltName=DNS:*.%s,DNS:%s\nextendedKeyUsage=serverAuth\n' "${DOMAIN}" "${DOMAIN}") -out "${STATE}/tls.crt" 2>/dev/null
+ fi
+
+ # Gateway API CRDs (standard channel, same version as the dev cluster) and Traefik: prerequisites, installed while
+ # the cluster is still online
+ ctx apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml >/dev/null
+ ctx create namespace traefik --dry-run=client -o yaml | ctx apply -f - >/dev/null
+ ctx -n traefik create secret tls wildcard-tls --cert "${STATE}/tls.crt" --key "${STATE}/tls.key" --dry-run=client -o yaml | ctx apply -f - >/dev/null
+ helm upgrade --install traefik traefik --repo https://traefik.github.io/charts --version 41.4.0 \
+  -n traefik -f "${TEST}/traefik-values.yaml" --wait --timeout 5m >/dev/null
+ # *.cp.test inside the cluster -> Traefik (what production DNS does)
+ if ! ctx -n kube-system get cm coredns -o jsonpath='{.data.Corefile}' | grep -q 'cp\\.test'; then
+  ctx -n kube-system get cm coredns -o jsonpath='{.data.Corefile}' \
+   | sed 's#^\(\s*\)kubernetes cluster.local#\1rewrite name regex ^(.*)\\.cp\\.test\\.?$ traefik.traefik.svc.cluster.local answer auto\n\1kubernetes cluster.local#' > "${STATE}/Corefile"
+  ctx -n kube-system create cm coredns --from-file=Corefile="${STATE}/Corefile" --dry-run=client -o yaml | ctx apply -f - >/dev/null
+  ctx -n kube-system rollout restart deploy/coredns >/dev/null; ctx -n kube-system rollout status deploy/coredns --timeout=120s >/dev/null
+ fi
+ # Keycloak (prerequisite)
+ ctx apply -f "${TEST}/keycloak.yaml" >/dev/null
+ ctx -n keycloak rollout status deploy/keycloak --timeout=300s >/dev/null
+ local i
+ for i in $(seq 1 30); do   # Traefik programs a new route within seconds
+  curl -fsS --cacert "${STATE}/ca.crt" --resolve "keycloak.${DOMAIN}:443:${ADDR}" "https://keycloak.${DOMAIN}/realms/cp/.well-known/openid-configuration" >/dev/null 2>&1 && break
+  [[ ${i} -lt 30 ]] || { echo "Keycloak isn't reachable through Traefik" >&2; exit 1; }
+  sleep 2
+ done
+ if [[ "${ARGOCD:-0}" == 1 ]]; then
+  ctx create namespace argocd --dry-run=client -o yaml | ctx apply -f - >/dev/null
+  ctx -n argocd apply --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.2/manifests/install.yaml >/dev/null
+  ctx -n argocd rollout status deploy/argocd-repo-server --timeout=300s >/dev/null
+  ctx -n argocd rollout status statefulset/argocd-application-controller --timeout=300s >/dev/null
+  echo "up: Argo CD v3.5.2"
+ fi
+ echo "up: Traefik, Keycloak (https://keycloak.${DOMAIN}/realms/cp), registry $(cat "${STATE}/registry")"
+}
+
+airgap() {
+ # Everything but loopback and private ranges is dropped, for the node itself (image pulls) and for pods.
+ local chain
+ for chain in OUTPUT FORWARD; do
+  node iptables -C "${chain}" -j E2E-AIRGAP 2>/dev/null && continue
+  node iptables -N E2E-AIRGAP 2>/dev/null || true
+  node iptables -F E2E-AIRGAP
+  for net in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7; do
+   [[ "${net}" == *:* ]] && continue
+   node iptables -A E2E-AIRGAP -d "${net}" -j RETURN
+  done
+  node iptables -A E2E-AIRGAP -j REJECT
+  node iptables -I "${chain}" 1 -j E2E-AIRGAP
+ done
+ # IPv6: same idea (loopback, link-local and unique-local stay open: the API server talks to itself over [::1])
+ for chain in OUTPUT FORWARD; do
+  node ip6tables -C "${chain}" -j E2E-AIRGAP 2>/dev/null && continue
+  node ip6tables -N E2E-AIRGAP 2>/dev/null || true
+  node ip6tables -F E2E-AIRGAP
+  for net in ::1/128 fe80::/10 fc00::/7; do node ip6tables -A E2E-AIRGAP -d "${net}" -j RETURN; done
+  node ip6tables -A E2E-AIRGAP -j REJECT
+  node ip6tables -I "${chain}" 1 -j E2E-AIRGAP
+ done
+ if node curl -sS -m 5 -o /dev/null https://ghcr.io 2>/dev/null; then echo "airgap: the node still reaches ghcr.io" >&2; exit 1; fi
+ echo "airgap: the node and its pods can no longer reach the internet"
+}
+
+install_bundle() {
+ local tgz; tgz=$(ls -t "${ROOT}"/dist/coder-platform-airgap-*.tar.gz | head -n1)
+ rm -rf "${STATE}/bundle"; mkdir -p "${STATE}/bundle"
+ tar -xzf "${tgz}" -C "${STATE}/bundle"
+ local dir; dir=$(ls -d "${STATE}"/bundle/coder-platform-airgap-*)
+ (cd "${dir}" && sha256sum -c --quiet SHA256SUMS) || { echo "bundle checksums don't match" >&2; exit 1; }
+ cp "${STATE}/ca.crt" "${dir}/ca.crt"
+ cat > "${dir}/install.conf" <<EOF
+DOMAIN=${DOMAIN}
+REGISTRY=$(cat "${STATE}/registry")/coder-platform
+REGISTRY_INSECURE=true
+OIDC_ISSUER_URL=https://keycloak.${DOMAIN}/realms/cp
+ADMINS="jdoe:jdoe@${DOMAIN}"
+CA_FILE=./ca.crt
+CODER_ADDRESS=${ADDR}
+DEPLOY=$([[ "${ARGOCD:-0}" == 1 ]] && echo argocd || echo helm)
+EOF
+ echo "installing from ${tgz##*/} (${dir})"
+ (cd "${dir}" && OIDC_CLIENT_SECRET=e2e-client-secret ./install all --yes)
+}
+
+case "${1:-}" in
+ up) up ;;
+ airgap) airgap ;;
+ install) install_bundle ;;
+ env) echo "KUBECONFIG=${STATE}/kubeconfig CA=${STATE}/ca.crt ADDR=${ADDR} REGISTRY=$(cat "${STATE}/registry" 2>/dev/null)" ;;
+ down) kind delete cluster --name "${CLUSTER}" --kubeconfig "${KUBECONFIG}"; docker rm -f "${REG}" >/dev/null 2>&1 || true; rm -rf "${STATE}" ;;
+ *) sed -n '2,15p' "$0"; exit 2 ;;
+esac

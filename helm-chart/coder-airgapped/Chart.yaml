@@ -1,0 +1,37 @@
+apiVersion: v2
+name: coder-airgapped
+description: >-
+  The forked Coder platform exactly as it runs on the reference cluster (minikube, namespace coder, captured
+  2026-10-09): Coder 2.37.3 chart with the ghcr.io/user187x/coder-platform image, its CloudNativePG database,
+  the coder-banner announcement service, the coder-ui-updates platform service (+ its log buffer database),
+  the ubuntu-vnc-desktop workspace template and its icon server. Every dependency is vendored in charts/,
+  so the chart installs with no network access.
+type: application
+version: 1.2.0
+appVersion: "2.0.0-platform.4"
+kubeVersion: ">=1.27.0-0"
+keywords:
+  - coder
+  - airgap
+  - eks
+sources:
+  - https://github.com/user187x/coder
+dependencies:
+  # Upstream Coder chart 2.37.3 (https://helm.coder.com/v2) + the platform patch (templated values, coder.extraEnv,
+  # global.imagePullSecrets): development/tools/apply-platform-patch.py. Values under `coder:`.
+  - name: coder
+    version: 2.37.3-platform.1
+    repository: file://charts/coder
+    condition: coder.enabled
+  # Announcement banner 0.4.1 (oci://harbor.grey-marshall.com/library/coder-banner) + the platform patch.
+  # Values under `coder-banner:`.
+  - name: coder-banner
+    version: 0.4.1-platform.1
+    repository: file://charts/coder-banner
+    condition: coder-banner.enabled
+  # Workspace template + icon server (charts/coder-workspace, source: devbox workspaces/workspace-chart).
+  # The subcharts are vendored as directories: do not run `helm dependency update/build` (nothing to fetch).
+  - name: coder-workspace
+    version: 0.1.1-platform.1
+    repository: file://charts/coder-workspace
+    condition: coder-workspace.enabled

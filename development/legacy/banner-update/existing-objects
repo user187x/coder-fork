@@ -1,0 +1,84 @@
+#!/bin/bash
+# Proves that an install did not disturb what was already on the cluster.
+#
+#   ./existing-objects save    FILE     record the state (read-only)
+#   ./existing-objects compare FILE     compare the cluster with that record; exit 0 = nothing that existed was changed
+#   ./existing-objects compare FILE OTHER   compare two saved records instead (no cluster needed)
+#
+# It records, from every namespace:
+#   * every CustomResourceDefinition of the Gateway API and of Traefik (name, generation, a hash of the whole spec),
+#   * every resource of those API groups (Gateway, GatewayClass, HTTPRoute, Middleware, IngressRoute, TLSOption, ...):
+#     name, generation and a hash of its spec (the status is left out: controllers rewrite it all the time),
+#   * Traefik's image and arguments.
+# The comparison expects exactly two kinds of difference and reports everything else as UNEXPECTED:
+#   * objects named coder-banner* in the banner's namespace (the banner's own HTTPRoute and Middlewares),
+#   * Traefik's rewrite-body plugin arguments (switching the plugin on or off).
+#
+# Environment: CODER_NAMESPACE [coder]   TRAEFIK_NAMESPACE [traefik]   TRAEFIK_DEPLOYMENT [traefik]
+# Needs kubectl, jq, sha256sum.
+set -uo pipefail
+
+CNS="${CODER_NAMESPACE:-coder}"; TNS="${TRAEFIK_NAMESPACE:-traefik}"; TDEP="${TRAEFIK_DEPLOYMENT:-${TRAEFIK_RELEASE:-traefik}}"
+GROUPS_RE='^(gateway\.networking\.(x-)?k8s\.io|(hub\.)?traefik\.io|traefik\.containo\.us)$'
+KUBE=(kubectl --request-timeout=60s)
+
+usage() { echo "usage: $0 save FILE | compare FILE [OTHER_FILE]" >&2; exit 2; }
+[[ ( $# -eq 2 && ( "$1" == save || "$1" == compare ) ) || ( $# -eq 3 && "$1" == compare ) ]] || usage
+for t in kubectl jq sha256sum; do command -v "$t" >/dev/null 2>&1 || { echo "$t is needed" >&2; exit 2; }; done
+
+# One line per object: KIND <tab> NAMESPACE <tab> NAME <tab> GENERATION <tab> HASH-OF-SPEC
+hash_rows() { # reads "kind ns name gen spec-json" TSV on stdin
+ local kind ns name gen spec
+ while IFS=$'\t' read -r kind ns name gen spec; do
+  printf '%s\t%s\t%s\t%s\t%s\n' "${kind}" "${ns}" "${name}" "${gen}" "$(printf '%s' "${spec}" | sha256sum | cut -c1-16)"
+ done
+}
+
+snapshot() {
+ local crds groups g res
+ crds=$("${KUBE[@]}" get crd -o json 2>/dev/null) || { echo "cannot list CustomResourceDefinitions (is kubectl logged in?)" >&2; return 1; }
+ jq -r --arg re "${GROUPS_RE}" '.items[] | select(.spec.group | test($re)) | ["CRD","-",.metadata.name,(.metadata.generation // 0 | tostring),(.spec | tojson)] | @tsv' <<<"${crds}" | hash_rows
+ groups=$(jq -r --arg re "${GROUPS_RE}" '[.items[] | select(.spec.group | test($re)) | .spec.group] | unique[]' <<<"${crds}")
+ for g in ${groups}; do
+  for res in $("${KUBE[@]}" api-resources --api-group="${g}" --verbs=list -o name 2>/dev/null); do
+   "${KUBE[@]}" get "${res}" -A -o json 2>/dev/null | jq -r '.items[]? | [.kind,(.metadata.namespace // "-"),.metadata.name,(.metadata.generation // 0 | tostring),((.spec // .data // {}) | tojson)] | @tsv' | hash_rows
+  done
+ done
+ # Traefik's image and arguments (the raw text is kept: what changed matters here, not just that something did)
+ "${KUBE[@]}" -n "${TNS}" get deployment "${TDEP}" -o json 2>/dev/null | jq -r '.spec.template.spec.containers[] | .name as $c | (["IMAGE","-",$c,"0",.image] | @tsv), ((.args // [])[] | ["ARG","-",($c + "|" + .),"0","-"] | @tsv)'
+}
+
+if [[ "$1" == save ]]; then
+ tmp=$(mktemp); snapshot | sort > "${tmp}" || { rm -f "${tmp}"; exit 1; }
+ mv "${tmp}" "$2"
+ echo "recorded $(grep -c . "$2") item(s) in $2: $(cut -f1 "$2" | sort | uniq -c | awk '{printf "%s %s, ", $1, $2}' | sed 's/, $//')"
+ exit 0
+fi
+
+# ---- compare
+[[ -s "$2" ]] || { echo "no record at $2 (run: $0 save $2 BEFORE changing anything)" >&2; exit 2; }
+now=$(mktemp)
+if [[ -n "${3:-}" ]]; then sort "$3" > "${now}" || exit 2; else snapshot | sort > "${now}" || { rm -f "${now}"; exit 1; }; fi
+result=$(awk -F'\t' -v cns="${CNS}" '
+ NR == FNR { old[$1 "\t" $2 "\t" $3] = $4 "\t" $5; next }
+ { new[$1 "\t" $2 "\t" $3] = $4 "\t" $5 }
+ function expected(k,   p) {                       # is a difference in this object one we expect?
+  split(k, p, "\t")
+  if (p[1] == "ARG") return (p[3] ~ /--experimental\.(localPlugins|plugins)\.rewrite-body\./)
+  return ((p[1] == "HTTPRoute" || p[1] == "Middleware") && p[2] == cns && p[3] ~ /^coder-banner/)
+ }
+ function show(k,   p) { split(k, p, "\t"); return p[1] " " (p[2] == "-" ? "" : p[2] "/") p[3] }
+ END {
+  for (k in old) { n++; if (!(k in new)) { if (expected(k)) e++; else print "UNEXPECTED removed: " show(k) } else if (old[k] != new[k]) { if (expected(k)) e++; else print "UNEXPECTED changed: " show(k) } }
+  for (k in new) if (!(k in old)) { if (expected(k)) e++; else print "UNEXPECTED added:   " show(k) }
+  print "CHECKED " n " existing item(s); " e+0 " expected difference(s) (banner objects / plugin argument)"
+ }' "$2" "${now}")
+rm -f "${now}"
+echo "${result}" | grep -v '^UNEXPECTED\|^CHECKED' || true
+if grep -q '^UNEXPECTED' <<<"${result}"; then
+ echo "${result}" | grep '^UNEXPECTED\|^CHECKED'
+ echo "Something that existed before this install has changed - see the lines above." >&2
+ exit 1
+fi
+echo "${result}" | grep '^CHECKED'
+echo "OK: no existing CRD, Gateway, GatewayClass, HTTPRoute or Middleware (or any other Gateway API / Traefik object) was changed."

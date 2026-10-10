@@ -1,0 +1,28 @@
+{{- include "ca.values" . -}}
+{{- if .Values.database.enabled }}
+{{- $db := .Values.database }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $db.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ca.labels" . | nindent 4 }}
+  {{- if $db.keep }}
+  annotations:
+    helm.sh/resource-policy: keep
+    # Argo CD ignores the Helm policy: never prune or delete the database with the Application.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+  {{- end }}
+spec:
+  instances: {{ $db.instances }}
+  {{- with $db.imageName }}
+  imageName: {{ . }}
+  {{- end }}
+  primaryUpdateStrategy: {{ $db.primaryUpdateStrategy }}
+  storage:
+    size: {{ $db.storage.size }}
+    {{- with $db.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+{{- end }}

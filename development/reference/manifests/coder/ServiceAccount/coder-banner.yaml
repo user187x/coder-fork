@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    argocd.argoproj.io/tracking-id: coder-banner:/ServiceAccount:coder/coder-banner
+  labels:
+    app.kubernetes.io/instance: coder-banner
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: coder-banner
+    app.kubernetes.io/part-of: coder
+  name: coder-banner
+  namespace: coder

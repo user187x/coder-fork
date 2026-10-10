@@ -1,0 +1,190 @@
+# The coder-ui-updates service on Coder's hostname (/__coder-ui/*): the dashboard add-ons (announcement.js, ack.js,
+# ...) and the announcement receipts (who saw / confirmed what). Standard-library Python, code and files mounted from
+# the ConfigMap coder-ui-updates (built by the script), receipts in SQLite on the PersistentVolumeClaim below.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: coder-ui-updates-data
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  accessModes: [ReadWriteOnce]
+@@STORAGE_CLASS@@
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coder-ui-updates
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # one writer on a ReadWriteOnce volume
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coder-ui-updates
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coder-ui-updates
+        app.kubernetes.io/part-of: coder
+      annotations:
+        checksum/files: "@@CHECKSUM@@"   # restarts the service when its code or a served file changes
+    spec:
+      serviceAccountName: coder-ui-updates   # rbac*.yaml: the Keycloak view, Monitoring and the log database password
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ui
+          image: @@IMAGE@@
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/app/ui-service.py"]
+          env:
+            - {name: PORT, value: "8080"}
+            - {name: STATIC_DIR, value: /app/static}
+            - {name: DB_PATH, value: /data/receipts.sqlite}
+            - {name: CODER_URL, value: "http://@@CODER_SERVICE@@.@@NAMESPACE@@.svc.cluster.local:@@CODER_PORT@@"}
+            - {name: BANNER_URL, value: "@@BANNER_URL@@"}
+            - {name: ADMIN_ROLES, value: "@@ADMIN_ROLES@@"}
+            - {name: CODER_ACCESS_URL, value: "@@CODER_URL@@"}
+            - {name: CODER_NAMESPACE, value: "@@NAMESPACE@@"}
+            - {name: CODER_DEPLOYMENT, value: "@@CODER_SERVICE@@"}
+            - {name: ATTACHED, value: "@@ATTACHED@@"}
+            - {name: KEYCLOAK_NAMESPACE, value: "@@KEYCLOAK_NAMESPACE@@"}
+            - {name: KEYCLOAK_ADMIN_SECRET, value: "@@KEYCLOAK_ADMIN_SECRET@@"}
+            - {name: ARGOCD_NAMESPACE, value: "@@ARGOCD_NAMESPACE@@"}
+            - {name: ARGOCD_APP, value: "@@ARGOCD_APP@@"}
+            - {name: CA_SOURCE_SECRET, value: "@@CA_SOURCE_SECRET@@"}
+            - {name: CA_FILE, value: /etc/coder-ui/ca/ca.crt}
+            - {name: WORKSPACE_NAMESPACE, value: "@@WORKSPACE_NAMESPACE@@"}
+            - {name: PG_IMAGE, value: "@@LOGS_DB_IMAGE@@"}   # what a Cluster created in General > Persistence runs
+            # Change Logo: Coder's own CloudNativePG database (the app user's connection URI), verified with its CA.
+            - name: CODER_DB_URI
+              valueFrom:
+                secretKeyRef: {name: "@@CODER_DB_SECRET@@", key: "@@CODER_DB_SECRET_KEY@@", optional: true}
+            - {name: CODER_DB_CA, value: /etc/coder-ui/db-ca/ca.crt}
+            # ... and where both come from, read through the API if this pod started before the database existed
+            - {name: CODER_DB_SECRET, value: "@@CODER_DB_SECRET@@"}
+            - {name: CODER_DB_SECRET_KEY, value: "@@CODER_DB_SECRET_KEY@@"}
+            - {name: CODER_DB_CA_SECRET, value: "@@CODER_DB_CA_SECRET@@"}
+            # Monitoring: the temporary log database (logs-db.yaml). {password} comes from Secret coder-ui-logs-db,
+            # which the service creates with a random password if it doesn't exist (the database pod waits for it).
+            - {name: LOGS_DB_SECRET, value: coder-ui-logs-db}
+            - {name: LOGS_DB_URL, value: "postgresql://logs:{password}@coder-ui-logs-db.@@NAMESPACE@@.svc.cluster.local:5432/logs?sslmode=disable"}
+            - {name: DEFAULTS_DIR, value: /app/defaults}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /__coder-ui/healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /__coder-ui/healthz
+              port: http
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 192Mi
+          volumeMounts:
+            - name: code
+              mountPath: /app/ui-service.py
+              subPath: ui-service.py
+            - name: code
+              mountPath: /app/pgwire.py
+              subPath: pgwire.py
+            - name: code
+              mountPath: /app/certinfo.py
+              subPath: certinfo.py
+            - name: static
+              mountPath: /app/static
+            - name: data
+              mountPath: /data
+            - name: ca
+              mountPath: /etc/coder-ui/ca
+              readOnly: true
+            - name: db-ca
+              mountPath: /etc/coder-ui/db-ca
+              readOnly: true
+            - name: default-logo
+              mountPath: /app/defaults/logo
+              readOnly: true
+            - name: default-avatar
+              mountPath: /app/defaults/avatar
+              readOnly: true
+      volumes:
+        # Two views of one ConfigMap, so the service's own code is never inside the served directory.
+        - name: code
+          configMap:
+            name: coder-ui-updates
+            items:
+              - {key: ui-service.py, path: ui-service.py}
+              - {key: pgwire.py, path: pgwire.py}
+              - {key: certinfo.py, path: certinfo.py}
+        - name: static
+          configMap:
+            name: coder-ui-updates
+            items:
+@@STATIC_ITEMS@@
+        - name: data
+          persistentVolumeClaim:
+            claimName: coder-ui-updates-data
+        # The CA that signed Keycloak's certificate (the cluster's local PKI); optional, public CAs work without it.
+        - name: ca
+          secret:
+            secretName: @@CA_SOURCE_SECRET@@
+            optional: true
+            items:
+              - {key: ca.crt, path: ca.crt}
+        # The CA of Coder's CloudNativePG cluster (its TLS certificate for the logo table).
+        - name: db-ca
+          secret:
+            secretName: "@@CODER_DB_CA_SECRET@@"
+            optional: true
+            items:
+              - {key: ca.crt, path: ca.crt}
+        # Default images (resources/defaults/): the logo a fresh installation starts with, the avatar of users without
+        # a picture. One ConfigMap each (up to 1 MB per image), made by the script or the installer only when there is
+        # one; not part of the chart, whose Helm release record could not hold an animated GIF.
+        - name: default-logo
+          configMap:
+            name: coder-ui-updates-default-logo
+            optional: true
+        - name: default-avatar
+          configMap:
+            name: coder-ui-updates-default-avatar
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coder-ui-updates
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  selector:
+    app.kubernetes.io/name: coder-ui-updates
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

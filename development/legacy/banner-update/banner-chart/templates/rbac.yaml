@@ -1,0 +1,37 @@
+# The banner service may read and write exactly one ConfigMap: the one that holds what an admin published.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coder-banner
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coder-banner-state
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["coder-banner-state"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coder-banner-state
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: coder-banner
+    namespace: {{ include "coder-banner.namespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coder-banner-state

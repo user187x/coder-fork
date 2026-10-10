@@ -1,0 +1,4 @@
+#!/bin/bash
+
+CODER_PASSWORD=$(kubectl get secret -n coder coder-init-auth -o jsonpath='{.data.password}' | base64 -d | tr -d '\n')
+echo "$CODER_PASSWORD"

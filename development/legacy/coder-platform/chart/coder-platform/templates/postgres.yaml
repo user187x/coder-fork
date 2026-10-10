@@ -1,0 +1,38 @@
+{{- $cnpg := index .Values "cloudnative-pg" }}
+{{- if and $cnpg.enabled $cnpg.createNamespace $cnpg.namespaceOverride (ne $cnpg.namespaceOverride .Release.Namespace) }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $cnpg.namespaceOverride }}
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    helm.sh/resource-policy: keep   # the operator's namespace outlives the release (other clusters may use CNPG)
+---
+{{- end }}
+{{- if and .Values.postgres.enabled (not .Values.attach.enabled) }}
+{{- $pg := .Values.postgres }}
+{{- $spec := dict "instances" $pg.instances "primaryUpdateStrategy" $pg.primaryUpdateStrategy "imageName" (include "cp.image" (list $ $pg.image)) }}
+{{- $storage := dict "size" $pg.storage.size }}
+{{- with ($pg.storage.storageClass | default .Values.global.storageClass) }}{{ $_ := set $storage "storageClass" . }}{{ end }}
+{{- $_ := set $spec "storage" $storage }}
+{{- with $pg.resources }}{{ $_ := set $spec "resources" . }}{{ end }}
+{{- with .Values.global.nodeSelector }}{{ $_ := set $spec "affinity" (dict "nodeSelector" .) }}{{ end }}
+{{- with .Values.global.imagePullSecrets }}{{ $_ := set $spec "imagePullSecrets" (list) }}{{ range . }}{{ $_ := set $spec "imagePullSecrets" (append $spec.imagePullSecrets (dict "name" .)) }}{{ end }}{{ end }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $pg.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+  annotations:
+    # After the operator (wave 0), before Coder (wave 2). The CRD may not exist yet when Argo CD dry-runs the first
+    # sync; it arrives in wave 0 of the same sync.
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    helm.sh/resource-policy: keep   # uninstalling the release never deletes Coder's data
+spec:
+  {{- mustMergeOverwrite $spec (deepCopy ($pg.extraSpec | default dict)) | toYaml | nindent 2 }}
+{{- end }}

@@ -1,0 +1,35 @@
+#!/bin/bash
+# Installs the Coder banner: (1) enables Traefik's rewrite-body plugin, (2) installs the chart.
+#
+#   ./install-banner-chart                       connected cluster
+#   ./install-banner-chart --airgap              air-gapped: vendored plugin source, nothing downloaded
+#   ./install-banner-chart --skip-traefik        Traefik's plugin is already enabled (or managed elsewhere)
+#
+# Any other arguments go to `helm upgrade`, e.g.
+#   ./install-banner-chart --airgap --set image.registry=registry.internal:5000 --set coder.host=coder.example.com
+# Environment: CODER_NAMESPACE (default coder), CHART (default: ./banner-chart or ./coder-banner-*.tgz).
+set -euo pipefail
+cd "$(dirname "$0")"
+. ./chart-path.sh
+
+CODER_NAMESPACE="${CODER_NAMESPACE:-coder}"
+airgap=(); skip_traefik=0; helm_args=()
+for arg in "$@"; do
+ case "${arg}" in
+  --airgap) airgap=(--airgap) ;;
+  --skip-traefik) skip_traefik=1 ;;
+  *) helm_args+=("${arg}") ;;
+ esac
+done
+
+# 1. Traefik plugins are static config, so they cannot ship inside a chart. This applies only the plugin
+#    change to the Traefik Deployment (see traefik-plugin/plugin-lib.sh for why not `helm upgrade`).
+if [[ ${skip_traefik} -eq 0 ]]; then
+ ./traefik-plugin/enable-plugin "${airgap[@]+"${airgap[@]}"}"
+fi
+
+# 2. The banner chart (Middleware chain, banner service, HTTPRoute) next to Coder.
+helm upgrade --install coder-banner "${CHART}" \
+ --namespace "${CODER_NAMESPACE}" \
+ --reset-then-reuse-values \
+ "${helm_args[@]+"${helm_args[@]}"}"

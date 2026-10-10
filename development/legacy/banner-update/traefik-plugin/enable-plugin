@@ -1,0 +1,46 @@
+#!/bin/bash
+# Enables Traefik's rewrite-body plugin (see plugin-lib.sh for how and why).
+#
+#   ./enable-plugin --airgap        vendored plugin source (plugin-src/): no internet needed. Patches the RUNNING Traefik
+#                                   Deployment additively (one arg, one mount, one volume + a ConfigMap): works with any
+#                                   Traefik / chart version, needs no chart, changes nothing else.
+#   ./enable-plugin                 download the plugin from GitHub at Traefik start-up (connected clusters only;
+#                                   re-renders the Traefik chart, so it needs the chart: TRAEFIK_CHART=...)
+#   add --diff-only to show exactly what would change and apply nothing
+set -euo pipefail
+cd "$(dirname "$0")"
+airgap=0; diff_only=0
+for arg in "$@"; do
+ case "${arg}" in
+  --airgap) airgap=1 ;;
+  --diff-only) diff_only=1 ;;
+  *) echo "usage: $0 [--airgap] [--diff-only]" >&2; exit 2 ;;
+ esac
+done
+
+if [[ ${airgap} -eq 1 ]]; then
+ . ./plugin-lib.sh
+ load_live || exit 1
+ guard_target || exit $?
+ plan_enable || exit $?
+ show_plugin_patch enable || exit 1
+ [[ ${diff_only} -eq 1 ]] && exit 0
+ apply_plugin_patch enable || { drop_new_cm; echo "The plugin was NOT enabled: Traefik is back on its previous configuration." >&2; exit 1; }
+ verify_plugins_loaded || { drop_new_cm; echo "The plugin was NOT enabled: Traefik is back on its previous configuration." >&2; exit 1; }
+ echo "Traefik is running with the rewrite-body plugin (local source, patched in place)."
+ exit 0
+fi
+
+# ---- download variant (connected clusters): a relative TRAEFIK_CHART is relative to where the caller is
+[[ -n "${TRAEFIK_CHART:-}" && -e "${TRAEFIK_CHART}" ]] && TRAEFIK_CHART=$(realpath "${TRAEFIK_CHART}")
+. ./plugin-lib.sh
+render "rewrite-body-plugin.yaml"
+show_changes
+[[ ${diff_only} -eq 1 ]] && exit 0
+apply_and_wait
+verify_plugins_loaded || { echo "The plugin was NOT enabled: Traefik is back on its previous configuration." >&2; exit 1; }
+# Switching from the air-gapped (local) plugin back to the downloaded one leaves its ConfigMap orphaned.
+for cm in $(kubectl -n "${NS}" get configmap -o name | grep -- '-local-plugin-' || true); do
+ kubectl -n "${NS}" delete "${cm}"
+done
+echo "Traefik is running with the rewrite-body plugin (rewrite-body-plugin.yaml)."

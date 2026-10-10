@@ -1,0 +1,716 @@
+#!/usr/bin/env bash
+# coder-platform upgrade for a cluster that ALREADY runs Coder (brownfield), e.g. a dedicated Coder cluster (spoke) with
+# its own CloudNativePG operator and Traefik Gateway, Keycloak on another cluster (hub), a shared CA bundle.
+#
+#   ./upgrade discover   read-only: how Coder, its database, Traefik, the Gateway, CNPG and Keycloak are set up here;
+#                        writes install.conf (or install.conf.discovered next to yours) and ca.crt from the cluster
+#   ./upgrade plan       read-only: every check (blocking or not) and exactly what the upgrade will do
+#   ./upgrade token      store an owner's Coder API token for the steps below (Secret coder-platform-automation)
+#   ./upgrade images     push the bundle's images to $REGISTRY (= ./install images) and test that the nodes can pull
+#   ./upgrade tfcheck    run `terraform init` for every existing template with the NEW Coder image (and the current one):
+#                        templates that would stop building after the upgrade are found before it
+#   ./upgrade backup     back up Coder's database (verified dump) and the Kubernetes objects it touches, to ./backups/
+#   ./upgrade coder      upgrade Coder itself to the bundle's version (its Helm release or its Argo CD Application)
+#   ./upgrade platform   add the platform to the upgraded Coder (secrets, Traefik plugin, chart in attach mode)
+#   ./upgrade verify     ./install verify + existing users, templates and workspaces still there, agents reconnected
+#   ./upgrade all        plan -> images -> tfcheck -> backup -> coder -> platform -> verify (stops at the first problem)
+#
+# Options: --config <file> (default ./install.conf), --yes (no questions; the token then comes from CODER_TOKEN).
+# Uses the current kube context for the Coder cluster; ARGOCD_CONTEXT (install.conf) is the hub's, if Argo CD runs there.
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+CONFIG="${HERE}/install.conf"; ASSUME_YES=0; ACTION=""
+while [[ $# -gt 0 ]]; do
+ case "$1" in
+  --config) CONFIG=$(realpath "$2"); shift 2 ;;
+  --yes|-y) ASSUME_YES=1; shift ;;
+  -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+  -*) echo "unknown option $1" >&2; exit 2 ;;
+  *) ACTION="$1"; shift ;;
+ esac
+done
+[[ -n "${ACTION}" ]] || { sed -n '2,21p' "$0"; exit 0; }
+
+if [[ -t 1 ]]; then B=$'\e[1m'; G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; C=$'\e[36m'; N=$'\e[0m'; else B=""; G=""; Y=""; R=""; C=""; N=""; fi
+step()  { echo; echo "${B}== $*${N}"; }
+ok()    { echo "  ${G}OK${N}     $*"; }
+info()  { echo "  ${C}INFO${N}   $*"; }
+warn()  { echo "  ${Y}WARN${N}   $*"; WARNINGS=$((WARNINGS + 1)); }
+block() { echo "  ${R}BLOCK${N}  $*"; BLOCKERS=$((BLOCKERS + 1)); }
+act()   { echo "  ${B}->${N}     $*"; }
+die()   { echo "${R}error:${N} $*" >&2; exit 1; }
+WARNINGS=0; BLOCKERS=0
+GEN="${HERE}/generated"; BACKUPS="${HERE}/backups"; mkdir -p "${GEN}"
+
+tool() { if type -P "$1" >/dev/null 2>&1; then type -P "$1"; elif [[ -x "${HERE}/tools/$1" ]]; then echo "${HERE}/tools/$1"; else die "$1 is required"; fi; }
+KUBECTL=$(tool kubectl); JQ=$(tool jq); HELM=""
+k() { "${KUBECTL}" "$@"; }
+jq() { "${JQ}" "$@"; }
+confirm() { [[ ${ASSUME_YES} -eq 1 ]] && return 0; local a; read -r -p "  $1 [y/N] " a </dev/tty || return 1; [[ "${a}" =~ ^[Yy] ]]; }
+
+# install.conf is optional for discover (it writes one); every later step needs it.
+if [[ -f "${CONFIG}" ]]; then set -a; . "${CONFIG}"; set +a; fi
+NAMESPACE="${NAMESPACE:-}"; REGISTRY="${REGISTRY:-}"; CA_FILE="${CA_FILE:-}"; ARGOCD_CONTEXT="${ARGOCD_CONTEXT:-}"
+ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"; RELEASE="${RELEASE:-coder-platform}"; TEMPLATE_NAME="${TEMPLATE_NAME:-ubuntu-vnc-desktop}"
+[[ -n "${CA_FILE}" && "${CA_FILE}" != /* ]] && CA_FILE="$(dirname "${CONFIG}")/${CA_FILE}"
+TARGET=$(sed -n 's/.*-coder\([0-9.]*\)$/\1/p' "${HERE}/VERSION" 2>/dev/null || true); TARGET="${TARGET:-2.37.3}"
+CODER_CHART=$(ls "${HERE}"/charts/coder_helm_*.tgz 2>/dev/null | head -n1 || true)
+NEW_IMAGE_PATH=$(awk '$2 ~ /^coder-platform\/coder:/ {print $2}' "${HERE}/images/images.txt" 2>/dev/null | head -n1)
+
+hubk() { if [[ -n "${ARGOCD_CONTEXT}" ]]; then k --context "${ARGOCD_CONTEXT}" "$@"; else k "$@"; fi; }
+ver_ge() { [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]; }   # ver_ge a b: a >= b
+minor() { echo "$1" | cut -d. -f2; }
+
+# ------------------------------------------------------------------------------------------------ discovery
+# Everything is read with kubectl; nothing is changed. Facts land in D_* variables and generated/discovery.txt.
+discover() {
+ step "cluster (kube context $(k config current-context 2>/dev/null || echo ?))"
+ k version --request-timeout=10s >/dev/null 2>&1 || die "kubectl can't reach the cluster"
+ D_SERVER=$(k config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+ D_K8S=$(k get --raw /version | jq -r .gitVersion)
+ D_ARCHS=$(k get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.architecture}{"\n"}{end}' | sort | uniq -c | awk '{printf "%s%s=%s", sep, $2, $1; sep=" "}')
+ D_EKS=$(k get nodes -o jsonpath='{.items[0].spec.providerID}' | grep -q '^aws://' && echo true || echo false)
+ ok "Kubernetes ${D_K8S} at ${D_SERVER}; nodes: ${D_ARCHS}$( [[ ${D_EKS} == true ]] && echo " (AWS EKS)")"
+
+ step "Coder"
+ # The Deployment running `coder server` (image .../coder:<v> or the coder-platform air-gap image).
+ local deps
+ # Coder's server: a container with Coder's server settings (workspace Deployments carry only CODER_AGENT_* ones).
+ deps=$(k get deploy -A -o json | jq -r '.items[] | select(any(.spec.template.spec.containers[];
+          ((.env // []) | any(.name == "CODER_ACCESS_URL" or .name == "CODER_PG_CONNECTION_URL"))
+          or ((.envFrom // []) | any(.configMapRef.name? == "coder-platform-config"))))
+        | "\(.metadata.namespace) \(.metadata.name)"')
+ [[ -n "${deps}" ]] || die "no Coder Deployment found in the cluster"
+ [[ $(printf '%s\n' "${deps}" | grep -c .) -eq 1 ]] || { [[ -n "${NAMESPACE}" ]] && deps=$(printf '%s\n' "${deps}" | awk -v n="${NAMESPACE}" '$1==n' | head -n1); }
+ read -r D_NS D_DEPLOY <<<"$(printf '%s\n' "${deps}" | head -n1)"
+ local dj; dj=$(k -n "${D_NS}" get deploy "${D_DEPLOY}" -o json)
+ printf '%s' "${dj}" > "${GEN}/coder-deployment.json"
+ D_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${dj}")
+ D_REPLICAS=$(jq -r '.spec.replicas' <<<"${dj}")
+ # The version Coder reports (its own API, through the pod: no DNS or TLS needed)
+ D_VERSION=$(k -n "${D_NS}" exec deploy/"${D_DEPLOY}" -- curl -fsS -m 10 http://127.0.0.1:8080/api/v2/buildinfo 2>/dev/null | jq -r '.version' | sed 's/^v//; s/[+-].*//' || true)
+ D_VERSION="${D_VERSION:-$(sed -n 's/.*:v\{0,1\}\([0-9][0-9.]*\).*/\1/p' <<<"${D_IMAGE}")}"
+ ok "Deployment ${D_NS}/${D_DEPLOY}: Coder ${D_VERSION:-?} (${D_IMAGE}), ${D_REPLICAS} replica(s)"
+ # Its environment: explicit env, plus ConfigMaps from envFrom (a coder-platform install keeps settings there)
+ D_ENV=$(jq -c '[.spec.template.spec.containers[0].env // [] | .[] | {(.name): (.value // (if .valueFrom.secretKeyRef then "secret:\(.valueFrom.secretKeyRef.name)/\(.valueFrom.secretKeyRef.key)" elif .valueFrom.configMapKeyRef then "configmap:\(.valueFrom.configMapKeyRef.name)/\(.valueFrom.configMapKeyRef.key)" else "from:\(.valueFrom|keys[0])" end))}] | add // {}' <<<"${dj}")
+ local cm
+ for cm in $(jq -r '.spec.template.spec.containers[0].envFrom // [] | .[].configMapRef.name // empty' <<<"${dj}"); do
+  D_ENV=$(jq -c --argjson add "$(k -n "${D_NS}" get cm "${cm}" -o json 2>/dev/null | jq -c '.data // {}')" '$add + .' <<<"${D_ENV}")
+ done
+ env_of() { jq -r --arg n "$1" '.[$n] // empty' <<<"${D_ENV}"; }
+ D_ARGS=$(jq -r '.spec.template.spec.containers[0].args // [] | join(" ")' <<<"${dj}")
+ D_ACCESS_URL=$(env_of CODER_ACCESS_URL); D_WILDCARD=$(env_of CODER_WILDCARD_ACCESS_URL)
+ D_HOST=${D_ACCESS_URL#*://}; D_HOST=${D_HOST%%/*}; D_DOMAIN=${D_HOST#*.}
+ [[ -n "${D_ACCESS_URL}" ]] && ok "access URL ${D_ACCESS_URL}${D_WILDCARD:+, wildcard ${D_WILDCARD}}" || warn "CODER_ACCESS_URL is not set on the Deployment"
+ # How it is managed
+ local ann; ann=$(jq -c '.metadata.annotations // {}' <<<"${dj}")
+ D_HELM_REL=$(jq -r '."meta.helm.sh/release-name" // empty' <<<"${ann}")
+ D_ARGO_APP=$(jq -r '."argocd.argoproj.io/tracking-id" // empty' <<<"${ann}"); D_ARGO_APP=${D_ARGO_APP%%:*}
+ [[ -z "${D_ARGO_APP}" ]] && D_ARGO_APP=$(jq -r '.metadata.labels."argocd.argoproj.io/instance" // empty' <<<"${dj}")
+ D_MANAGED=none; D_HELM_CHART=""
+ if [[ -n "${D_HELM_REL}" ]]; then
+  HELM=$(tool helm)
+  D_HELM_CHART=$("${HELM}" -n "${D_NS}" list -o json 2>/dev/null | jq -r --arg r "${D_HELM_REL}" '.[] | select(.name==$r) | .chart' || true)
+  D_MANAGED=helm
+ fi
+ if [[ -n "${D_ARGO_APP}" ]]; then
+  if hubk -n "${ARGOCD_NAMESPACE}" get application "${D_ARGO_APP}" -o json > "${GEN}/coder-argocd-application.json" 2>/dev/null; then
+   D_MANAGED=argocd
+   D_ARGO_SRC=$(jq -r '(.spec.source // .spec.sources[0]) | "\(.repoURL) \(.chart // .path) \(.targetRevision)"' "${GEN}/coder-argocd-application.json")
+   ok "managed by Argo CD Application ${ARGOCD_NAMESPACE}/${D_ARGO_APP}$( [[ -n "${ARGOCD_CONTEXT}" ]] && echo " on ${ARGOCD_CONTEXT}"): ${D_ARGO_SRC}"
+  else
+   D_MANAGED=argocd-unreachable
+   warn "managed by Argo CD Application '${D_ARGO_APP}', but it isn't in ${ARGOCD_NAMESPACE} on $( [[ -n "${ARGOCD_CONTEXT}" ]] && echo "${ARGOCD_CONTEXT}" || echo "this cluster"): set ARGOCD_CONTEXT to the hub's kube context"
+  fi
+ elif [[ ${D_MANAGED} == helm ]]; then ok "managed by Helm release ${D_NS}/${D_HELM_REL} (${D_HELM_CHART})"
+ else warn "not managed by Helm or Argo CD (plain manifests): the upgrade sets the image on the Deployment directly"; fi
+ # Database
+ local pg; pg=$(env_of CODER_PG_CONNECTION_URL)
+ D_DB_SECRET=""; D_DB_KEY=""; D_CNPG=""
+ if [[ "${pg}" == secret:* ]]; then
+  D_DB_SECRET=${pg#secret:}; D_DB_KEY=${D_DB_SECRET#*/}; D_DB_SECRET=${D_DB_SECRET%/*}
+  local c=${D_DB_SECRET%-app}
+  if [[ "${c}" != "${D_DB_SECRET}" ]] && k -n "${D_NS}" get cluster.postgresql.cnpg.io "${c}" >/dev/null 2>&1; then
+   D_CNPG=${c}
+   D_CNPG_PRIMARY=$(k -n "${D_NS}" get cluster.postgresql.cnpg.io "${c}" -o jsonpath='{.status.currentPrimary}')
+   D_CNPG_PHASE=$(k -n "${D_NS}" get cluster.postgresql.cnpg.io "${c}" -o jsonpath='{.status.phase}')
+   D_CNPG_IMAGE=$(k -n "${D_NS}" get cluster.postgresql.cnpg.io "${c}" -o jsonpath='{.status.image}')
+   D_CNPG_DB=$(k -n "${D_NS}" get secret "${D_DB_SECRET}" -o jsonpath='{.data.dbname}' 2>/dev/null | base64 -d 2>/dev/null || echo app)
+   ok "database: CloudNativePG cluster ${D_NS}/${c} (${D_CNPG_PHASE}; primary ${D_CNPG_PRIMARY}; ${D_CNPG_IMAGE##*/})"
+  else ok "database: from Secret ${D_DB_SECRET} (key ${D_DB_KEY}); not a CloudNativePG cluster in ${D_NS}"; fi
+ elif [[ -n "${pg}" ]]; then warn "CODER_PG_CONNECTION_URL is set inline (not from a Secret)"
+ else warn "Coder uses its built-in database (no CODER_PG_CONNECTION_URL): not supported for production upgrades"; fi
+ # OIDC / Keycloak
+ D_ISSUER=$(env_of CODER_OIDC_ISSUER_URL); D_CLIENT=$(env_of CODER_OIDC_CLIENT_ID); D_OIDC_SECRET=$(env_of CODER_OIDC_CLIENT_SECRET)
+ D_PWD_OFF=$(env_of CODER_DISABLE_PASSWORD_AUTH)
+ [[ -n "${D_ISSUER}" ]] && ok "sign-in: OIDC ${D_ISSUER} (client ${D_CLIENT:-?}, secret ${D_OIDC_SECRET:-?}); password sign-in off: ${D_PWD_OFF:-false}" || info "no OIDC configured"
+ # group-based settings (allowed groups, group / role mapping): kept as they are, but worth knowing about
+ D_GROUPS=$(jq -r '[to_entries[] | select(.key|test("^CODER_OIDC_(GROUP_FIELD|ALLOWED_GROUPS|GROUP_MAPPING|GROUP_REGEX_FILTER|GROUP_AUTO_CREATE|USER_ROLE_FIELD|USER_ROLE_MAPPING|USER_ROLE_DEFAULT)$")) | "\(.key|sub("CODER_OIDC_";""))=\(.value)"] | join("; ")' <<<"${D_ENV}")
+ D_GROUP_NAMES=$( { jq -r '.CODER_OIDC_ALLOWED_GROUPS // empty' <<<"${D_ENV}" | tr ',' '\n'
+                    for m in CODER_OIDC_GROUP_MAPPING CODER_OIDC_USER_ROLE_MAPPING; do jq -r --arg m "${m}" '.[$m] // empty | fromjson? | keys[]' <<<"${D_ENV}"; done; } | sed 's/^ *//; s/ *$//' | grep . | sort -u | tr '\n' ' ')
+ [[ -n "${D_GROUPS}" ]] && ok "group-based sign-in: ${D_GROUPS}"
+ # CA trust: Secrets/ConfigMaps mounted into the Coder pod under an SSL directory
+ D_CA_SOURCES=$(jq -r '.spec.template.spec as $s | [$s.containers[0].volumeMounts // [] | .[] | select(.mountPath|test("ssl|cert|ca"; "i")) | .name] as $m | $s.volumes // [] | .[] | select(.name as $n | $m|index($n)) | if .secret then "secret/\(.secret.secretName)" elif .configMap then "configmap/\(.configMap.name)" else empty end' <<<"${dj}" | sort -u | tr '\n' ' ')
+ [[ -n "${D_CA_SOURCES}" ]] && ok "CA trust mounted into Coder: ${D_CA_SOURCES}" || info "no CA bundle mounted into Coder (public CA?)"
+ D_TF_OVERRIDE=$(env_of TF_CLI_CONFIG_FILE)
+ # Service and routes
+ D_SVC=$(k -n "${D_NS}" get svc -o json | jq -r --argjson sel "$(jq -c '.spec.selector.matchLabels' <<<"${dj}")" '.items[] | select(.spec.selector as $s | $s != null and ($s|to_entries|all(.value == $sel[.key]))) | .metadata.name' | head -n1)
+ D_ROUTES=$(k get httproute -A -o json 2>/dev/null | jq -r --arg ns "${D_NS}" --arg svc "${D_SVC}" '.items[] | select(any(.spec.rules[]?.backendRefs[]?; .name==$svc) and (.metadata.namespace==$ns)) | "\(.metadata.namespace)/\(.metadata.name) hosts=\(.spec.hostnames|join(",")) gateway=\(.spec.parentRefs[0].namespace // $ns)/\(.spec.parentRefs[0].name) section=\(.spec.parentRefs[0].sectionName // "")"')
+ [[ -n "${D_ROUTES}" ]] && ok "Service ${D_SVC}; HTTPRoute(s): $(echo ${D_ROUTES})" || warn "no HTTPRoute sends traffic to Service ${D_SVC:-?} (Ingress?): the add-ons need Coder on a Gateway API route"
+ D_GW_NAME=$(sed -n 's/.* gateway=[^/]*\/\([^ ]*\) .*/\1/p' <<<"${D_ROUTES}" | head -n1); D_GW_NS=$(sed -n 's/.* gateway=\([^/]*\)\/.*/\1/p' <<<"${D_ROUTES}" | head -n1)
+ D_GW_SECTION=$(sed -n 's/.* section=\(.*\)$/\1/p' <<<"${D_ROUTES}" | head -n1)
+ # Workspaces
+ D_WS_NS=$(k get pods -A -l com.coder.workspace.id -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' | sort | uniq -c | sort -rn | awk '{print $2}' | tr '\n' ' ')
+ D_WS_PODS=$(k get pods -A -l com.coder.workspace.id --no-headers 2>/dev/null | grep -c . || true)
+ ok "workspace pods: ${D_WS_PODS} in namespace(s): ${D_WS_NS:-none running}"
+
+ step "CloudNativePG, Traefik, Gateway API"
+ D_CNPG_OP=$(k get deploy -A -l app.kubernetes.io/name=cloudnative-pg -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {.spec.template.spec.containers[0].image}{"\n"}{end}' | head -n1)
+ [[ -n "${D_CNPG_OP}" ]] && ok "CloudNativePG operator ${D_CNPG_OP}" || info "no CloudNativePG operator"
+ D_GWAPI=$(k get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version} {.metadata.annotations.gateway\.networking\.k8s\.io/channel}' 2>/dev/null || true)
+ [[ -n "${D_GWAPI}" ]] && ok "Gateway API CRDs ${D_GWAPI}" || block "Gateway API CRDs are not installed"
+ D_TRAEFIK=$(k get deploy -A -o json | jq -r '.items[] | select(any(.spec.template.spec.containers[]; .image|test("traefik"))) | "\(.metadata.namespace) \(.metadata.name) \(.spec.template.spec.containers[0].image)"' | head -n1)
+ if [[ -n "${D_TRAEFIK}" ]]; then
+  read -r D_TRAEFIK_NS D_TRAEFIK_DEPLOY D_TRAEFIK_IMAGE <<<"${D_TRAEFIK}"
+  local targs; targs=$(k -n "${D_TRAEFIK_NS}" get deploy "${D_TRAEFIK_DEPLOY}" -o jsonpath='{.spec.template.spec.containers[0].args}')
+  D_TRAEFIK_GW=$(grep -q 'providers.kubernetesgateway' <<<"${targs}" && echo true || echo false)
+  D_PLUGIN=$(grep -oE 'experimental\.(local)?[pP]lugins\.[A-Za-z0-9_-]+\.moduleName=github\.com/traefik/plugin-rewritebody' <<<"${targs}" | head -n1 | sed -E 's/experimental\.(local)?[pP]lugins\.([A-Za-z0-9_-]+)\..*/\2/' || true)
+  D_TRAEFIK_MGR=$(k -n "${D_TRAEFIK_NS}" get deploy "${D_TRAEFIK_DEPLOY}" -o jsonpath='{.metadata.annotations.argocd\.argoproj\.io/tracking-id}{.metadata.labels.argocd\.argoproj\.io/instance}' | cut -d: -f1)
+  ok "Traefik ${D_TRAEFIK_NS}/${D_TRAEFIK_DEPLOY} (${D_TRAEFIK_IMAGE##*:}); Gateway provider: ${D_TRAEFIK_GW}; rewrite-body plugin: ${D_PLUGIN:-not loaded}$( [[ -n "${D_TRAEFIK_MGR}" ]] && echo "; managed by Argo CD app ${D_TRAEFIK_MGR}")"
+ else block "no Traefik Deployment found"; fi
+ if [[ -n "${D_GW_NAME}" ]]; then
+  local lj; lj=$(k -n "${D_GW_NS}" get gateway "${D_GW_NAME}" -o json 2>/dev/null || echo '{}')
+  ok "Gateway ${D_GW_NS}/${D_GW_NAME}: listeners $(jq -r '[.spec.listeners[]? | "\(.name)(\(.protocol) \(.hostname // "*"))"] | join(" ")' <<<"${lj}")"
+  [[ -n "${D_GW_SECTION}" ]] || D_GW_SECTION=$(jq -r '[.spec.listeners[]? | select(.protocol=="HTTPS") | .name] | if length==1 then .[0] else "" end' <<<"${lj}")
+ fi
+
+ step "already installed platform parts"
+ D_OLD_UI=$(k -n "${D_NS}" get deploy coder-ui-updates -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)
+ D_OLD_BANNER=$(k -n "${D_NS}" get deploy coder-banner -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}{" "}{.metadata.annotations.argocd\.argoproj\.io/tracking-id}' 2>/dev/null || true)
+ D_OLD_PLATFORM=$(k -n "${D_NS}" get deploy coder-ui-updates -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
+ [[ -n "${D_OLD_UI}${D_OLD_BANNER// /}" ]] && info "found: coder-ui-updates (${D_OLD_UI:-none}${D_OLD_PLATFORM:+, release ${D_OLD_PLATFORM}}), coder-banner (${D_OLD_BANNER:-none})" || ok "none (fresh add-on install)"
+
+ write_discovered
+}
+
+# install.conf from what was found (only the registry, and the CA if it wasn't in the cluster, must be filled in).
+write_discovered() {
+ local out="${HERE}/install.conf"; [[ -f "${out}" ]] && out="${HERE}/install.conf.discovered"
+ local admins="" ca_line="CA_FILE=" ca_src="" s
+ # The shared CA bundle: taken from what Coder already trusts, so the add-ons and workspaces trust the same CAs.
+ for s in ${D_CA_SOURCES}; do
+  local kind=${s%%/*} name=${s#*/} pem
+  pem=$(k -n "${D_NS}" get "${kind}" "${name}" -o json | jq -r '.data // {} | to_entries[] | .value' 2>/dev/null | while read -r v; do
+         if [[ "${kind}" == secret ]]; then printf '%s' "${v}" | base64 -d 2>/dev/null; else printf '%s' "${v}"; fi; echo; done | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/' || true)
+  if [[ -n "${pem}" ]]; then printf '%s\n' "${pem}" > "${HERE}/ca.crt.discovered"; ca_src="${s}"; break; fi
+ done
+ if [[ -n "${ca_src}" ]]; then
+  [[ -f "${HERE}/ca.crt" ]] || cp "${HERE}/ca.crt.discovered" "${HERE}/ca.crt"
+  ca_line="CA_FILE=./ca.crt"
+  ok "CA bundle taken from ${D_NS}/${ca_src} -> ca.crt ($(grep -c 'BEGIN CERTIFICATE' "${HERE}/ca.crt.discovered") certificate(s))"
+ fi
+ cat > "${out}" <<EOF
+# Written by ./upgrade discover from the running cluster ($(date -u +%Y-%m-%dT%H:%M:%SZ)). Check REGISTRY (and anything
+# marked CHECK), then run ./upgrade plan.
+ATTACH=true
+DOMAIN=${D_DOMAIN}
+NAMESPACE=${D_NS}
+CODER_SERVICE=${D_SVC:-coder}
+CODER_DEPLOYMENT=${D_DEPLOY}
+REGISTRY=${REGISTRY:-CHECK.registry.example.com/coder-platform}
+OIDC_ENABLED=$([[ -n "${D_ISSUER}" ]] && echo true || echo false)
+OIDC_ISSUER_URL=${D_ISSUER}
+OIDC_CLIENT_ID=${D_CLIENT:-coder}
+ADMINS=""
+${ca_line}
+TRAEFIK_NAMESPACE=${D_TRAEFIK_NS:-traefik}
+GATEWAY_NAME=${D_GW_NAME:-traefik-gateway}
+GATEWAY_NAMESPACE=${D_GW_NS:-traefik}
+GATEWAY_SECTION=${D_GW_SECTION}
+CNPG=existing
+POSTGRES_NAME=${D_CNPG:-coder-db}
+CODER_DB_SECRET=${D_DB_SECRET}
+CODER_DB_SECRET_KEY=${D_DB_KEY:-uri}
+OIDC_SECRET_NAME=$(sed -n 's#^secret:\([^/]*\)/.*#\1#p' <<<"${D_OIDC_SECRET}")
+CODER_DB_CA_SECRET=$( [[ -n "${D_CNPG}" ]] && echo "${D_CNPG}-ca")
+WORKSPACE_NAMESPACE=$(awk '{print $1}' <<<"${D_WS_NS:-${D_NS}}")
+TEMPLATE_NAME=${TEMPLATE_NAME}
+TEMPLATE_ENABLED=true
+DEPLOY=$([[ ${D_MANAGED} == argocd ]] && echo argocd || echo helm)
+ARGOCD_NAMESPACE=${ARGOCD_NAMESPACE}
+ARGOCD_CONTEXT=${ARGOCD_CONTEXT}
+RELEASE=${RELEASE}
+EOF
+ step "configuration"
+ if [[ "${out}" == *.discovered ]]; then
+  ok "wrote install.conf.discovered (your install.conf is kept). Differences:"
+  diff <(grep -E '^[A-Z_]+=' "${HERE}/install.conf" | sort) <(grep -E '^[A-Z_]+=' "${out}" | sort) | sed -n 's/^[<>]/    &/p' || true
+ else ok "wrote install.conf: check REGISTRY, then run ./upgrade plan"; fi
+}
+
+# ------------------------------------------------------------------------------------------------ Coder API (port-forward)
+PF_PID=""
+api_up() {   # a port-forward to Coder's Service; sets API. Re-made when it died (it follows one pod, which a
+ # Coder restart replaces).
+ if [[ -n "${PF_PID}" ]]; then
+  curl -fsS -m 3 -o /dev/null "${API}/healthz" 2>/dev/null && return 0
+  kill "${PF_PID}" 2>/dev/null || true; PF_PID=""
+ fi
+ local port=$(( 20000 + RANDOM % 20000 ))
+ k -n "${D_NS}" port-forward "svc/${D_SVC}" "${port}:80" >"${GEN}/port-forward.log" 2>&1 & PF_PID=$!
+ trap 'kill ${PF_PID} 2>/dev/null || true' EXIT
+ API="http://127.0.0.1:${port}"
+ local i; for i in $(seq 1 30); do curl -fsS -m 2 -o /dev/null "${API}/healthz" 2>/dev/null && return 0; sleep 1; done
+ die "couldn't reach Coder through a port-forward to ${D_NS}/svc/${D_SVC} (${GEN}/port-forward.log)"
+}
+TOKEN=""
+load_token() {   # the owner token: CODER_TOKEN, else Secret coder-platform-automation
+ TOKEN="${CODER_TOKEN:-}"
+ [[ -n "${TOKEN}" ]] || TOKEN=$(k -n "${D_NS}" get secret coder-platform-automation -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true)
+ [[ -n "${TOKEN}" ]] || return 1
+ api_up
+ [[ "$(capi -o /dev/null -w '%{http_code}' /api/v2/users/me)" == 200 ]] || { TOKEN=""; return 1; }
+}
+capi() { local path=${!#}; curl -sS -m 60 -H "Coder-Session-Token: ${TOKEN}" "${@:1:$#-1}" "${API}${path}"; }
+
+app_facts() {   # users, templates, workspaces (needs the token)
+ step "inside Coder (API, as $(capi /api/v2/users/me | jq -r .username))"
+ D_USERS=$(capi '/api/v2/users?limit=0' | jq -c '.users // []')
+ ok "users: $(jq length <<<"${D_USERS}") ($(jq -r '[.[] | select(any(.roles[]?; .name=="owner")) | .username] | join(", ")' <<<"${D_USERS}") owner(s)); login types: $(jq -r '[.[].login_type] | group_by(.) | map("\(.[0])=\(length)") | join(" ")' <<<"${D_USERS}")"
+ D_TEMPLATES=$(capi /api/v2/templates | jq -c '[.[] | {id, name, active_version_id, created_by_name}]')
+ ok "templates: $(jq -r '[.[].name] | join(", ")' <<<"${D_TEMPLATES}")"
+ D_WS=$(capi '/api/v2/workspaces?limit=0' | jq -c '[.workspaces[] | {id, name, owner: .owner_name, template: .template_name, status: .latest_build.status}]')
+ ok "workspaces: $(jq length <<<"${D_WS}") ($(jq -r '[.[] | select(.status=="running")] | length' <<<"${D_WS}") running)"
+ printf '{"users":%s,"templates":%s,"workspaces":%s}\n' "${D_USERS}" "${D_TEMPLATES}" "${D_WS}" > "${GEN}/before.json"
+}
+
+# ------------------------------------------------------------------------------------------------ plan
+plan() {
+ discover
+ [[ -f "${CONFIG}" ]] || die "no install.conf yet: ./upgrade discover wrote one; check REGISTRY in it, then run ./upgrade plan again"
+ step "checks"
+ # version
+ if [[ -z "${D_VERSION}" ]]; then warn "couldn't read Coder's version"
+ elif [[ "${D_VERSION}" == "${TARGET}" ]]; then ok "Coder is already ${TARGET}: only the image changes (air-gap image) if needed"
+ elif ver_ge "${D_VERSION}" "${TARGET}"; then block "Coder ${D_VERSION} is newer than this bundle (${TARGET}): downgrades are impossible (one-way database migrations)"
+ else ok "Coder ${D_VERSION} -> ${TARGET} (database migrations run once at start; they can't be undone: ./upgrade backup first)"
+  local from; from=$(minor "${D_VERSION}")
+  [[ $(( $(minor "${TARGET}") - from )) -gt 6 ]] && warn "a jump of $(( $(minor "${TARGET}") - from )) minor versions: read docs/coder-breaking-changes.md for v2.$((from + 1)) to v${TARGET%.*}"
+  info "breaking changes since ${D_VERSION}: $(awk -v f="${from}" '/^## v2\./ {split($2,a,"."); on=(a[2]>f)} on && /^- /' "${HERE}/docs/coder-breaking-changes.md" 2>/dev/null | grep -c . || echo ?) entries (docs/coder-breaking-changes.md)"
+ fi
+ # settings the new version refuses
+ if jq -e 'has("CODER_HIDE_AI_TASKS")' <<<"${D_ENV}" >/dev/null || grep -q -- '--hide-ai-tasks' <<<"${D_ARGS}"; then
+  block "CODER_HIDE_AI_TASKS / --hide-ai-tasks is set: Coder ${TARGET} refuses to start with it. Remove it from Coder's configuration first"
+ fi
+ local ea; ea=$(jq -r 'keys[] | select(test("^CODER_EXTERNAL_AUTH_[0-9]+_ID$"))' <<<"${D_ENV}" | grep -c . || true)
+ [[ ${ea} -gt 1 ]] && warn "${ea} external-auth providers: from 2.37 a workspace resolves them from its template's coder_external_auth, not config order (check overlapping REGEX settings)"
+ jq -e 'keys[] | select(test("^CODER_EXTERNAL_AUTH_[A-Z]"))' <<<"${D_ENV}" >/dev/null 2>&1 && block "a CODER_EXTERNAL_AUTH_<name> variable that isn't numbered: Coder ${TARGET} refuses to start (e.g. CODER_EXTERNAL_AUTH_GITHUB_DEFAULT_PROVIDER_ENABLE must be a flag)"
+ # how Coder can be upgraded
+ case "${D_MANAGED}" in
+  helm) [[ "${D_HELM_CHART}" == coder-* ]] && ok "upgrade path: helm upgrade ${D_HELM_REL} with the bundled coder chart, keeping its values (--reuse-values)" \
+          || block "Coder's Helm release ${D_HELM_REL} is chart '${D_HELM_CHART}', not the upstream coder chart: upgrade it through that chart (set its Coder image to <REGISTRY>/${NEW_IMAGE_PATH})" ;;
+  argocd) if jq -e '(.spec.source // .spec.sources[0]) | .chart == "coder"' "${GEN}/coder-argocd-application.json" >/dev/null; then
+           ok "upgrade path: Argo CD Application ${D_ARGO_APP} -> chart coder ${TARGET} from oci://${REGISTRY}/charts, image <REGISTRY>/${NEW_IMAGE_PATH}"
+          else block "Coder's Argo CD Application ${D_ARGO_APP} deploys from $(jq -r '(.spec.source // .spec.sources[0]) | .path // .repoURL' "${GEN}/coder-argocd-application.json"): change the Coder image there to <REGISTRY>/${NEW_IMAGE_PATH} yourself, then run ./upgrade platform"; fi ;;
+  argocd-unreachable) block "Coder is managed by an Argo CD this machine can't read: set ARGOCD_CONTEXT (hub kube context) in install.conf" ;;
+  none) warn "upgrade path: the Deployment's image is set directly (kubectl set image); whatever created it may undo that later" ;;
+ esac
+ # nodes
+ [[ "${D_ARCHS}" == *amd64* ]] || block "no amd64 nodes: the bundle's images are linux/amd64 only"
+ [[ "${D_ARCHS}" == *arm64* ]] && warn "the cluster also has arm64 nodes: every pod of the bundle is pinned to amd64 (nodeSelector); the upgraded Coder too"
+ # Traefik / Gateway
+ [[ "${D_TRAEFIK_IMAGE:-}" =~ :v?3\. ]] && ok "Traefik v3" || block "Traefik ${D_TRAEFIK_IMAGE##*:} isn't v3"
+ [[ "${D_TRAEFIK_GW:-false}" == true ]] || block "Traefik's Gateway API provider is off"
+ if [[ -z "${D_PLUGIN:-}" ]]; then
+  if [[ -n "${D_TRAEFIK_MGR:-}" ]]; then warn "rewrite-body plugin not loaded and Traefik is managed by Argo CD app ${D_TRAEFIK_MGR}: ./upgrade platform prints the Helm values to add to it (then sync)"
+  else ok "rewrite-body plugin: ./upgrade platform adds the bundled copy to the running Traefik"; fi
+ fi
+ [[ -n "${D_GW_NAME:-}" ]] && ok "the add-ons attach to Gateway ${D_GW_NS}/${D_GW_NAME}${D_GW_SECTION:+ listener ${D_GW_SECTION}} (same as Coder's route)" || block "Coder isn't on a Gateway API route: the add-ons can't attach"
+ # Keycloak on the hub, as Coder sees it (from inside Coder's pod, with Coder's own CA trust)
+ if [[ -n "${D_ISSUER}" ]]; then
+  # With the trust Coder (Go) has: the system bundle plus every file in the SSL_CERT_DIR directories. curl alone
+  # would ignore un-hashed CA files there, so the bundle is assembled first.
+  local kc_err
+  if kc_err=$(k -n "${D_NS}" exec deploy/"${D_DEPLOY}" -- sh -c 'b=$(mktemp); cat /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/*.crt /etc/ssl/certs/*.pem > "$b" 2>/dev/null
+       for d in $(echo "${SSL_CERT_DIR:-}" | tr ":" " "); do for f in "$d"/*; do [ -f "$f" ] && cat "$f" >> "$b"; done; done
+       curl -fsS -m 10 --cacert "$b" -o /dev/null "$1/.well-known/openid-configuration"' _ "${D_ISSUER%/}" 2>&1); then
+   ok "Keycloak (${D_ISSUER}) reachable and trusted from inside Coder's pod"
+  else block "Coder's pod can't fetch ${D_ISSUER}/.well-known/openid-configuration (${kc_err:0:160}): Coder would not start after the restart (DNS, network to the hub, or CA)"; fi
+ fi
+ # Keycloak groups named in Coder's settings (e.g. after KeycloakAdminGroup became /KeycloakGroup/Admin)
+ if [[ -n "${D_GROUPS}" ]]; then
+  info "group settings are kept exactly as they are; groups they name: ${D_GROUP_NAMES:-none}"
+  local g flat=""
+  for g in ${D_GROUP_NAMES}; do [[ "${g}" == */* ]] || flat+=" ${g}"; done
+  [[ -n "${flat}" ]] && warn "group name(s) without a path:${flat}. They match only with Keycloak's 'Full group path' OFF, and then ANY group of that name matches (every child group called Admin). With nested groups prefer full paths, e.g. /KeycloakGroup/Admin"
+  info "after the upgrade, General > Keycloak (Connect once) checks that each named group exists in the realm and reaches Coder in that form"
+ fi
+ # database
+ [[ -n "${D_CNPG}" && "${D_CNPG_PHASE}" != "Cluster in healthy state" ]] && block "database ${D_CNPG}: ${D_CNPG_PHASE}"
+ [[ -n "${D_DB_SECRET}" ]] || block "Coder's database connection isn't in a Secret: backup and Change Logo need it there"
+ # registry
+ [[ "${REGISTRY}" == CHECK* || -z "${REGISTRY}" ]] && block "REGISTRY isn't set in install.conf"
+ [[ "${REGISTRY%%/*}" =~ \.dkr\.ecr\. ]] && info "Amazon ECR: ./upgrade images logs in with the AWS CLI and creates missing repositories; EKS nodes pull with their IAM role"
+ # the add-ons: conflicts with what exists
+ if [[ -n "${D_OLD_UI}" && "${D_OLD_UI}" == coder-ui-updates ]]; then act "the script-installed dashboard add-ons (coder-ui-updates) are taken over by the chart (their receipts volume is kept)"; fi
+ if [[ "${D_OLD_BANNER}" == *:* ]]; then block "coder-banner is managed by Argo CD ($(cut -d' ' -f2 <<<"${D_OLD_BANNER}" | cut -d: -f1)): delete that Application WITHOUT cascading (keep its resources), then run ./upgrade plan again"
+ elif [[ -n "${D_OLD_BANNER// /}" && "${D_OLD_BANNER%% *}" != "${RELEASE}" ]]; then act "the coder-banner Helm release '${D_OLD_BANNER%% *}' is taken over by the chart (the published banner is kept)"; fi
+ # things only the API can tell
+ if load_token; then
+  app_facts
+  if jq -e 'has("CODER_OIDC_GROUP_MAPPING") or has("CODER_OIDC_USER_ROLE_FIELD")' <<<"${D_ENV}" >/dev/null \
+     && [[ "$(capi /api/v2/entitlements | jq -r '.has_license')" != true ]]; then
+   warn "OIDC group / role mapping is set but Coder has no Premium license: Coder ignores those (owners come from Coder's own roles, e.g. ADMINS)"
+  fi
+  if jq -e --arg t "${TEMPLATE_NAME}" 'any(.[]; .name==$t)' <<<"${D_TEMPLATES}" >/dev/null; then
+   local msg; msg=$(capi "/api/v2/templateversions/$(jq -r --arg t "${TEMPLATE_NAME}" '.[] | select(.name==$t) | .active_version_id' <<<"${D_TEMPLATES}")" | jq -r .message)
+   [[ "${msg}" == coder-platform* ]] && ok "template ${TEMPLATE_NAME} was pushed by coder-platform: updated in place" \
+    || block "a template named ${TEMPLATE_NAME} already exists and isn't coder-platform's: set TEMPLATE_NAME=<another name> (or TEMPLATE_ENABLED=false) in install.conf"
+  else ok "template ${TEMPLATE_NAME}: new"; fi
+  step "existing templates vs the new image's Terraform providers"
+  [[ "$(download_templates)" -gt 0 ]] && provider_check
+  [[ -f "${GEN}/tfcheck.txt" ]] && { grep -q '^REGRESSION' "${GEN}/tfcheck.txt" && block "templates that would stop building (./upgrade tfcheck): $(grep '^REGRESSION' "${GEN}/tfcheck.txt" | cut -d' ' -f2 | tr '\n' ' ')" || ok "every template still initializes with the new image (./upgrade tfcheck)"; } \
+   || info "not yet checked whether the existing templates build with the new image: ./upgrade tfcheck (after ./upgrade images)"
+ else
+  warn "no owner token yet (./upgrade token): users, templates and workspaces not checked"
+ fi
+
+ step "the upgrade will"
+ act "back up the database ($( [[ -n "${D_CNPG}" ]] && echo "pg_dump on ${D_CNPG_PRIMARY}" || echo "pg_dump from a temporary pod") -> ./backups/) and the Coder, route and Argo CD objects"
+ act "upgrade Coder ${D_VERSION:-?} -> ${TARGET} with the air-gap image ${REGISTRY}/${NEW_IMAGE_PATH} ($( case ${D_MANAGED} in helm) echo "helm upgrade ${D_HELM_REL}";; argocd) echo "Argo CD Application ${D_ARGO_APP}";; *) echo "kubectl set image";; esac)); Coder restarts once (about a minute; workspaces keep running and reconnect)"
+ act "install release ${RELEASE} in ${D_NS} in attach mode: dashboard add-ons, banner, icons$( [[ "${TEMPLATE_ENABLED:-true}" == true ]] && echo ", template ${TEMPLATE_NAME}"); Coder's own settings, users, database and route are not changed"
+ act "leave alone: the CloudNativePG operator, Keycloak, the Gateway and its certificates, existing templates and workspaces"
+ echo
+ if [[ ${BLOCKERS} -gt 0 ]]; then echo "${R}${BLOCKERS} blocking problem(s)${N}, ${WARNINGS} warning(s): fix the BLOCK lines, then ./upgrade plan again."; return 1; fi
+ echo "${G}Ready to upgrade${N} (${WARNINGS} warning(s)). Next: ./upgrade all  (or the steps one by one)."
+}
+
+# ------------------------------------------------------------------------------------------------ token
+token() {
+ discover >/dev/null
+ if load_token; then ok "a valid owner token is stored ($(capi /api/v2/users/me | jq -r .username))"; [[ -z "${CODER_TOKEN:-}" ]] && return 0; fi
+ step "owner API token"
+ local t="${CODER_TOKEN:-}"
+ if [[ -z "${t}" ]]; then
+  [[ ${ASSUME_YES} -eq 1 ]] && die "set CODER_TOKEN (an owner's API token) when using --yes"
+  echo "  An owner signs in to ${D_ACCESS_URL:-Coder}, opens Account > Tokens (or runs: coder tokens create --lifetime 168h)"
+  echo "  and pastes the token here. It is stored as Secret ${D_NS}/coder-platform-automation and renewed on every run."
+  read -r -s -p "  token: " t </dev/tty; echo
+ fi
+ TOKEN="${t}"; api_up
+ [[ "$(capi -o /dev/null -w '%{http_code}' /api/v2/users/me)" == 200 ]] || die "Coder doesn't accept that token"
+ capi /api/v2/users/me | jq -e 'any(.roles[]; .name=="owner")' >/dev/null || die "that token's user isn't an owner"
+ k -n "${D_NS}" create secret generic coder-platform-automation --from-literal=token="${t}" --dry-run=client -o yaml \
+  | k label --local -f - app.kubernetes.io/part-of=coder app.kubernetes.io/created-by=coder-platform-upgrade -o yaml | k apply -f - >/dev/null
+ ok "stored (user $(capi /api/v2/users/me | jq -r .username))"
+}
+
+# ------------------------------------------------------------------------------------------------ images (+ node pull test)
+images() {
+ "${HERE}/install" images --config "${CONFIG}" $( [[ ${ASSUME_YES} -eq 1 ]] && echo --yes )
+ discover >/dev/null
+ step "can the nodes pull from ${REGISTRY}?"
+ local img="${REGISTRY}/library/python:3.13-alpine" pull=""
+ [[ -n "${REGISTRY_USERNAME:-}" && ! "${REGISTRY%%/*}" =~ \.dkr\.ecr\. ]] && pull=',"imagePullSecrets":[{"name":"coder-platform-registry"}]'
+ k -n "${D_NS}" delete pod coder-platform-pulltest --ignore-not-found >/dev/null 2>&1
+ k -n "${D_NS}" run coder-platform-pulltest --image="${img}" --restart=Never \
+  --overrides="{\"spec\":{\"nodeSelector\":{\"kubernetes.io/arch\":\"amd64\"}${pull}}}" --command -- python3 -c 'print("pulled")' >/dev/null
+ local i phase=""
+ for i in $(seq 1 60); do
+  phase=$(k -n "${D_NS}" get pod coder-platform-pulltest -o jsonpath='{.status.phase}{" "}{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)
+  [[ "${phase}" == Succeeded* ]] && break
+  [[ "${phase}" == *ImagePullBackOff* || "${phase}" == *ErrImagePull* ]] && break
+  sleep 3
+ done
+ k -n "${D_NS}" delete pod coder-platform-pulltest --ignore-not-found >/dev/null 2>&1
+ [[ "${phase}" == Succeeded* ]] && ok "a node pulled ${img}" \
+  || die "the nodes can't pull ${img} (${phase}): registry trust/credentials on the nodes (EKS: node IAM role ecr:GetAuthorizationToken + VPC endpoints)"
+}
+
+# ------------------------------------------------------------------------------------------------ template providers
+download_templates() {   # every template's active version -> generated/templates/<name>/ (needs the token)
+ local dir="${GEN}/templates" t name ver fid n=0; rm -rf "${dir}"; mkdir -p "${dir}"
+ while read -r t; do
+  [[ -n "${t}" ]] || continue
+  name=$(jq -r .name <<<"${t}"); ver=$(jq -r .active_version_id <<<"${t}")
+  fid=$(capi "/api/v2/templateversions/${ver}" | jq -r '.job.file_id')
+  mkdir -p "${dir}/${name}"
+  capi -H 'Accept: application/x-tar' "/api/v2/files/${fid}" | tar -x -C "${dir}/${name}" 2>/dev/null || { warn "${name}: couldn't download its files"; continue; }
+  n=$((n + 1))
+ done < <(capi /api/v2/templates | jq -c '.[] | {name, active_version_id}')
+ echo "${n}"
+}
+template_providers() {   # template_providers <dir>: "registry.terraform.io/<ns>/<name> <constraint>" per provider
+ local f all; all=$(cat "$1"/*.tf 2>/dev/null | sed 's/#.*//; s#//.*##' | tr '\n' ' ')
+ local blocks; blocks=$(S="${all}" awk 'BEGIN { s = ENVIRON["S"]; while ((i = index(s, "required_providers")) > 0) { s = substr(s, i); j = index(s, "{"); d = 0; o = "";
+   for (k = j; k <= length(s); k++) { c = substr(s, k, 1); if (c == "{") d++; if (c == "}") d--; o = o c; if (d == 0) break }
+   print o; s = substr(s, k) } }')
+ local declared=""
+ while read -r e; do
+  [[ -n "${e}" ]] || continue
+  local src ver name
+  name=$(sed -E 's/^([A-Za-z0-9_-]+).*/\1/' <<<"${e}")
+  src=$(grep -oE 'source *= *"[^"]+"' <<<"${e}" | sed -E 's/.*"([^"]+)"/\1/'); src=${src:-hashicorp/${name}}
+  ver=$(grep -oE 'version *= *"[^"]+"' <<<"${e}" | sed -E 's/.*"([^"]+)"/\1/')
+  [[ $(tr -cd '/' <<<"${src}" | wc -c) -eq 1 ]] && src="registry.terraform.io/${src}"
+  echo "${src} ${ver:-any}"; declared+=" ${name} "
+ done < <(grep -oE '[A-Za-z0-9_-]+ *= *\{[^{}]*\}' <<<"${blocks}")
+ # providers used without a required_providers entry: hashicorp/<prefix of the resource/data type>
+ for f in $(grep -ohE '(resource|data) +"[a-z0-9]+_' "$1"/*.tf 2>/dev/null | sed -E 's/.*"([a-z0-9]+)_/\1/' | sort -u); do
+  [[ "${declared}" == *" ${f} "* || "${f}" == coder ]] || echo "registry.terraform.io/hashicorp/${f} any"
+ done
+}
+satisfies() {   # satisfies <version> <constraint>: Terraform's = != > >= < <= ~> (comma-separated), "any"
+ local v=$1 c part op want
+ [[ "$2" == any ]] && return 0
+ IFS=',' read -ra parts <<<"$2"
+ for part in "${parts[@]}"; do
+  part=$(tr -d ' ' <<<"${part}"); op=$(grep -oE '^(~>|>=|<=|!=|=|>|<)' <<<"${part}" || true); want=${part#"${op}"}
+  case "${op:-=}" in
+   =) [[ "${v}" == "${want}" ]] || return 1 ;;
+   '!=') [[ "${v}" != "${want}" ]] || return 1 ;;
+   '>=') ver_ge "${v}" "${want}" || return 1 ;;
+   '>') ver_ge "${v}" "${want}" && [[ "${v}" != "${want}" ]] || return 1 ;;
+   '<=') ver_ge "${want}" "${v}" || return 1 ;;
+   '<') ver_ge "${want}" "${v}" && [[ "${v}" != "${want}" ]] || return 1 ;;
+   '~>') ver_ge "${v}" "${want}" || return 1
+         local IFS=. ; read -ra w <<<"${want}"; unset IFS
+         if [[ ${#w[@]} -ge 3 ]]; then [[ "$(cut -d. -f1-2 <<<"${v}")" == "${w[0]}.${w[1]}" ]] || return 1
+         else [[ "$(cut -d. -f1 <<<"${v}")" == "${w[0]}" ]] || return 1; fi ;;
+  esac
+ done
+}
+provider_check() {   # static: every template's providers against the bundle's mirror (providers.txt)
+ local mirror="${HERE}/providers.txt" t line src con have missing="" name
+ [[ -f "${mirror}" ]] || { info "no providers.txt in the bundle: skipping the static provider check"; return 0; }
+ for t in "${GEN}"/templates/*/; do
+  name=$(basename "${t}")
+  local bad=""
+  while read -r src con; do
+   [[ -n "${src}" ]] || continue
+   have=$(awk -v s="${src}" '$1==s {print $2}' "${mirror}")
+   local okv=""
+   for v in ${have}; do satisfies "${v}" "${con}" && okv=${v}; done
+   if [[ -z "${okv}" ]]; then bad+=" ${src#registry.terraform.io/} (${con}; mirror has: ${have:-none})"; missing+=" ${src#registry.terraform.io/}"; fi
+  done < <(template_providers "${t}")
+  if [[ -n "${bad}" ]]; then block "template ${name} needs providers the new image doesn't carry:${bad}"
+  else ok "template ${name}: its providers are in the new image's mirror"; fi
+ done
+ if [[ -n "${missing}" ]]; then
+  echo "    -> rebuild the bundle with them (pick versions that satisfy the constraints above), e.g.:"
+  echo "       EXTRA_PROVIDERS=\"$(tr ' ' '\n' <<<"${missing}" | sort -u | grep . | sed 's/$/:<version>/' | tr '\n' ' ' | sed 's/ $//')\" ./build-bundle"
+ fi
+}
+
+# ------------------------------------------------------------------------------------------------ tfcheck
+tfcheck() {
+ discover >/dev/null
+ load_token || die "no owner token: ./upgrade token first"
+ step "do the existing templates still initialize? (terraform init with the new image, and with the current one)"
+ local dir="${GEN}/templates" t name n
+ n=$(download_templates); ok "${n} template(s) downloaded"
+ local new="${REGISTRY}/${NEW_IMAGE_PATH}" old="${D_IMAGE}"
+ : > "${GEN}/tfcheck.txt"
+ local which img
+ declare -A RESULT
+ for which in new old; do
+  img=${new}; [[ ${which} == old ]] && img=${old}
+  local pod="coder-platform-tfcheck-${which}"
+  k -n "${D_NS}" delete pod "${pod}" --ignore-not-found >/dev/null 2>&1
+  k -n "${D_NS}" run "${pod}" --image="${img}" --restart=Never \
+   --overrides='{"spec":{"nodeSelector":{"kubernetes.io/arch":"amd64"},"securityContext":{"runAsUser":1000,"runAsNonRoot":true}}}' \
+   --command -- sleep 1800 >/dev/null
+  k -n "${D_NS}" wait --for=condition=Ready pod/"${pod}" --timeout=300s >/dev/null || { warn "couldn't start ${img} (${which})"; continue; }
+  for t in "${dir}"/*/; do
+   name=$(basename "${t}")
+   k -n "${D_NS}" exec "${pod}" -- mkdir -p "/tmp/tf/${name}" >/dev/null
+   tar -C "${t}" -cf - . | k -n "${D_NS}" exec -i "${pod}" -- tar -x -C "/tmp/tf/${name}" >/dev/null
+   if k -n "${D_NS}" exec "${pod}" -- sh -c "cd /tmp/tf/${name} && terraform init -backend=false -input=false -no-color" > "${GEN}/tfcheck-${which}-${name}.log" 2>&1; then
+    RESULT[${which}/${name}]=ok
+   else RESULT[${which}/${name}]=fail; fi
+  done
+  k -n "${D_NS}" delete pod "${pod}" --ignore-not-found --wait=false >/dev/null 2>&1
+ done
+ for t in "${dir}"/*/; do
+  name=$(basename "${t}")
+  case "${RESULT[new/${name}]:-?}/${RESULT[old/${name}]:-?}" in
+   ok/*) ok "${name}: initializes with the new image"; echo "OK ${name}" >> "${GEN}/tfcheck.txt" ;;
+   fail/fail) warn "${name}: fails with the current image too (not caused by the upgrade): ${GEN}/tfcheck-new-${name}.log"; echo "PREEXISTING ${name}" >> "${GEN}/tfcheck.txt" ;;
+   fail/*) block "${name}: initializes today but NOT with the new image: $(grep -m1 -iE 'error|could not|no available' "${GEN}/tfcheck-new-${name}.log" | head -c 200)"
+           echo "REGRESSION ${name}" >> "${GEN}/tfcheck.txt" ;;
+  esac
+ done
+ if grep -q '^REGRESSION' "${GEN}/tfcheck.txt"; then
+  echo; echo "  The new image's Terraform provider mirror lacks what these templates need. Rebuild the bundle on the connected"
+  echo "  side with those providers (EXTRA_PROVIDERS=\"hashicorp/aws:5.100.0 ...\" ./build-bundle), then start again."
+  return 1
+ fi
+}
+
+# ------------------------------------------------------------------------------------------------ backup
+backup() {
+ discover >/dev/null
+ local stamp; stamp=$(date +%Y%m%d-%H%M%S); local out="${BACKUPS}/${stamp}"
+ mkdir -p "${out}"; chmod 700 "${BACKUPS}" "${out}"
+ step "backup -> ${out}"
+ local dump="${out}/coder-db-v${D_VERSION:-unknown}.dump"
+ if [[ -n "${D_CNPG}" ]]; then
+  k -n "${D_NS}" exec "${D_CNPG_PRIMARY}" -c postgres -- pg_dump -Fc -d "${D_CNPG_DB:-app}" > "${dump}"
+  k -n "${D_NS}" exec -i "${D_CNPG_PRIMARY}" -c postgres -- pg_restore -l < "${dump}" > "${out}/coder-db.toc"
+ else
+  # any PostgreSQL (e.g. RDS): a temporary pod with the bundle's PostgreSQL image and Coder's connection Secret
+  local pod=coder-platform-dbbackup img="${REGISTRY}/cloudnative-pg/postgresql:18.4-system-trixie"
+  k -n "${D_NS}" delete pod "${pod}" --ignore-not-found >/dev/null 2>&1
+  k -n "${D_NS}" run "${pod}" --image="${img}" --restart=Never --command \
+   --overrides="{\"spec\":{\"nodeSelector\":{\"kubernetes.io/arch\":\"amd64\"},\"containers\":[{\"name\":\"${pod}\",\"image\":\"${img}\",\"command\":[\"sleep\",\"3600\"],\"env\":[{\"name\":\"DBURL\",\"valueFrom\":{\"secretKeyRef\":{\"name\":\"${D_DB_SECRET}\",\"key\":\"${D_DB_KEY}\"}}}]}]}}" -- sleep 3600 >/dev/null
+  k -n "${D_NS}" wait --for=condition=Ready pod/"${pod}" --timeout=300s >/dev/null
+  k -n "${D_NS}" exec "${pod}" -- sh -c 'pg_dump -Fc "$DBURL"' > "${dump}"
+  k -n "${D_NS}" exec -i "${pod}" -- pg_restore -l < "${dump}" > "${out}/coder-db.toc"
+  k -n "${D_NS}" delete pod "${pod}" --wait=false >/dev/null
+ fi
+ chmod 600 "${dump}"
+ local tables; tables=$(grep -c 'TABLE DATA' "${out}/coder-db.toc" || true)
+ [[ -s "${dump}" && ${tables} -gt 50 ]] || die "the dump looks wrong (${tables} tables): ${dump}"
+ ok "database: ${dump} ($(du -h "${dump}" | cut -f1), ${tables} tables, readable by pg_restore)"
+ k -n "${D_NS}" get deploy "${D_DEPLOY}" -o yaml > "${out}/coder-deployment.yaml"
+ k -n "${D_NS}" get svc,httproute,configmap,secret -o yaml > "${out}/namespace-objects.yaml" 2>/dev/null; chmod 600 "${out}/namespace-objects.yaml"
+ [[ -n "${D_HELM_REL}" ]] && "$(tool helm)" -n "${D_NS}" get values "${D_HELM_REL}" -o yaml > "${out}/coder-helm-values.yaml" 2>/dev/null
+ [[ -f "${GEN}/coder-argocd-application.json" ]] && cp "${GEN}/coder-argocd-application.json" "${out}/"
+ [[ -f "${GEN}/before.json" ]] && cp "${GEN}/before.json" "${out}/"
+ ok "Kubernetes objects: Coder Deployment, namespace objects, Helm values / Argo CD Application"
+ echo "${out}" > "${GEN}/last-backup"
+}
+
+# ------------------------------------------------------------------------------------------------ Coder itself
+upgrade_coder() {
+ discover >/dev/null
+ [[ -f "$(cat "${GEN}/last-backup" 2>/dev/null)/coder-db-v${D_VERSION}.dump" ]] || die "no backup of the current database yet: ./upgrade backup"
+ local repo="${REGISTRY}/${NEW_IMAGE_PATH%:*}" tag="${NEW_IMAGE_PATH##*:}"
+ if [[ "${D_IMAGE}" == "${repo}:${tag}" ]]; then ok "Coder already runs ${D_IMAGE}"; return 0; fi
+ step "upgrading Coder ${D_VERSION} -> ${TARGET} (${repo}:${tag})"
+ [[ ${ASSUME_YES} -eq 1 ]] || confirm "Coder restarts and its database is migrated (one way). Continue?" || die "stopped"
+ local pull=(); [[ -n "${REGISTRY_USERNAME:-}" && ! "${REGISTRY%%/*}" =~ \.dkr\.ecr\. ]] && pull=(--set "coder.image.pullSecrets[0].name=coder-platform-registry")
+ case "${D_MANAGED}" in
+  helm)
+   HELM=$(tool helm)
+   "${HELM}" -n "${D_NS}" get values "${D_HELM_REL}" -o yaml > "${GEN}/coder-values-before.yaml"
+   # the new chart renders with the release's values (+ the image); nothing is applied if not
+   "${HELM}" template "${D_HELM_REL}" "${CODER_CHART}" -n "${D_NS}" -f "${GEN}/coder-values-before.yaml" \
+    --set coder.image.repo="${repo}" --set coder.image.tag="${tag}" --set "coder.nodeSelector.kubernetes\\.io/arch=amd64" "${pull[@]}" >/dev/null \
+    || die "Coder's current values don't render with the coder ${TARGET} chart (see above)"
+   "${HELM}" upgrade "${D_HELM_REL}" "${CODER_CHART}" -n "${D_NS}" --reuse-values \
+    --set coder.image.repo="${repo}" --set coder.image.tag="${tag}" --set "coder.nodeSelector.kubernetes\\.io/arch=amd64" "${pull[@]}" \
+    --wait --timeout 15m >/dev/null || die "helm upgrade failed: helm -n ${D_NS} history ${D_HELM_REL}; the database backup is in $(cat "${GEN}/last-backup")"
+   ;;
+  argocd)
+   # chart from the registry (air-gapped hub), image = the air-gap image; the Application's own values are kept
+   # the chart where the hub's Argo CD can fetch it, and the registry registered there
+   CHART_FILE="${CODER_CHART}" "${HERE}/install" push-chart --config "${CONFIG}" $( [[ ${ASSUME_YES} -eq 1 ]] && echo --yes )
+   "${HERE}/install" argocd-repo --config "${CONFIG}" $( [[ ${ASSUME_YES} -eq 1 ]] && echo --yes )
+   local patch
+   patch=$(jq -c --arg repo "${REGISTRY}/charts" --arg v "${TARGET}" --arg img "${repo}" --arg tag "${tag}" '
+     def params: ((.helm.parameters // []) | map(select(.name | IN("coder.image.repo","coder.image.tag","coder.nodeSelector.kubernetes\\.io/arch") | not))
+       + [{name:"coder.image.repo",value:$img},{name:"coder.image.tag",value:$tag},{name:"coder.nodeSelector.kubernetes\\.io/arch",value:"amd64"}]);
+     if .spec.source then {spec:{source:(.spec.source | .repoURL=$repo | .targetRevision=$v | .helm.parameters=params)}}
+     else {spec:{sources:(.spec.sources | .[0] |= (.repoURL=$repo | .targetRevision=$v | .helm.parameters=params))}} end' "${GEN}/coder-argocd-application.json")
+   hubk -n "${ARGOCD_NAMESPACE}" patch application "${D_ARGO_APP}" --type merge -p "${patch}" >/dev/null
+   hubk -n "${ARGOCD_NAMESPACE}" annotate application "${D_ARGO_APP}" argocd.argoproj.io/refresh=hard --overwrite >/dev/null
+   ok "Application ${D_ARGO_APP}: chart coder ${TARGET} from oci://${REGISTRY}/charts, image ${repo}:${tag}"
+   ;;
+  *)
+   k -n "${D_NS}" set image deploy/"${D_DEPLOY}" "$(jq -r '.spec.template.spec.containers[0].name' "${GEN}/coder-deployment.json")=${repo}:${tag}" >/dev/null ;;
+ esac
+ step "waiting for Coder ${TARGET}"
+ local i v=""
+ for i in $(seq 1 120); do
+  v=$(k -n "${D_NS}" exec deploy/"${D_DEPLOY}" -- curl -fsS -m 5 http://127.0.0.1:8080/api/v2/buildinfo 2>/dev/null | jq -r .version | sed 's/^v//; s/[+-].*//' || true)
+  [[ "${v}" == "${TARGET}" ]] && k -n "${D_NS}" rollout status deploy/"${D_DEPLOY}" --timeout=10s >/dev/null 2>&1 && break
+  sleep 5
+ done
+ [[ "${v}" == "${TARGET}" ]] || die "Coder isn't reporting ${TARGET} after 10 minutes (now: ${v:-not answering}): kubectl -n ${D_NS} logs deploy/${D_DEPLOY}"
+ ok "Coder ${TARGET} is running"
+ k -n "${D_NS}" logs deploy/"${D_DEPLOY}" --since=15m 2>/dev/null | grep -iE 'migrat.*(fail|error)|panic|FATAL' | head -3 | sed 's/^/  log: /' || true
+}
+
+# ------------------------------------------------------------------------------------------------ platform (attach)
+platform() {
+ discover >/dev/null
+ grep -q '^ATTACH=true' "${CONFIG}" || die "install.conf must have ATTACH=true (./upgrade discover writes it)"
+ load_token || die "no valid owner token: ./upgrade token"
+ adopt_existing
+ local yes=(); [[ ${ASSUME_YES} -eq 1 ]] && yes=(--yes)
+ "${HERE}/install" secrets --config "${CONFIG}" "${yes[@]}"
+ "${HERE}/install" plugin --config "${CONFIG}" "${yes[@]}"
+ "${HERE}/install" deploy --config "${CONFIG}" "${yes[@]}"
+}
+# Objects the chart creates that already exist from the standalone coder-ui-updates script or a coder-banner Helm
+# release: Helm takes them over (ownership annotations) instead of failing; their data (receipts volume, banner state)
+# stays. The old Helm release's records are removed so an old `helm uninstall` can't delete them later.
+adopt_existing() {
+ [[ "${DEPLOY:-helm}" == helm ]] || return 0
+ local kind name owner n=0 old_banner_rel=""
+ old_banner_rel=$(k -n "${D_NS}" get deploy coder-banner -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
+ [[ "${old_banner_rel}" == "${RELEASE}" ]] && old_banner_rel=""
+ while read -r kind name; do
+  [[ -n "${name}" ]] || continue
+  owner=$(k -n "${D_NS}" get "${kind}" "${name}" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null) || continue
+  [[ "${owner}" == "${RELEASE}" ]] && continue
+  k -n "${D_NS}" annotate "${kind}" "${name}" --overwrite meta.helm.sh/release-name="${RELEASE}" meta.helm.sh/release-namespace="${D_NS}" >/dev/null
+  k -n "${D_NS}" label "${kind}" "${name}" --overwrite app.kubernetes.io/managed-by=Helm >/dev/null
+  n=$((n + 1))
+ done < <("$(tool helm)" template "${RELEASE}" "$(ls "${HERE}"/charts/coder-platform-*.tgz | head -n1)" -n "${D_NS}" -f "${GEN}/values.yaml" 2>/dev/null \
+           | awk '/^kind:/ {k=$2} /^  name:/ && k {print k, $2; k=""}' | grep -vE '^(CustomResourceDefinition|ClusterRole|ClusterRoleBinding|Namespace|MutatingWebhookConfiguration|ValidatingWebhookConfiguration) ' || true)
+ [[ ${n} -gt 0 ]] && ok "took over ${n} existing object(s) (coder-ui-updates script / coder-banner release)"
+ if [[ -n "${old_banner_rel}" ]]; then
+  k -n "${D_NS}" delete secret -l "owner=helm,name=${old_banner_rel}" >/dev/null && ok "removed the old ${old_banner_rel} Helm release records (its objects now belong to ${RELEASE})"
+ fi
+}
+
+# ------------------------------------------------------------------------------------------------ verify
+verify_all() {
+ discover >/dev/null
+ local rc=0; "${HERE}/install" verify --config "${CONFIG}" || rc=$?
+ load_token || die "no valid owner token: ./upgrade token"
+ step "existing users, templates and workspaces"
+ local before="${GEN}/before.json"; [[ -f "${before}" ]] || { warn "no record from before the upgrade (./upgrade plan with a token makes one)"; return 0; }
+ local users templates ws
+ users=$(capi '/api/v2/users?limit=0' | jq -c '[.users[] | {username, roles: [.roles[]?.name]}]')
+ templates=$(capi /api/v2/templates | jq -c '[.[].name]')
+ ws=$(capi '/api/v2/workspaces?limit=0' | jq -c '[.workspaces[] | {name, owner: .owner_name, status: .latest_build.status, agents: [.latest_build.resources[]?.agents[]? | .status]}]')
+ local missing fails=0
+ missing=$(jq -r --argjson now "${users}" '.users[] | .username as $u | select(($now|map(.username)|index($u))|not) | $u' "${before}")
+ [[ ${rc} -eq 0 ]] || fails=$((fails + 1))
+ [[ -z "${missing}" ]] && ok "all $(jq '.users|length' "${before}") users still there" || { echo "  ${R}FAIL${N}   users missing: ${missing}"; fails=$((fails + 1)); }
+ local lost_owner
+ lost_owner=$(jq -r --argjson now "${users}" '.users[] | select(any(.roles[]?; .name=="owner")) | .username as $u | select(($now[] | select(.username==$u) | .roles | index("owner"))|not) | $u' "${before}")
+ [[ -z "${lost_owner}" ]] && ok "owners unchanged" || { echo "  ${R}FAIL${N}   no longer owner: ${lost_owner}"; fails=$((fails + 1)); }
+ missing=$(jq -r --argjson now "${templates}" '.templates[] | .name as $t | select(($now|index($t))|not) | $t' "${before}")
+ [[ -z "${missing}" ]] && ok "all $(jq '.templates|length' "${before}") templates still there" || { echo "  ${R}FAIL${N}   templates missing: ${missing}"; fails=$((fails + 1)); }
+ local was_running now_ok
+ was_running=$(jq -r '[.workspaces[] | select(.status=="running") | "\(.owner)/\(.name)"] | join(" ")' "${before}")
+ for w in ${was_running}; do
+  now_ok=$(jq -r --arg o "${w%/*}" --arg n "${w#*/}" '.[] | select(.owner==$o and .name==$n) | "\(.status) \(.agents|join(","))"' <<<"${ws}")
+  if [[ "${now_ok}" == running*connected* ]]; then ok "workspace ${w}: running, agent reconnected"
+  else echo "  ${R}FAIL${N}   workspace ${w}: ${now_ok:-gone} (an agent reconnects within a minute or two of Coder's restart)"; fails=$((fails + 1)); fi
+ done
+ echo
+ [[ ${fails} -eq 0 ]] && echo "${G}Upgrade verified.${N}" || { echo "${R}${fails} check(s) failed.${N}"; return 1; }
+}
+
+case "${ACTION}" in
+ discover) discover; load_token 2>/dev/null && app_facts || info "with an owner token (./upgrade token) discover also lists users, templates and workspaces" ;;
+ plan) plan ;;
+ token) token ;;
+ images) images ;;
+ tfcheck) tfcheck ;;
+ backup) backup ;;
+ coder) upgrade_coder ;;
+ platform) platform ;;
+ verify) verify_all ;;
+ all)
+  plan || die "the plan has blocking problems (above)"
+  images; tfcheck || die "templates would break (above)"
+  plan >/dev/null || die "the plan has blocking problems now (./upgrade plan)"
+  backup; upgrade_coder; platform; verify_all ;;
+ *) die "unknown action '${ACTION}' (./upgrade --help)" ;;
+esac

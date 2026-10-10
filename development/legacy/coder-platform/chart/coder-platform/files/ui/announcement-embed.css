@@ -1,0 +1,181 @@
+/* Loaded into the Banner admin page when it is shown inside Coder's Deployment settings (see announcement.js).
+   It only overrides: the admin page itself is unchanged and still works stand-alone at /__banner/admin.
+   --coder-* are Coder's own theme tokens (HSL triplets), copied in from the dashboard and kept in step with it. */
+
+/* Map the admin page's palette onto Coder's; `html:root` outranks the admin page's :root rules, dark or light. */
+html:root {
+  --bg: hsl(var(--coder-surface-primary));
+  --card: hsl(var(--coder-surface-primary));
+  --text: hsl(var(--coder-content-primary));
+  --muted: hsl(var(--coder-content-secondary));
+  --border: hsl(var(--coder-border-default));
+  --primary: hsl(var(--coder-surface-invert-primary));   /* Coder's primary buttons are the inverted surface */
+  --primary-text: hsl(var(--coder-content-invert));
+  --danger: hsl(var(--coder-content-destructive));
+  --focus: hsl(var(--coder-content-link));
+  --ok: hsl(var(--coder-content-success));
+  --off: hsl(var(--coder-content-disabled));
+}
+
+/* Coder draws the page: no second background, no stand-alone header ("Announcement banner" / "Back to Coder"). */
+html { background: hsl(var(--coder-surface-primary)); }   /* the dashboard's own page colour, so the frame is seamless */
+body {
+  background: transparent;
+  font-family: var(--coder-font, system-ui, sans-serif);
+  font-size: 14px;
+}
+.topbar { display: none; }
+
+/* Fill Coder's content column instead of a centred 860px page with its own padding. */
+.page { max-width: none; margin: 0; padding: 0 0 8px; gap: 24px;
+  grid-template-columns: minmax(0, 1fr); }   /* wide tables scroll inside their card instead of widening the page */
+
+/* Coder's sections are bordered, square-ish panels with larger headings. */
+.card { border-color: var(--border); border-radius: 8px; padding: 24px; }
+.card-head { margin-bottom: 16px; }
+h2 { font-size: 16px; font-weight: 600; }
+.card-emergency { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+
+/* Form controls in Coder's style: transparent fields, 6px radius, link-coloured focus ring. */
+textarea, input[type=text], input[type=number], select, .emoji-search {
+  background: transparent;
+  border-color: hsl(var(--coder-border-secondary, var(--coder-border-default)));
+  border-radius: 6px;
+}
+.btn { border-radius: 6px; font-weight: 500; }
+.btn:not(.btn-primary):not(.btn-danger) { background: transparent; }
+.btn-primary:hover:not(:disabled) { border-color: var(--primary); opacity: .9; }
+.chip { background: transparent; }
+.emoji-pop, .emoji-h { background: hsl(var(--coder-surface-secondary)); }
+.preview-frame { background: hsl(var(--coder-surface-secondary)); }
+
+/* The frame grows with its content, so a toast pinned to the frame's bottom edge could be below the fold:
+   announcement.js shows the same message in the dashboard's viewport instead. */
+.toast { display: none !important; }
+
+/* ---- rearranged by admin-embed.js ------------------------------------------------------------------------- */
+/* "Hide banner" lives on as the switch at the top; "Emergency: show it again" as the radio beside it. The original
+   controls stay in the page (hidden) because the switch and the radio work by pressing them. */
+#toggle, .actions .spacer, .card-emergency { display: none !important; }
+/* Removed from this view: the canned "Start from" messages, the lead-in and link fields (Markdown covers both; the
+   lead-in field now carries the custom colours), and the emoji picker's "insert into" choice (it is the message). */
+.chips, main .grid, .emoji-into { display: none !important; }
+
+.cui-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 32px;
+  padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.cui-note { margin: -8px 0 16px; }
+
+.cui-switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; font-weight: 600; }
+.cui-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.cui-track { position: relative; width: 40px; height: 22px; flex-shrink: 0; border-radius: 999px;
+  background: hsl(var(--coder-surface-tertiary)); border: 1px solid hsl(var(--coder-border-secondary, var(--coder-border-default)));
+  transition: background .15s ease; }
+.cui-thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: hsl(var(--coder-content-secondary)); transition: transform .15s ease, background .15s ease; }
+.cui-switch input:checked + .cui-track { background: var(--ok); border-color: var(--ok); }
+.cui-switch input:checked + .cui-track .cui-thumb { transform: translateX(18px); background: #fff; }
+.cui-switch input:focus-visible + .cui-track { outline: 2px solid var(--focus); outline-offset: 2px; }
+.cui-switch input:disabled + .cui-track { opacity: .5; }
+.cui-switch-state { font-weight: 400; font-size: 13px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .cui-track, .cui-thumb { transition: none; } }
+
+/* ---- Acknowledgements ------------------------------------------------------------------------------------- */
+.cui-intro { margin: -6px 0 16px; }
+.cui-updated { font-size: 12px; }
+.cui-events { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+.cui-event { border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.cui-event > summary { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; list-style: none; }
+.cui-event > summary::-webkit-details-marker { display: none; }
+.cui-event > summary::before { content: '›'; flex-shrink: 0; width: 10px; color: var(--muted); font-size: 18px; line-height: 1;
+  transition: transform .15s ease; }
+.cui-event[open] > summary::before { transform: rotate(90deg); }
+.cui-event[open] > summary { border-bottom: 1px solid var(--border); }
+.cui-event > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 8px; }
+.cui-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.cui-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cui-current, .cui-again { flex-shrink: 0; }
+.cui-counts { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; color: var(--muted); }
+.cui-meter { width: 64px; height: 6px; border-radius: 999px; background: hsl(var(--coder-surface-tertiary)); overflow: hidden; }
+.cui-meter > span { display: block; height: 100%; background: var(--ok); }
+.cui-date { flex-shrink: 0; font-size: 12px; color: var(--muted); min-width: 140px; text-align: right; }
+@media (max-width: 760px) { .cui-date, .cui-meter { display: none; } .cui-event > summary { flex-wrap: wrap; } }
+
+.cui-table-wrap { overflow-x: auto; }
+.cui-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cui-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.cui-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.cui-table tbody tr:last-child td { border-bottom: 0; }
+.cui-user { display: block; font-weight: 600; }
+.cui-sub { display: block; color: var(--muted); font-size: 12px; }
+.cui-pending td { color: var(--muted); }
+.cui-empty { color: var(--muted); text-align: center; }
+.cui-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; white-space: nowrap; }
+.cui-acked { color: var(--ok); }
+.cui-viewed { color: hsl(var(--coder-content-link)); }
+.cui-pending .cui-badge { color: var(--off); }
+
+/* ---- Show again to everyone (orange) --------------------------------------------------------------------- */
+/* Specific enough to beat the generic transparent .btn rule above. */
+.cui-controls button.btn.cui-force { background: #ea580c; border-color: #ea580c; color: #fff; font-weight: 600; }
+.cui-controls button.btn.cui-force:hover:not(:disabled) { background: #c2410c; border-color: #c2410c; }
+.cui-force:focus-visible { outline: 2px solid #fdba74; outline-offset: 2px; }
+
+/* ---- Centred layout ----------------------------------------------------------------------------------------- */
+main, .card { text-align: center; }
+.card-head { flex-direction: column; justify-content: center; gap: 8px; }
+.cui-controls, .levels, .effect-row, .actions, .options, .cui-toolbar, .cui-nudges, .cui-custom-colours { justify-content: center; }
+.options { justify-items: center; }
+.check { justify-content: center; text-align: left; }
+.field .label, legend.label { text-align: center; }
+legend.label { margin: 0 auto 8px; }
+.count { float: none; margin-left: 8px; }
+.field.inline { justify-content: center; }
+textarea, input[type=text], input[type=number], select { text-align: left; }
+details.advanced summary { text-align: center; }
+.cui-table th, .cui-table td { text-align: center; }
+.cui-table th:first-child, .cui-table td.cui-person { text-align: left; }
+.cui-event > summary { text-align: left; }
+
+/* ---- Colors: the four styles as round swatches, plus Custom ------------------------------------------------ */
+.cui-swatches { gap: 18px; }
+.cui-swatches .level { display: inline-flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; }
+.cui-swatches .level span { width: 38px; height: 38px; padding: 0; border-radius: 50%; font-size: 0; opacity: 1;
+  border: 3px solid transparent; box-shadow: inset 0 0 0 2px rgb(255 255 255 / .25); }
+.cui-swatches .level::after { content: attr(title); font-size: 12px; color: var(--muted); }
+.cui-swatches .level-info::after { content: 'Info'; } .cui-swatches .level-success::after { content: 'Success'; }
+.cui-swatches .level-warning::after { content: 'Warning'; } .cui-swatches .level-critical::after { content: 'Critical'; }
+.cui-swatches .level-custom::after { content: 'Custom'; }
+.cui-swatches .level-custom span { background: conic-gradient(#ef4444, #f59e0b, #22c55e, #06b6d4, #6366f1, #d946ef, #ef4444); }
+.cui-swatches .level-custom input { position: absolute; opacity: 0; pointer-events: none; }
+.cui-swatches .level input:checked + span { border-color: var(--text); }
+.cui-swatches.cui-custom-on .level:not(.level-custom) input:checked + span { border-color: transparent; }
+.cui-custom-colours { display: flex; flex-wrap: wrap; gap: 12px 28px; margin-top: 14px; }
+.cui-colour-control { display: inline-flex; align-items: center; gap: 8px; }
+.cui-colour-control .label { margin: 0; }
+.cui-color { width: 38px; height: 32px; padding: 0 2px; border: 1px solid var(--border); border-radius: 6px; background: transparent; cursor: pointer; }
+.cui-hex { width: 92px !important; font-family: ui-monospace, monospace; }
+.cui-drop { padding: 4px 8px; }
+
+/* ---- Message toolbar: emoji, countdown, Write / Preview --------------------------------------------------- */
+.cui-emoji-holder { position: relative; margin: -6px 0 14px; }
+.cui-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.cui-tools { display: inline-flex; gap: 8px; }
+.cui-tool { padding: 5px 12px; font-size: 13px; }
+.cui-md-hint { font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; }
+.cui-tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.cui-tab { font: inherit; font-size: 13px; padding: 5px 14px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.cui-tab[aria-pressed=true] { background: hsl(var(--coder-surface-tertiary)); color: var(--text); font-weight: 600; }
+.cui-md-preview { padding: 0; margin-top: 2px; min-height: 44px; }
+.cui-emoji-holder .emoji-pop { left: 50%; transform: translateX(-50%); top: 40px; }
+
+.cui-countdown { margin-top: 12px; padding: 16px; border: 1px dashed var(--border); border-radius: 8px; }
+.cui-cd-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px; }
+@media (max-width: 720px) { .cui-cd-grid { grid-template-columns: minmax(0, 1fr); } }
+.cui-cd-grid input, .cui-cd-grid select { width: 100%; }
+.cui-nudges { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+
+/* ---- Delete an announcement's record: round red X at the far right of its header --------------------------- */
+.cui-del { flex-shrink: 0; margin-left: 4px; width: 26px; height: 26px; border-radius: 50%; border: 0; padding: 0; cursor: pointer;
+  background: #dc2626; color: #fff; font-size: 13px; font-weight: 700; line-height: 26px; text-align: center; }
+.cui-del:hover { background: #b91c1c; }
+.cui-del:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

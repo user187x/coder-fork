@@ -1,0 +1,48 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  annotations:
+    argocd.argoproj.io/hydrate: normal
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+  name: coder-banner
+  namespace: argocd
+spec:
+  destination:
+    namespace: coder
+    server: https://kubernetes.default.svc
+  ignoreDifferences:
+  - jsonPointers:
+    - /data
+    kind: ConfigMap
+    name: coder-banner-state
+  project: default
+  source:
+    chart: coder-banner
+    helm:
+      releaseName: coder-banner
+      valuesObject:
+        admin:
+          roles:
+          - owner
+        coder:
+          host: coder.grey-marshall.com
+          service:
+            name: coder
+            port: 80
+        gateway:
+          name: traefik-gateway
+          namespace: traefik
+        image:
+          registry: harbor.grey-marshall.com
+          repository: library/python
+          tag: 3.13-alpine
+    repoURL: harbor.grey-marshall.com/library
+    targetRevision: 0.4.1
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - ApplyOutOfSyncOnly=true
+    - RespectIgnoreDifferences=true

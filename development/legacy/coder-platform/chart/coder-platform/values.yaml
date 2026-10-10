@@ -1,0 +1,269 @@
+# coder-platform: Coder and everything this platform adds, as one Helm release.
+#
+# A new installation normally sets only these (../../install writes them from install.conf for you):
+#   global.domain            coder.<domain> is Coder's address, *.<domain> its workspace apps
+#   global.imageRegistry     the private registry ./install images pushed to (air-gapped clusters)
+#   gateway.*                the Traefik Gateway (and HTTPS listener) that serves <domain>
+#   oidc.issuerURL           Keycloak's realm URL; the client secret goes in Secret keycloaking-coder-oidc
+#   admins                   the people who become Coder owners when they first sign in
+# plus the few values in the "Subcharts" section at the end that Helm can't derive (image locations, banner host):
+# ./install sets them from the same answers.
+#
+# Install into the namespace Coder should live in (default: coder): helm upgrade --install coder-platform
+# ./coder-platform -n coder -f my-values.yaml. Workspaces are created in the same namespace.
+
+global:
+  domain: ""                        # e.g. corp.example.com (required)
+  # Registry that holds every image (air-gapped clusters). Empty = the public registries (connected clusters).
+  # The source registry host is replaced, the path kept: ghcr.io/cloudnative-pg/postgresql -> <this>/cloudnative-pg/postgresql
+  imageRegistry: ""
+  imagePullSecrets: []              # names of docker-registry Secrets in the release namespace, if the registry needs auth
+  storageClass: ""                  # empty = the cluster's default StorageClass (database, receipts, workspace homes)
+  # The bundle's images are linux/amd64 only: every pod the chart makes (and the workspaces) is kept on amd64 nodes,
+  # which matters on clusters that also have arm64 (e.g. AWS Graviton) nodes. {} = no constraint.
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+# Existing Coder (set by ./upgrade): the chart doesn't install Coder, its database or its route, and doesn't change
+# Coder's settings; it adds the platform to the Coder that runs in the release namespace. The bootstrap Job then uses
+# an owner's API token (Secret coder-platform-automation) instead of creating a first user, and leaves password
+# sign-in alone. Also set coder.enabled: false and postgres.enabled: false.
+attach:
+  enabled: false
+  coderService: coder               # the existing Coder's Service (port 80) and Deployment
+  coderDeployment: coder
+
+coderHost: ""                       # default coder.<global.domain>
+wildcardHost: ""                    # default *.<global.domain>; "-" = no wildcard (workspace apps use path URLs only)
+
+# The Traefik Gateway every route attaches to. Traefik must run v3 with the Gateway API provider and the rewrite-body
+# plugin (../../traefik-plugin/enable-plugin --airgap enables it on a running Traefik).
+gateway:
+  name: traefik-gateway
+  namespace: traefik
+  sectionName: ""                   # the HTTPS listener, e.g. "https"; empty = every listener of the Gateway
+traefik:
+  pluginName: rewrite-body          # the plugin's name in Traefik's static configuration
+
+# TLS trust. Traefik terminates TLS with your certificate; if it's signed by a private CA, Coder, the workspaces and
+# the add-on service must trust that CA: it goes in Secret tls-ca (key ca.crt) in the release namespace. ./install
+# creates it from install.conf, or paste the PEM here. A public CA needs nothing.
+tls:
+  caPem: ""
+
+# Sign-in with Keycloak (any OIDC provider works). The client secret lives in Secret keycloaking-coder-oidc
+# (key client-secret): ./install creates it, or set oidc.clientSecret and the chart renders it.
+oidc:
+  enabled: true
+  issuerURL: ""                     # e.g. https://keycloak.corp.example.com/realms/master (required when enabled)
+  clientID: coder
+  clientSecret: ""
+  scopes: openid,profile,email
+  usernameField: preferred_username
+  emailField: email
+  ignoreEmailVerified: true
+  signInText: Sign in with your certificate
+  iconURL: /icon/keycloak.svg
+  allowSignups: true
+  # Only members of these Keycloak groups may sign in (empty = everyone Keycloak lets through). Needs groupField: the
+  # token claim with the groups (Keycloak: a "Group Membership" mapper on the client). With "Full group path" on,
+  # Keycloak sends nested groups as /Parent/Child: write them that way (e.g. /KeycloakGroup/Admin). A bare name like
+  # Admin only matches with full paths off, and then matches every group of that name.
+  groupField: ""                    # e.g. groups
+  allowedGroups: []                 # e.g. [/KeycloakGroup/Admin, /KeycloakGroup/Developers]
+  # CA of Keycloak's certificate, if private (Secret keycloaking-coder-ca, key ca.crt). Empty = tls.caPem (the usual
+  # case: one private CA for everything); ./install creates the Secret when you give it a separate CA file.
+  caPem: ""
+  # Password sign-in off: people sign in with Keycloak only. The bootstrap Job switches it off once it has its own
+  # API token (Secret coder-platform-automation); until then (the first minute of a new installation) only the
+  # bootstrap admin exists.
+  disablePasswordAuth: true
+  # Namespace of an operator-managed Keycloak (k8s.keycloak.org/Keycloak) for General > Keycloak's automatic
+  # discovery. Empty: the view connects to Keycloak through its URL instead (one-time "Connect" with an admin login).
+  keycloakNamespace: ""
+
+# People who become Coder owners. Each is created as a Keycloak (OIDC) user with the owner role; signing in with
+# Keycloak under the same email links them. Coder's sign-in matches on the email address, so it must be the one
+# Keycloak sends.
+admins: []
+#  - username: jdoe
+#    email: jdoe@corp.example.com
+
+# The bootstrap admin: Coder's first user, an owner. Its password is generated once into Secret bootstrap.secretName;
+# the chart's Job signs in with it once to make an API token (Secret coder-platform-automation) and uses that token
+# from then on (admins above, workspace template), because password sign-in is off afterwards.
+bootstrap:
+  enabled: true
+  secretName: coder-init-auth
+  username: coder-admin
+  email: ""                         # default coder-admin@<global.domain>
+  fullName: Coder Admin
+  password: ""                      # empty = generated (recommended)
+  waitSeconds: 900                  # how long the Job waits for Coder to come up
+  resources: {}
+
+# Extra Coder settings (CODER_* environment variables), merged over the chart's. See `coder server --help`.
+coderEnv: {}
+#  CODER_MAX_SESSION_EXPIRY: 168h
+
+# PostgreSQL for Coder: a CloudNativePG Cluster in the release namespace. CNPG writes the connection URI to Secret
+# <name>-app (key uri); Coder reads it (coder.coder.env below). Set enabled: false to bring your own database.
+postgres:
+  enabled: true
+  name: coder-db
+  instances: 2
+  primaryUpdateStrategy: unsupervised
+  image: ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie
+  storage:
+    size: 10Gi
+    storageClass: ""                # default global.storageClass
+  resources: {}
+  extraSpec: {}                     # merged into the Cluster spec (backup, monitoring, affinity, postgresql.parameters ...)
+
+# The dashboard add-ons (General > Announcement, Classification, Keycloak, Change Logo, Monitoring; Health >
+# Workspace Health; Settings > Certificates) and the Traefik rewrites that put them into Coder's dashboard.
+uiUpdates:
+  enabled: true
+  image: docker.io/library/python:3.13-alpine   # any image with python3 >= 3.8; the code is mounted from a ConfigMap
+  # true for Coder's platform build (ghcr.io/user187x/coder-platform), which has the add-ons built in: only /__coder-ui/
+  # is routed and Coder's pages are not rewritten. false (the upstream image) = the Traefik rewrites.
+  nativeDashboard: false
+  adminRoles: [owner]               # Coder roles that manage the add-ons
+  hideSupportLinks: [Documentation, Star the repo, Join the Coder Discord, Report a bug]
+  viewLabel: Announcement
+  viewPath: announcement
+  # Where Customize stores the logo: Coder's own database. Defaults follow CloudNativePG's naming for
+  # postgres.name (Secret <name>-app, key uri; CA Secret <name>-ca). ./upgrade sets these for an existing database.
+  coderDB:
+    secretName: ""
+    secretKey: uri
+    caSecretName: ""
+  # The Secret Coder reads its OIDC client secret from (General > Keycloak compares it with Keycloak's and can repair
+  # it). ./upgrade sets it for an existing Coder.
+  oidcSecretName: keycloaking-coder-oidc
+  storage:
+    size: 1Gi                       # announcement receipts (SQLite)
+  logsDB:
+    image: ""                       # the temporary Monitoring log database; default postgres.image
+
+# Workspaces: the template the chart pushes, and the icons its apps use (served at https://<coderHost>/__icons/).
+workspaces:
+  namespace: ""                     # default: the release namespace (Coder's own RBAC covers only that one)
+  template:
+    enabled: true
+    name: ubuntu-vnc-desktop
+    displayName: Ubuntu desktop (VNC, code-server, marimo)
+    description: Ubuntu with an XFCE desktop in the browser, code-server, File Browser and marimo notebooks.
+    icon: /icon/desktop.svg
+    # Air-gapped clusters: the coder-platform workspace image (tools preinstalled). Connected clusters can use
+    # codercom/enterprise-base:ubuntu (the template downloads the tools at start).
+    image: coder-platform/workspace:2026.09.28
+  icons:
+    enabled: true
+    image: docker.io/nginxinc/nginx-unprivileged:1.30.5-alpine
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Subcharts. Helm passes these to the subcharts as they are (no derived values), so the few that depend on your
+# installation (marked <<) are set by ./install from install.conf. Everything else is a working default.
+# ---------------------------------------------------------------------------------------------------------------------
+
+# CloudNativePG operator (https://cloudnative-pg.io/charts, cloudnative-pg). Cluster-wide: set enabled: false if the
+# cluster already runs it (one per cluster).
+cloudnative-pg:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/arch: amd64
+  createNamespace: true             # the chart renders the operator's namespace
+  namespaceOverride: cnpg-system
+  fullnameOverride: cloudnative-pg
+  image:
+    repository: ghcr.io/cloudnative-pg/cloudnative-pg   # << <imageRegistry>/cloudnative-pg/cloudnative-pg
+  imagePullSecrets: []
+
+# The announcement banner (../../banner-update/banner-chart). Its admin page is embedded in General > Announcement;
+# its own user-menu item is not used (menu.enabled: false).
+coder-banner:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/arch: amd64
+  coder:
+    host: ""                        # << coderHost (required when enabled)
+  gateway:
+    name: traefik-gateway           # << gateway.name
+    namespace: traefik              # << gateway.namespace
+    sectionName: ""                 # << gateway.sectionName
+  image:
+    registry: docker.io             # << imageRegistry
+    repository: library/python
+    tag: 3.13-alpine
+  menu:
+    enabled: false
+  admin:
+    roles: [owner]
+
+# Coder (https://helm.coder.com/v2, coder). Coder's own settings come from the ConfigMap and Secret this chart renders
+# (templates/coder-config.yaml, from the values above), so there's rarely a reason to add env here.
+coder:
+  enabled: true                     # false = an existing Coder (attach.enabled)
+  coder:
+    nodeSelector:
+      kubernetes.io/arch: amd64
+    image:
+      # The air-gap image (images/coder: Coder + Terraform provider mirror).
+      repo: ghcr.io/coder/coder     # << <imageRegistry>/coder-platform/coder
+      tag: ""                       # << e.g. v2.37.3 (empty = the chart's appVersion, v2.37.3)
+    annotations:
+      argocd.argoproj.io/sync-wave: "2"   # after the database (wave 1)
+    podAnnotations: {}              # << ./install adds checksum/config so a settings change restarts Coder
+    envUseClusterAccessURL: false
+    envFrom:
+      - configMapRef:
+          name: coder-platform-config
+    env:
+      - name: CODER_PG_CONNECTION_URL
+        valueFrom:
+          secretKeyRef:
+            name: coder-db-app      # "<postgres.name>-app"
+            key: uri
+      - name: CODER_OIDC_CLIENT_SECRET
+        valueFrom:
+          secretKeyRef:
+            name: keycloaking-coder-oidc
+            key: client-secret
+            optional: true
+      # Set by the bootstrap Job (ConfigMap coder-platform-auth, not rendered by the chart) once it holds an
+      # automation token: Coder starts with password sign-in on for that first minute, then oidc.disablePasswordAuth.
+      - name: CODER_DISABLE_PASSWORD_AUTH
+        valueFrom:
+          configMapKeyRef:
+            name: coder-platform-auth
+            key: CODER_DISABLE_PASSWORD_AUTH
+            optional: true
+    # The private CA (Secret tls-ca) and Keycloak's CA; both optional, so public CAs need neither Secret.
+    volumes:
+      - name: tls-ca
+        secret:
+          secretName: tls-ca
+          optional: true
+          items:
+            - key: ca.crt
+              path: ca.crt
+      - name: keycloaking-ca
+        secret:
+          secretName: keycloaking-coder-ca
+          optional: true
+    volumeMounts:
+      - name: tls-ca
+        mountPath: /etc/ssl/certs/coder-platform-ca.crt
+        subPath: ca.crt
+        readOnly: true
+      - name: keycloaking-ca
+        mountPath: /etc/keycloaking/ca
+        readOnly: true
+    service:
+      type: ClusterIP
+    # The chart renders Coder's route itself (templates/coder-route.yaml: hostnames from global.domain).
+    httproute:
+      enable: false
+    ingress:
+      enable: false

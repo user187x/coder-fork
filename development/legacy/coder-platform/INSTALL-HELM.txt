@@ -1,0 +1,190 @@
+===================================================================================================
+ CODER PLATFORM - AIR-GAPPED INSTALLATION WITH HELM
+ Bundle: coder-platform-airgap-1.0.0-coder2.37.3
+===================================================================================================
+
+Follow the steps in order. Do not skip steps. Every command is typed exactly as shown.
+Every ./install step can be run again safely if something goes wrong.
+(For an Argo CD installation use INSTALL-ARGOCD.txt instead.)
+
+
+---------------------------------------------------------------------------------------------------
+PART A - ON THE CONNECTED MACHINE: FILL THE GOLD DIRECTORY
+---------------------------------------------------------------------------------------------------
+
+ 1. Create an empty folder on the USB drive (the "gold directory"), for example:
+        coder-gold/
+
+ 2. Copy these files from  data/apps/argocd/coder/coder-platform/dist/  into it:
+        coder-platform-airgap-1.0.0-coder2.37.3.tar.gz          (the bundle, about 1.5 GB)
+        coder-platform-airgap-1.0.0-coder2.37.3.tar.gz.sha256   (its checksum)
+        INSTALL-HELM.txt                                          (this file)
+        INSTALL-ARGOCD.txt                                        (the Argo CD variant)
+
+ 3. Copy your organization's root CA certificate (PEM format, starts with -----BEGIN CERTIFICATE-----)
+    into the gold directory and name it:
+        ca.crt
+    This is the CA that signed the production Traefik certificate (and Keycloak's). If the production
+    certificates come from a public CA, skip this step.
+
+ 4. The gold directory now contains exactly:
+        coder-platform-airgap-1.0.0-coder2.37.3.tar.gz
+        coder-platform-airgap-1.0.0-coder2.37.3.tar.gz.sha256
+        INSTALL-HELM.txt
+        INSTALL-ARGOCD.txt
+        ca.crt                     (only if you have a private CA)
+
+    Nothing else is needed. No internet access is needed on the other side.
+
+
+---------------------------------------------------------------------------------------------------
+PART B - BEFORE YOU START ON THE PRODUCTION SIDE (CHECKLIST)
+---------------------------------------------------------------------------------------------------
+
+ 5. Confirm each item. Write the values down; you type them in step 11.
+
+    [ ] A Linux machine (x86_64) with bash, curl, tar and sha256sum, and kubectl access to the
+        production cluster as a cluster administrator.
+    [ ] The cluster runs Kubernetes 1.27 or newer and has a default StorageClass.
+    [ ] Traefik v3 runs in the cluster with the Gateway API provider enabled, and a Gateway exists
+        (default name "traefik-gateway" in namespace "traefik") with an HTTPS listener whose
+        certificate covers   coder.<your domain>   and   *.<your domain>.
+    [ ] DNS:  coder.<your domain>  and  *.<your domain>  point to Traefik, both for users' browsers
+        AND from inside the cluster.
+    [ ] A container registry the cluster nodes can pull from (e.g. Harbor). In Harbor, create the
+        project first (e.g. "coder-platform"). Know its address, e.g.
+            harbor.corp.example.com/coder-platform
+        and, if it needs a login, a username and password with push rights.
+        The cluster nodes must trust the registry's certificate.
+    [ ] Keycloak: a realm (e.g. "master") with a CONFIDENTIAL client named "coder" that has
+            Valid redirect URI:  https://coder.<your domain>/api/v2/users/oidc/callback
+        and the "profile" and "email" client scopes. Copy the client secret
+        (Keycloak > Clients > coder > Credentials). You type it once in step 16.
+    [ ] The Keycloak username and email of each person who should be a Coder administrator.
+
+
+---------------------------------------------------------------------------------------------------
+PART C - UNPACK AND CONFIGURE
+---------------------------------------------------------------------------------------------------
+
+ 6. Copy the gold directory to the install machine and open a terminal in it:
+        cd /path/to/coder-gold
+
+ 7. Check that the bundle arrived intact (must print "OK"):
+        sha256sum -c coder-platform-airgap-1.0.0-coder2.37.3.tar.gz.sha256
+
+ 8. Unpack it and enter the new directory:
+        tar -xzf coder-platform-airgap-1.0.0-coder2.37.3.tar.gz
+        cd coder-platform-airgap-1.0.0-coder2.37.3
+
+ 9. Check every file inside (must print nothing):
+        sha256sum -c --quiet SHA256SUMS
+
+10. Put the CA certificate next to the installer (skip if you have no ca.crt):
+        cp ../ca.crt ./ca.crt
+
+11. Create the answer file and edit it:
+        cp install.conf.example install.conf
+        vi install.conf            (or nano install.conf)
+
+    Set these lines (examples shown; use your own values):
+        DOMAIN=corp.example.com
+        REGISTRY=harbor.corp.example.com/coder-platform
+        OIDC_ISSUER_URL=https://keycloak.corp.example.com/realms/master
+        ADMINS="jdoe:jdoe@corp.example.com asmith:asmith@corp.example.com"
+        CA_FILE=./ca.crt                 (leave empty:  CA_FILE=   if you have no private CA)
+        REGISTRY_USERNAME=robot-user     (leave empty if the registry needs no login)
+    Optional, to let only members of certain Keycloak groups sign in:
+        OIDC_GROUP_FIELD=groups
+        OIDC_ALLOWED_GROUPS="/KeycloakGroup/Admin"
+        (nested groups as full paths; the "coder" client needs a Group Membership mapper, claim "groups")
+
+    Leave everything else as it is unless you know you need it (Gateway name, namespaces, ...).
+    Do not change DEPLOY (it must stay DEPLOY=helm for this guide).
+
+12. Make sure kubectl points at the PRODUCTION cluster (the installer uses the current context):
+        kubectl config current-context
+    If it is wrong, switch it:  kubectl config use-context <production context>
+
+13. Only if the REGISTRY uses a certificate from your private CA, let the image upload trust it:
+        export SSL_CERT_FILE=$PWD/ca.crt
+
+
+---------------------------------------------------------------------------------------------------
+PART D - INSTALL (RUN THESE IN THIS EXACT ORDER)
+---------------------------------------------------------------------------------------------------
+
+14. Pre-flight check. Changes nothing. Every line must say OK or WARN; fix every FAIL line and run
+    it again until it ends with "Preflight passed".
+        ./install preflight
+
+    WARN lines are information. These are normal before the install:
+        - "Traefik has no rewrite-body plugin yet"         (step 17 adds it)
+        - "image(s) not in <registry> yet"                  (step 15 pushes them)
+        - "... doesn't resolve from this host"              (only this machine's DNS; fine if browsers
+                                                             and the cluster resolve the names)
+    Lines like "keycloaking-coder-oidc will be created" are OK lines: step 16 creates them.
+
+15. Push the images to the registry (about 4 GB, a few minutes). Asks for the registry password if
+    REGISTRY_USERNAME is set.
+        ./install images
+    Ends with:  "6 image(s) in <registry>"
+
+16. Create the Secrets. Asks once for the Keycloak client secret (and the registry password for image
+    pulls, if REGISTRY_USERNAME is set). Typing is hidden.
+        ./install secrets
+
+17. Enable Traefik's rewrite-body plugin (adds the bundled copy to the running Traefik; answer "y").
+        ./install plugin
+    Ends with "plugin enabled" or "already loaded".
+    If it stops with "Traefik is managed by Argo CD / Flux": add the printed values to Traefik's own
+    Application, sync it, then run step 17 again.
+
+18. Deploy. Takes 10-20 minutes the first time (database, Coder, then the first administrator setup
+    and the workspace template). Do not interrupt it.
+        ./install deploy
+    Ends with:  "OK    release coder-platform deployed"
+
+19. Verify everything end to end (through the Gateway, like a browser):
+        ./install verify
+    Ends with:  "All checks passed."
+
+
+---------------------------------------------------------------------------------------------------
+PART E - FIRST SIGN-IN
+---------------------------------------------------------------------------------------------------
+
+20. Open  https://coder.<your domain>  in a browser and click "Sign in with your certificate".
+    Sign in with Keycloak as one of the people in ADMINS. You land in Coder as an owner.
+
+21. Create a workspace from the template "Ubuntu desktop (VNC, code-server, marimo)" to confirm it
+    starts (the first start pulls the 3.5 GB workspace image; allow a few minutes).
+
+22. Keep a safe copy of these two files for upgrades and re-installs:
+        install.conf
+        ca.crt
+
+
+---------------------------------------------------------------------------------------------------
+IF SOMETHING GOES WRONG
+---------------------------------------------------------------------------------------------------
+
+  - Show what is running, the setup Job's log, and where the emergency admin password is:
+        ./install status
+  - Fix the cause, then run the failed step again (then the steps after it). All steps are safe to
+    repeat.
+  - Emergency admin (only if nobody can sign in with Keycloak): user "coder-admin"; its password:
+        kubectl -n coder get secret coder-init-auth -o jsonpath='{.data.password}' | base64 -d; echo
+  - AGENTS.md (inside the bundle) explains the common failures in detail.
+
+
+---------------------------------------------------------------------------------------------------
+LATER: UPGRADING TO A NEWER BUNDLE
+---------------------------------------------------------------------------------------------------
+
+  1. Back up Coder's database first (Coder upgrades cannot be undone):
+        PRIMARY=$(kubectl -n coder get cluster.postgresql.cnpg.io coder-db -o jsonpath='{.status.currentPrimary}')
+        kubectl -n coder exec $PRIMARY -c postgres -- pg_dump -Fc -d app > coder-db-$(date +%F).dump
+  2. Unpack the new bundle next to the old one (steps 7-9), copy your saved install.conf and ca.crt
+     into it (steps 10-11 without editing), then run steps 14 to 19 again.
+     Users, workspaces, the database, logo, announcements and certificates are kept.

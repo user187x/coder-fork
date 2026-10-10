@@ -1,0 +1,91 @@
+{{- /*
+The dashboard add-on service (coder-ui-updates). files/ui holds the files the cluster's ConfigMap coder-ui-updates
+served and the manifests ../../coder-ui-updates/coder-ui-updates applies; their @@PLACEHOLDERS@@ are filled in here
+from the values instead of from the running cluster. The default logo / avatar ConfigMaps
+(coder-ui-updates-default-*) are made by ../install.sh: Helm's release record (1 MiB) couldn't hold the GIFs.
+*/ -}}
+{{- if .Values.uiUpdates.enabled }}
+{{- $u := .Values.uiUpdates }}
+{{- $ns := .Release.Namespace }}
+{{- $bannerOn := $u.banner }}
+{{- $static := list }}
+{{- $sum := "" }}
+{{- range $path, $_ := .Files.Glob "files/ui/*" }}
+{{- $f := base $path }}
+{{- if not (or (hasSuffix ".py" $f) (hasSuffix ".yaml" $f)) }}{{ $static = append $static $f }}{{ end }}
+{{- if not (hasSuffix ".yaml" $f) }}{{ $sum = printf "%s%s" $sum ($.Files.Get $path | sha256sum) }}{{ end }}
+{{- end }}
+{{- $items := list }}
+{{- range $static }}{{ $items = append $items (printf "              - {key: %s, path: %s}" . .) }}{{ end }}
+{{- $hidden := list }}
+{{- range $u.hideSupportLinks }}{{ $hidden = append $hidden (lower (trim .)) }}{{ end }}
+{{- /* Secrets Coder mounts (the certificate overview reads them); never empty: the CA Secret is always one. */ -}}
+{{- $certSecrets := list $u.caSourceSecret }}
+{{- range (.Values.coder.coder.volumes | default list) }}{{ with .secret }}{{ $certSecrets = append $certSecrets .secretName }}{{ end }}{{ end }}
+{{- $quoted := list }}{{ range ($certSecrets | uniq | sortAlpha) }}{{ $quoted = append $quoted (quote .) }}{{ end }}
+{{- $coderSvc := include "ci.coderService" . }}
+{{- $fill := dict
+  "@@NAMESPACE@@" $ns
+  "@@LABELS@@" (printf "{app.kubernetes.io/name: coder-ui-updates, app.kubernetes.io/part-of: coder, app.kubernetes.io/managed-by: %s, app.kubernetes.io/instance: %s}" .Release.Service .Release.Name)
+  "@@PLUGIN@@" .Values.traefik.pluginName
+  "@@HIDDEN_LINKS@@" (toJson $hidden)
+  "@@VIEW_PATH@@" $u.viewPath
+  "@@VIEW_LABEL@@" $u.viewLabel
+  "@@HOST@@" .Values.coderHost
+  "@@GATEWAY_NAME@@" .Values.gateway.name
+  "@@GATEWAY_NAMESPACE@@" .Values.gateway.namespace
+  "@@CODER_SERVICE@@" $coderSvc
+  "@@CODER_PORT@@" "80"
+  "@@IMAGE@@" $u.image
+  "@@CHECKSUM@@" ($sum | sha256sum | trunc 16)
+  "@@BANNER_URL@@" (ternary (printf "http://coder-banner.%s.svc.cluster.local:80" $ns) "" $bannerOn)
+  "@@ADMIN_ROLES@@" (join "," $u.adminRoles)
+  "@@CODER_URL@@" (include "ci.accessURL" .)
+  "@@KEYCLOAK_NAMESPACE@@" ($u.keycloakNamespace | default "")
+  "@@KEYCLOAK_ADMIN_SECRET@@" $u.keycloakAdminSecret
+  "@@ARGOCD_NAMESPACE@@" $u.argocd.namespace
+  "@@ARGOCD_APP@@" ($u.argocd.app | default "")
+  "@@CA_SOURCE_SECRET@@" $u.caSourceSecret
+  "@@WORKSPACE_NAMESPACE@@" $ns
+  "@@CODER_DB_SECRET@@" $u.coderDB.secretName
+  "@@CODER_DB_SECRET_KEY@@" $u.coderDB.secretKey
+  "@@CODER_DB_CA_SECRET@@" $u.coderDB.caSecretName
+  "@@CODER_CERT_SECRETS@@" (join ", " $quoted)
+  "@@ATTACHED@@" "false"
+  "@@OIDC_SECRET_NAME@@" $u.oidcSecretName
+  "@@LOGS_DB_IMAGE@@" $u.logsDBImage
+  "@@STATIC_ITEMS@@" (join "\n" $items)
+  "@@STORAGE_CLASS@@" (ternary (printf "  storageClassName: %s" $u.storage.storageClass) "" (ne ($u.storage.storageClass | default "") ""))
+  "@@SECTION_NAME@@" (ternary (printf "      sectionName: %q" .Values.gateway.sectionName) "" (ne .Values.gateway.sectionName ""))
+  "@@BANNER_LOADER@@" (ternary "        - regex: '</head>'\n          replacement: '<script src=\"/__banner/banner.js\" defer></script></head>'" "" $bannerOn)
+}}
+{{- /* The platform build of Coder has the add-ons built in: only /__coder-ui/ is routed, nothing is rewritten. */ -}}
+{{- $files := list "rbac.yaml" "rbac-workspaces.yaml" "rbac-cluster.yaml" "logs-db.yaml" "ui-service.yaml" }}
+{{- if $u.nativeDashboard }}{{ $files = append $files "httproute-native.yaml" }}{{ else }}{{ $files = concat $files (list "middlewares.yaml" "httproute.yaml") }}{{ end }}
+{{- if $u.keycloakNamespace }}{{ $files = append $files "rbac-keycloak.yaml" }}{{ end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-ui-updates
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: coder-ui-updates
+    {{- include "ci.labels" . | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/ui/*" }}
+  {{- if not (or (hasSuffix ".yaml" (base $path)) (hasSuffix ".gif" (base $path)) (hasSuffix ".png" (base $path))) }}
+  {{ base $path }}: {{ $.Files.Get $path | toJson }}   {{- /* a JSON string: the file's exact bytes */}}
+  {{- end }}
+  {{- end }}
+binaryData:   # images (the Workspaces icon)
+  {{- range $path, $_ := .Files.Glob "files/ui/*.{gif,png}" }}
+  {{ base $path }}: {{ $.Files.Get $path | b64enc }}
+  {{- end }}
+{{- range $files }}
+{{- $text := $.Files.Get (printf "files/ui/%s" .) }}
+{{- range $k, $v := $fill }}{{ $text = $text | replace $k $v }}{{ end }}
+{{- if regexFind "@@[A-Z_]+@@" $text }}{{ fail (printf "files/ui/%s: unfilled placeholder %s" . (regexFind "@@[A-Z_]+@@" $text)) }}{{ end }}
+---
+{{ $text }}
+{{- end }}
+{{- end }}

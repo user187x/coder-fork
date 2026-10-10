@@ -1,0 +1,5 @@
+dist/
+installer/generated/
+images/coder/extra-providers/*.tf
+# the chunked form (dist-chunks/) is what gets committed; ./file-chunk --assemble rebuilds this
+dist.tar

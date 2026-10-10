@@ -1,0 +1,213 @@
+# coder-airgapped 1.2.0: portable Helm chart of the live Coder fork
+
+This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
+reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
+installs with no network access.
+
+**Just want to deploy it? Follow [`DEPLOY.md`](DEPLOY.md).** This file has the details.
+ One `global:` block (domain, hostnames, registry, OIDC, Secret names, first user,
+Gateway) configures everything, from a values file or from an Argo CD Application.
+
+| Part | Live source it was captured from | In the chart |
+|---|---|---|
+| Coder server, `ghcr.io/user187x/coder-platform:2.0.0-platform.4` (Coder 2.37.3 + fork, built from `d01b8f6`) | Argo CD app `argocd/coder` (chart `coder` 2.37.3) | `charts/coder/` (upstream 2.37.3 + platform patch) + `values.yaml › coder` |
+| PostgreSQL `coder-db` (CloudNativePG, 2 instances) | extraTemplate of `argocd/coder` | `templates/database.yaml` |
+| Announcement banner | Argo CD app `argocd/coder-banner` (chart 0.4.1) | `charts/coder-banner/` (Harbor's 0.4.1 + platform patch) |
+| Platform service `coder-ui-updates` + `coder-ui-logs-db` + RBAC | `coder-ui-updates apply` (plain manifests) | `templates/ui-updates*.yaml`, `files/ui-updates/` (48 files, identical to the live ConfigMap) |
+| Workspace template `ubuntu-vnc-desktop` + `/__icons/` server | Helm release `coder/coder-workspace` rev 13 | `charts/coder-workspace/` (0.1.1-platform.1, see *Changes*) |
+| First owner | created by hand on the reference cluster | `templates/bootstrap-job.yaml` (new) |
+
+## Layout
+
+```
+coder-airgapped/                 the chart (helm install target)
+argocd/coder-airgapped-application.yaml   Argo CD Application (+ OCI repository Secret) installing the chart from the registry
+values-eks-airgap.example.yaml   the same settings as a values file for plain Helm / install.sh
+install.sh                       Secrets from files, default logo/avatar ConfigMaps, helm upgrade --install
+                                 (--prepare-only: just the Secrets and ConfigMaps, for Argo CD)
+mirror-images.sh                 push / save / verify / list the images in images.txt; `chart REPO` pushes the chart to OCI
+images.txt                       every image by group, with the digest saved and tested
+images/                          every image as a docker-save archive, linux/amd64 (images/README.md):
+  custom/                          the fork's Coder image, air-gap build (platform.4 + Terraform provider mirror) –
+                                   on no public registry, always keep
+  public/chart|prereqs|platform/   public images – delete for a smaller bundle (the -slim tarball has none)
+defaults/                        default logo + avatar (kept out of the chart: Helm's 1 MiB release record)
+prereqs/                         cloudnative-pg-0.29.0.tgz, traefik-41.4.0.tgz, Traefik values used on the reference cluster
+```
+
+## Prerequisites (on the target cluster)
+
+* Kubernetes 1.27+. The workspace PVCs use the default StorageClass.
+* **CloudNativePG operator.** The reference cluster runs chart 0.29.0 / operator 1.30.0: `./install.sh --cnpg`, or
+  `helm install cnpg prereqs/cloudnative-pg-0.29.0.tgz -n cnpg-system --create-namespace`.
+* **Traefik v3 with the Gateway API provider** and a Gateway `traefik/traefik-gateway` that has an HTTPS listener for
+  `coder.<domain>` and `*.<domain>`. The reference cluster's Traefik values are in
+  `prereqs/traefik-41.4.0.reference-values.yaml`.
+* **Traefik's `rewrite-body` local plugin**, used by the banner's middlewares. The full plugin source is under
+  `experimental.localPlugins` in that values file, so it needs no network access.
+* **OIDC (Keycloak)** with a confidential client `coder` and redirect URI
+  `https://coder.<domain>/api/v2/users/oidc/callback`.
+* **DNS** for `coder.<domain>` and `*.<domain>` that resolves both inside and outside the cluster.
+
+## Configuration: `global`
+
+Every component reads `global` (Helm passes it to all subcharts), and any string value in the chart may reference
+it, e.g. `'coder.{{ .Values.global.domain }}'`. The defaults reproduce the reference cluster.
+
+| Value | Default | Used for |
+|---|---|---|
+| `global.domain` | `grey-marshall.com` | everything below that is left empty |
+| `global.coderHost` / `global.wildcardHost` | `coder.<domain>` / `*.<domain>` | Coder's access and wildcard URLs, all HTTPRoutes, banner, add-ons, template push |
+| `global.registry` | `""` (each image's own registry) | every image as `<registry>/<path>`, the layout `mirror-images.sh push` creates |
+| `global.imagePullSecrets` | `[]` | every pod that sets none of its own |
+| `global.gateway.{name,namespace}` | `traefik-gateway` / `traefik` | parentRef of every HTTPRoute |
+| `global.oidc.*` | issuer `https://keycloak.<domain>/realms/master`, client `coder`, ... | Coder's OIDC settings |
+| `global.firstUser.{username,email}` | `admin` / `<username>@<domain>` | first owner: the Keycloak account with this email, from its first sign-in |
+| `global.database.name` | `coder-db` | CNPG Cluster; Secrets `<name>-app`, `<name>-ca` |
+| `global.secretNames.*` | `coder-init-auth`, `coder-ui-logs-db`, `tls-ca`, `keycloaking-coder-ca`, `keycloaking-coder-oidc`, `tls-wild-cert` | every reference to those Secrets, including the workspace template's `tls-ca` |
+
+Extra Coder environment goes in `coder.coder.extraEnv` (appended), so you never have to repeat the chart's `env` list.
+
+## Argo CD
+
+1. Images: `./mirror-images.sh push <REGISTRY>` (from `images/`; `push <REGISTRY> custom` when the public ones are already there)
+2. Chart: `helm registry login <REGISTRY>`, then `./mirror-images.sh chart <REGISTRY>/charts` (`ECR=1` creates the
+   ECR repository, `PLAIN_HTTP=1` for a registry without TLS).
+3. The Secrets and ConfigMaps the chart does not create:
+   `./install.sh --prepare-only --ca ca.crt --oidc-ca keycloak-ca.crt --oidc-secret-file oidc-client-secret.txt
+   --tls-crt wildcard.crt --tls-key wildcard.key`. Add `--secret-name tlsCa=<name>` etc. when you rename them in
+   `global.secretNames`.
+4. Edit the `CHANGE-ME`s in `argocd/coder-airgapped-application.yaml`, then `kubectl apply -f` it.
+
+The Application must keep three settings:
+
+* `ServerSideApply=true`: the `coder-ui-updates` ConfigMap (about 800 KB) exceeds client-side apply's 256 KB
+  annotation.
+* The annotation `argocd.argoproj.io/compare-options: ServerSideDiff=true`: without it, three HTTPRoutes stay
+  OutOfSync over fields the Gateway controller fills in, and self-heal keeps re-syncing.
+* `ignoreDifferences` on Secrets' `/data/password` with `RespectIgnoreDifferences=true`: Argo CD renders without
+  cluster access, so the generated passwords would otherwise change on every refresh.
+* `ignoreDifferences` on `coder-banner-state` `/data`: the banner keeps published announcements there.
+
+The database, the add-on PVC and the generated Secrets carry `argocd.argoproj.io/sync-options: Prune=false,Delete=false`,
+so deleting the Application never deletes data. The Keycloak view reads the Application but does not edit
+`helm.valuesObject`; change Coder's settings in the Application.
+
+## Install with Helm
+
+Connected side (only for the `-slim` bundle; the full one already has every image in `images/`):
+
+```bash
+./mirror-images.sh save               # pulls the public images by digest into images/public/
+```
+
+Air-gapped side:
+
+```bash
+./mirror-images.sh push 123456789012.dkr.ecr.us-east-1.amazonaws.com             # ECR=1 to create repositories
+cp values-eks-airgap.example.yaml my-values.yaml                                     # replace every CHANGE-ME
+./install.sh -f my-values.yaml --cnpg \
+  --ca ca.crt --oidc-ca keycloak-ca.crt --oidc-secret-file oidc-client-secret.txt \
+  --tls-crt wildcard.crt --tls-key wildcard.key
+./install.sh -f my-values.yaml --dry-run    # render + server-side validation only, changes nothing
+```
+
+Plain Helm works too: `helm upgrade --install coder ./coder-airgapped -n coder -f my-values.yaml` after
+`./install.sh --prepare-only ...` (or create the four `global.secretNames` Secrets yourself, or set `secrets.*.create`).
+
+Use namespace `coder` and release `coder`: the workspace template refuses other namespaces.
+
+What happens: Coder, its database, the banner, the platform service and the icon server start. Then the
+`coder-bootstrap-first-user` hook creates Coder's first user (owner) from Secret `coder-init-auth` if Coder has
+none. With password sign-in off it also links that owner to Keycloak by email (`global.firstUser.email`), and mints
+a 30-minute API token into Secret `coder-workspace-push-token`. Finally `coder-workspace-push-template` pushes
+`ubuntu-vnc-desktop` with that token. People sign in with Keycloak; the account with `global.firstUser.email` is the
+owner.
+
+## Changes from the live deployment (deliberate)
+
+* **Bootstrap Job (new).** Coder does not read `CODER_BOOTSTRAP_INITIAL_USER_PASSWORD` (the env var is still set,
+  as live, but has no effect), so a fresh install had no first user. Also, with `CODER_DISABLE_PASSWORD_AUTH=true`
+  this Coder refuses **every** password login, owners included (`coderd/userauth.go`). A password owner could
+  therefore never sign in or push the template. The Job switches the first user to OIDC (Coder links a Keycloak
+  sign-in to an existing OIDC user by email), and writes a short-lived owner token for the push straight into Coder's
+  database (`files/bootstrap/bootstrap.py`). There is no break-glass password.
+* **`agent-audit.tf` is off by default** (`coder-workspace.agentAudit`). The live active template version (Sep 28)
+  is `main.tf` + `certificates.tf`, byte-identical to the chart's. `agent-audit.tf` was added later and never went
+  live: its `%{...}` snoopy format strings are Terraform template directives, so `terraform init` failed. The
+  release's Oct 2 push never produced a template version. The strings are now escaped (`%%{`), so it can be
+  switched on.
+* **Push Job sign-in (fixed, coder-workspace 0.1.1).** 0.1.0 signs in with `curl`/`jq`, but neither the `coder`
+  image (`latest` or `v2.37.3`) contains them. Live only worked because `install-workspace-chart` pre-created a token
+  Secret. A python3 init container now does the sign-in. The push goes to the in-cluster Service
+  (`coder-workspace.coder.internalUrl`).
+* **Platform patch on the vendored subcharts** (`coder` 2.37.3-platform.1, `coder-banner` 0.4.1-platform.1,
+  `coder-workspace` 0.1.1-platform.1, applied by `../development/tools/apply-platform-patch.py`). Templated string
+  values, `global.imagePullSecrets`, and `coder.extraEnv`. The upstream templates are otherwise untouched. Do not run
+  `helm dependency update` on this chart: there is nothing to fetch.
+* **`ui-service.py` reads `OIDC_SECRET`, `OIDC_CA_SECRET` and `CODER_DB_CLUSTER`** (with the old names as defaults)
+  so renamed Secrets and databases work. The chart sets them.
+* **Parameterized for air gap.** Images of every component, the workspace image inside `main.tf`
+  (`coder-workspace.workspaceImage`), `imagePullSecrets`, and the CNPG `imageName` (live: the operator default,
+  same image). With the default values, the rendered Terraform is byte-identical to live.
+* **Coder image `2.0.0-platform.4-airgap` (new default).** Live runs `2.0.0-platform.4`, which downloads Terraform
+  providers from `registry.terraform.io` at every template push and workspace build. Offline, every push fails. The
+  `-airgap` image is the same image plus a provider mirror (`coder/coder`, `hashicorp/kubernetes`) and a
+  `TF_CLI_CONFIG_FILE` that only uses it (`../development/airgap-image`). Other templates' providers: add
+  `.tf` files to its `extra-providers/` and run `../development/tools/build-airgap-image.sh`.
+* **Fixed while testing the install air-gapped (1.2.0):** all `checksum/*` annotations quoted (an all-digit hash
+  was read as a number and rejected); `install.sh` uses server-side apply (the 1 MB default-logo ConfigMap broke
+  client-side apply); `images.txt` takes Python from `docker.io/library/python` instead of the reference cluster's
+  private Harbor; the Gateway API CRDs (Traefik's chart does not install them) ship in `prereqs/`.
+* **Left out because unused or broken on live:** Secrets `cloudflare-token`, `coder-ca-cert` and `coder-server-tls`
+  (nothing references them); the CNPG `Database` `coder-db-object` (never applied: role "coder" does not exist).
+
+## Verification done at capture time
+
+* `helm template coder ./coder-airgapped -n coder` was diffed against every live object. All match except for
+  server/operator defaults, `2000m` vs `2` quantity forms, a duplicated name in the live Role, the checksum
+  annotation, and the banner's `app.kubernetes.io/instance` label (it follows the release name: `coder` here,
+  `coder-banner` live).
+* `kubectl apply --server-side --dry-run=server --validate=strict` against the reference cluster accepted all 51
+  objects. The one rejection was the banner Deployment's selector, which is immutable and changes because of that
+  instance label. This only matters when adopting the reference cluster in place: delete `deploy/coder-banner`
+  first there. A new cluster is unaffected.
+* The EKS example values render with no reference-cluster hostname or registry left anywhere.
+* 1.1.0 (`global`): with default values it renders the same 51 objects as 1.0.0, apart from the Argo CD
+  annotations and the three new `coder-ui-updates` env vars. A render with every `global` value changed (domain,
+  hosts, registry with port, Gateway, OIDC, every Secret name, database name, first user, pull secret) leaves no
+  default name in any reference. The chart was pushed to an OCI registry with `mirror-images.sh chart`, pulled back
+  with `helm pull`, and rendered with the Application's values, identical to the local chart (49 objects).
+
+## End-to-end air-gap test (1.2.0)
+
+DEPLOY.md was followed step by step, from a fresh extraction of `coder-airgapped-1.2.0.tar.gz`. The target was a
+kind cluster (Kubernetes 1.37) whose node had **all non-private egress blocked** (both pulls from Docker Hub and pod
+traffic to github.com fail). The registry was empty and the node had no cached images. Step 3 ran in a docker
+with no images at all: all 8 images were loaded from `images/` (none pulled). Prerequisites in place beforehand: Gateway API v1.5.1 CRDs, Traefik 41.4.0
+(`prereqs/`) with the rewrite-body plugin, Argo CD 3.5.2, Keycloak 26.4 with client `coder`, and wildcard DNS.
+
+* Steps 1–7: every step succeeded. Argo CD reached **Synced / Healthy / Succeeded** in under 3 minutes. Every
+  container (Coder, database, banner, add-ons, logs DB, icons, workspace) ran from the mirror registry, with no
+  pull errors. A second sync also succeeded.
+* Step 8, as a browser inside the network, **19/19 checks**. Coder answers over HTTPS through the Gateway. Password
+  login is refused. Keycloak sign-in works, and the `global.firstUser.email` account is the owner. The template was
+  pushed. `/__coder-ui/`, `/__banner/`, `/__icons/` and the dashboard load. A workspace builds and its agent
+  connects. The workspace's apps were unhealthy, as expected (first gap below).
+
+Problems this test found, all fixed in 1.2.0: no owner could ever sign in and the template push failed (password
+login is fully disabled); `terraform init` needs `registry.terraform.io` (fixed with the `-airgap` image's provider
+mirror); `agent-audit.tf` broke `terraform init`; an all-digit checksum annotation was rejected; `install.sh` failed
+on the 1 MB logo ConfigMap; `images.txt` pointed at the private Harbor; the Gateway API CRDs were missing from
+`prereqs/`; three HTTPRoutes stayed OutOfSync. The harness to repeat the test is in
+`../development/tools/airgap-e2e/`.
+
+## Known gaps for a strict air gap
+
+* **Workspace start-up installs its apps from the internet** (`main.tf`): code-server (`code-server.dev/install.sh`),
+  File Browser (`raw.githubusercontent.com`), marimo (`pip install`), and the XFCE + TigerVNC + noVNC desktop
+  (`apt-get install`). In a strict air gap the agent connects, but those apps are missing. Fix this with a workspace
+  image that has them preinstalled (set `coder-workspace.workspaceImage`) and drop the install steps from `main.tf`.
+  Alternatively, point apt/pip at internal mirrors.
+* The noVNC app icon is a wikimedia.org URL (cosmetic).
+* `ghcr.io/coder/coder:latest` (the push Job's CLI) is a floating tag: mirror it once and keep that copy.

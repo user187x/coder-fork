@@ -1,0 +1,77 @@
+{{- include "coder-banner.platform.values" . -}}
+# Chart defaults for the banner (from values.yaml), used until an admin publishes something.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-banner-content
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+data:
+  banner.json: |
+    {{- dict
+        "enabled" .Values.banner.enabled
+        "id" (include "coder-banner.id" .)
+        "level" .Values.banner.level
+        "title" .Values.banner.title
+        "message" .Values.banner.message
+        "linkText" .Values.banner.linkText
+        "linkUrl" .Values.banner.linkUrl
+        "dismissible" .Values.banner.dismissible
+        "showOnLoginPage" .Values.banner.showOnLoginPage
+        "refreshSeconds" .Values.banner.refreshSeconds
+        "effect" (include "coder-banner.effect" .)
+        "repeat" (.Values.banner.repeat | default false)
+      | toPrettyJson | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-banner-app
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+data:
+  {{- range $name := list "banner.js" "server.py" "live.py" "admin.html" "app.js" "app.css" "emoji-picker.js" }}
+  {{ $name }}: |
+    {{- $.Files.Get (printf "files/%s" $name) | nindent 4 }}
+  {{- end }}
+---
+# Third-party code, kept apart from ours: the text-effects library (Anime.js, MIT). Served as-is, unmodified.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-banner-vendor
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+data:
+  {{- range $name := list "anime.umd.min.js" "LICENSE-animejs.md" }}
+  {{ $name }}: |
+    {{- $.Files.Get (printf "files/vendor/%s" $name) | nindent 4 }}
+  {{- end }}
+---
+# The emoji list for the admin page's emoji picker: one generated script (support/build-emoji-data), in its own
+# ConfigMap because of its size.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-banner-emoji
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+data:
+  {{- range $name := list "emoji-data.js" "LICENSE-emojibase.md" }}
+  {{ $name }}: |
+    {{- $.Files.Get (printf "files/emoji/%s" $name) | nindent 4 }}
+  {{- end }}
+---
+# What an admin publishes from the admin page (state.json). Helm only owns the metadata: it never
+# renders `data`, so a `helm upgrade` cannot overwrite a published banner.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-banner-state
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}

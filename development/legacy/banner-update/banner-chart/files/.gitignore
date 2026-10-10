@@ -1,0 +1,4 @@
+# The repo-wide .gitignore ignores *.css; the admin page stylesheet is source and must be tracked.
+!app.css
+__pycache__/
+*.pyc

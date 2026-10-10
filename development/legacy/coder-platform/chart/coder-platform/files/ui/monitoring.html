@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Monitoring · Coder</title>
+  <link rel="stylesheet" href="/__coder-ui/view.css">
+  <link rel="stylesheet" href="/__coder-ui/monitoring.css">
+  <style id="coder-ui-theme"></style>
+</head>
+<body>
+<main>
+  <section class="card" aria-labelledby="users-h">
+    <div class="card-head">
+      <h2 id="users-h">Users and running workspaces</h2>
+      <div class="row">
+        <input type="search" id="filter" placeholder="Filter users or workspaces" aria-label="Filter users or workspaces">
+        <label class="switch compact"><input type="checkbox" role="switch" id="only-running"><span class="track" aria-hidden="true"><span class="thumb"></span></span><span>Only users with running workspaces</span></label>
+      </div>
+    </div>
+    <p class="hint" id="summary">Loading…</p>
+    <div id="users" class="users"></div>
+  </section>
+</main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script type="module" src="/__coder-ui/monitoring-view.js"></script>
+</body>
+</html>

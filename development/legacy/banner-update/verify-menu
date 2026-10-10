@@ -1,0 +1,52 @@
+#!/bin/bash
+# Checks that Coder's user-menu "Codernauts" item is being replaced by the "Banner" link.
+# Run it after every Coder upgrade: the rewrite is tied to Coder's minified JavaScript, so if a new build
+# changes that code the rewrite quietly stops matching and Coder simply shows its stock menu.
+set -euo pipefail
+cd "$(dirname "$0")"
+# fetch-coder-domain sits next to the scripts in a bundle, and in ../util in the repository.
+FETCH_DOMAIN=./fetch-coder-domain; [[ -x "${FETCH_DOMAIN}" ]] || FETCH_DOMAIN=../util/fetch-coder-domain
+
+CODER_URL=$("${FETCH_DOMAIN}")
+WORK=$(mktemp -d)
+trap 'rm -rf "${WORK}"' EXIT
+. ./coder-ca.sh "${WORK}"
+
+# Fetch the entry chunk exactly as a browser does (compressed, following the page's own script tag).
+PAGE=$(curl -sS "${CA_OPTS[@]}" -H "Accept: text/html" "${CODER_URL}/login" || true)
+[[ -n "${PAGE}" ]] || { echo "FAIL: could not load ${CODER_URL}/login (certificate or network problem?)"; exit 1; }
+if ! grep -q '__banner/banner.js' <<<"${PAGE}"; then
+ echo "FAIL  the banner is not active: Coder's page has no banner loader."
+ echo "      If you have just installed it, give it a minute (Helm: kubectl -n ${CODER_NAMESPACE:-coder} get pods;"
+ echo "      Argo CD: kubectl -n argocd get application coder-banner), then run this again."
+ exit 1
+fi
+ENTRY=$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' <<<"${PAGE}" | head -1)
+[[ -n "${ENTRY}" ]] || { echo "FAIL: could not find Coder's entry chunk in ${CODER_URL}/login"; exit 1; }
+curl -sS --compressed "${CA_OPTS[@]}" "${CODER_URL}${ENTRY}" -o "${WORK}/entry.mjs"
+echo "entry chunk: ${ENTRY} ($(stat -c%s "${WORK}/entry.mjs") bytes after decompression)"
+
+status=0
+if grep -qF '/__banner/admin' "${WORK}/entry.mjs" && ! grep -q 'Codernauts' "${WORK}/entry.mjs"; then
+ echo "OK    the user menu links to /__banner/admin"
+else
+ echo "FAIL  the Codernauts item was not replaced (Coder's menu code has probably changed)"
+ status=1
+fi
+if grep -qF 'let __bannerAdmin=' "${WORK}/entry.mjs"; then
+ echo "OK    the item is limited to admins"
+else
+ echo "WARN  the admin check was not injected: the item shows to everyone (the admin page still enforces access)"
+fi
+if command -v node >/dev/null; then
+ if node --check "${WORK}/entry.mjs" 2>/dev/null; then echo "OK    the rewritten bundle is valid JavaScript"; else echo "FAIL  the rewritten bundle is NOT valid JavaScript - run: helm upgrade coder-banner ./banner-chart -n coder --reset-then-reuse-values --set menu.enabled=false"; status=1; fi
+fi
+if [[ ${status} -ne 0 ]]; then
+ cat <<'MSG'
+
+To fix: look at the current menu code and adjust the regexes in banner-chart/templates/_menu.tpl:
+  curl -s --compressed <entry chunk url> | grep -o '.\{400\}Codernauts.\{200\}'
+Meanwhile the rest of the banner keeps working; only the menu shortcut is affected.
+MSG
+fi
+exit ${status}

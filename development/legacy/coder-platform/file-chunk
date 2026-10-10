@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Split a large file into parts small enough for git (GitHub refuses files over 100 MiB), and put it back together.
+#
+#   ./file-chunk --chunk <file> [--parts N] [--dir dist-chunks] [--force]
+#       Splits <file> into N parts in <dir> (default: dist-chunks, next to this script). Without --parts, N is chosen
+#       so every part is at most 95 MiB. Writes <dir>/MANIFEST: the original file name (with its extension), size,
+#       SHA-256 of the whole file and of every part.
+#
+#   ./file-chunk --assemble [--dir dist-chunks] [--out <file>] [--force]
+#       Checks every part against MANIFEST, joins them into the original file (same name and extension, next to the
+#       chunk directory unless --out says otherwise) and checks the result's SHA-256.
+#
+#   ./file-chunk --verify [--dir dist-chunks]
+#       Only checks the parts against MANIFEST (e.g. after a git clone), changes nothing.
+#
+# Examples:
+#   ./file-chunk --chunk dist.tar                 # -> dist-chunks/dist.tar.part-0001 ... + MANIFEST
+#   ./file-chunk --chunk dist.tar --parts 20
+#   ./file-chunk --assemble                       # -> dist.tar (verified)
+#   ./file-chunk --assemble --out /tmp/dist.tar
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+MAX_PART=$((95 * 1024 * 1024))       # stays under GitHub's 100 MiB hard limit per file
+GITHUB_LIMIT=$((100 * 1024 * 1024))
+MODE=""; FILE=""; PARTS=""; DIR=""; OUT=""; FORCE=0
+
+usage() { sed -n '2,20p' "$0"; exit "${1:-0}"; }
+die() { echo "error: $*" >&2; exit 1; }
+say() { echo "$*"; }
+human() { numfmt --to=iec-i --suffix=B "$1" 2>/dev/null || echo "$1 bytes"; }
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+
+while [[ $# -gt 0 ]]; do
+ case "$1" in
+  --chunk) MODE=chunk; FILE="${2:-}"; [[ -n "${FILE}" ]] || die "--chunk needs a file"; shift 2 ;;
+  --assemble) MODE=assemble; shift ;;
+  --verify) MODE=verify; shift ;;
+  --parts) PARTS="${2:-}"; [[ "${PARTS}" =~ ^[1-9][0-9]*$ ]] || die "--parts needs a positive number"; shift 2 ;;
+  --dir) DIR="${2:-}"; [[ -n "${DIR}" ]] || die "--dir needs a directory"; shift 2 ;;
+  --out) OUT="${2:-}"; [[ -n "${OUT}" ]] || die "--out needs a file name"; shift 2 ;;
+  --force) FORCE=1; shift ;;
+  -h|--help) usage 0 ;;
+  *) echo "unknown argument: $1" >&2; usage 2 ;;
+ esac
+done
+[[ -n "${MODE}" ]] || usage 2
+DIR="${DIR:-${HERE}/dist-chunks}"
+MANIFEST="${DIR}/MANIFEST"
+command -v split >/dev/null && command -v sha256sum >/dev/null || die "needs split and sha256sum (GNU coreutils)"
+
+# --------------------------------------------------------------------------------------------------------- chunk
+chunk() {
+ [[ -f "${FILE}" ]] || die "no such file: ${FILE}"
+ local name size n part_size
+ name=$(basename "${FILE}")
+ size=$(stat -c %s "${FILE}")
+ [[ ${size} -gt 0 ]] || die "${FILE} is empty"
+ if [[ -n "${PARTS}" ]]; then n=${PARTS}; else n=$(( (size + MAX_PART - 1) / MAX_PART )); fi
+ [[ ${n} -le 9999 ]] || die "${n} parts is too many (at most 9999)"
+ [[ ${n} -le ${size} ]] || die "can't split ${size} bytes into ${n} parts"
+ part_size=$(( (size + n - 1) / n ))
+ if [[ ${part_size} -gt ${GITHUB_LIMIT} && ${FORCE} -eq 0 ]]; then
+  die "${n} parts would be $(human "${part_size}") each; GitHub refuses files over 100 MiB. Use at least $(( (size + MAX_PART - 1) / MAX_PART )) parts (or --force)."
+ fi
+ # Never mix parts of two files: an existing chunk directory is replaced only with --force.
+ if [[ -e "${DIR}" ]] && [[ -n "$(ls -A "${DIR}" 2>/dev/null)" ]]; then
+  [[ ${FORCE} -eq 1 ]] || die "${DIR} is not empty (use --force to replace its parts)"
+  [[ -f "${MANIFEST}" ]] || die "${DIR} has files but no MANIFEST: not removing them, pick another --dir"
+  find "${DIR}" -maxdepth 1 -type f \( -name '*.part-[0-9][0-9][0-9][0-9]' -o -name MANIFEST \) -delete
+ fi
+ mkdir -p "${DIR}"
+
+ say "splitting ${name} ($(human "${size}")) into ${n} part(s) of up to $(human "${part_size}") in ${DIR}"
+ local whole; whole=$(sha "${FILE}")
+ # -n N: N parts of (nearly) equal size, byte-exact; numeric 4-digit suffixes starting at 0001
+ split -n "${n}" -d -a 4 --numeric-suffixes=1 "${FILE}" "${DIR}/${name}.part-"
+
+ local ext=""
+ [[ "${name}" == *.* ]] && ext=".${name#*.}"   # everything after the first dot: .tar, .tar.gz, ...
+ {
+  echo "# file-chunk manifest: ./file-chunk --assemble rebuilds the file from these parts"
+  echo "name=${name}"
+  echo "extension=${ext}"
+  echo "size=${size}"
+  echo "sha256=${whole}"
+  echo "parts=${n}"
+  echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "# <sha256>  <part>"
+  local p
+  for p in "${DIR}/${name}".part-*; do echo "$(sha "${p}")  $(basename "${p}")"; done
+ } > "${MANIFEST}"
+
+ local got; got=$(find "${DIR}" -maxdepth 1 -name "${name}.part-*" | wc -l)
+ [[ ${got} -eq ${n} ]] || die "expected ${n} parts, found ${got}"
+ local largest; largest=$(find "${DIR}" -maxdepth 1 -name "${name}.part-*" -printf '%s\n' | sort -n | tail -n1)
+ say "done: ${n} part(s), largest $(human "${largest}"), manifest ${MANIFEST}"
+ say "to rebuild: $(basename "$0") --assemble$( [[ "${DIR}" != "${HERE}/dist-chunks" ]] && echo " --dir ${DIR}")"
+}
+
+# --------------------------------------------------------------------------------------------------------- verify
+read_manifest() {
+ [[ -f "${MANIFEST}" ]] || die "no ${MANIFEST} (was the file chunked with file-chunk?)"
+ M_NAME=$(sed -n 's/^name=//p' "${MANIFEST}"); M_EXT=$(sed -n 's/^extension=//p' "${MANIFEST}")
+ M_SIZE=$(sed -n 's/^size=//p' "${MANIFEST}"); M_SHA=$(sed -n 's/^sha256=//p' "${MANIFEST}")
+ M_PARTS=$(sed -n 's/^parts=//p' "${MANIFEST}")
+ [[ -n "${M_NAME}" && -n "${M_SIZE}" && -n "${M_SHA}" && -n "${M_PARTS}" ]] || die "${MANIFEST} is incomplete"
+ [[ "${M_NAME}" != */* ]] || die "unexpected file name in the manifest: ${M_NAME}"
+}
+verify_parts() {
+ read_manifest
+ local listed; listed=$(grep -cE '^[0-9a-f]{64}  ' "${MANIFEST}")
+ [[ ${listed} -eq ${M_PARTS} ]] || die "the manifest lists ${listed} parts but says parts=${M_PARTS}"
+ local missing=0 bad=0 want part
+ while read -r want part; do
+  if [[ ! -f "${DIR}/${part}" ]]; then echo "  missing: ${part}" >&2; missing=$((missing + 1)); continue; fi
+  [[ "$(sha "${DIR}/${part}")" == "${want}" ]] || { echo "  damaged: ${part}" >&2; bad=$((bad + 1)); }
+ done < <(grep -E '^[0-9a-f]{64}  ' "${MANIFEST}")
+ [[ ${missing} -eq 0 && ${bad} -eq 0 ]] || die "${missing} part(s) missing, ${bad} damaged (git lfs / partial clone?)"
+ say "all ${M_PARTS} part(s) of ${M_NAME} (extension ${M_EXT:-none}) are present and intact"
+}
+
+# --------------------------------------------------------------------------------------------------------- assemble
+assemble() {
+ verify_parts
+ local out="${OUT:-$(dirname "${DIR}")/${M_NAME}}"
+ [[ -e "${out}" && ${FORCE} -eq 0 ]] && die "${out} already exists (use --force to overwrite, or --out <file>)"
+ local tmp="${out}.assembling"
+ # concatenated in the manifest's order (the part names sort the same way)
+ : > "${tmp}"
+ local want part
+ while read -r want part; do cat "${DIR}/${part}" >> "${tmp}"; done < <(grep -E '^[0-9a-f]{64}  ' "${MANIFEST}")
+ [[ "$(stat -c %s "${tmp}")" == "${M_SIZE}" ]] || { rm -f "${tmp}"; die "assembled size differs from ${M_SIZE} bytes"; }
+ [[ "$(sha "${tmp}")" == "${M_SHA}" ]] || { rm -f "${tmp}"; die "assembled SHA-256 differs from the manifest"; }
+ mv -f "${tmp}" "${out}"
+ say "rebuilt ${out} ($(human "${M_SIZE}"), SHA-256 ${M_SHA:0:16}... matches the original)"
+}
+
+case "${MODE}" in
+ chunk) chunk ;;
+ verify) verify_parts ;;
+ assemble) assemble ;;
+esac

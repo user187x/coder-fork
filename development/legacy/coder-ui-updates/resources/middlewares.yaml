@@ -1,0 +1,339 @@
+# Traefik Middlewares that rewrite Coder's dashboard JavaScript (rendered and applied by ../coder-ui-updates).
+#
+# Coder's dashboard is client-rendered, so the menu and sidebar items exist in no HTML body: they are changed in the
+# two JavaScript chunks that render them, with the same rewrite-body plugin the coder-banner chart uses.
+# The chunks are minified, so identifiers (V, YB, pc ...) change between Coder builds. Every regex is anchored on
+# things a minifier keeps (property names, string literals) and CAPTURES the identifiers. A regex that stops matching
+# after a Coder upgrade rewrites nothing and Coder shows its stock UI: run `../coder-ui-updates verify` after upgrading.
+#
+# Tested against Coder v2.36.0 (a300a06) and v2.37.3 (3a24816). Go RE2 syntax; ${n} are capture groups. In replacements
+# `$` must never appear otherwise; in regexes it appears only inside [\w$] (minified identifiers may be `$`).
+# JSX calls are matched in both forms Coder's builds have used: `V(K,{...})` (2.36) and `(0,X.jsx)(K,{...})` (2.37).
+# Placeholders (@@...@@) are filled in by the script.
+
+# 1. rewrite-body cannot rewrite compressed bodies: ask Coder for an uncompressed chunk. Conditional headers are
+#    dropped so the backend never answers 304 with nothing to rewrite.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-identity-encoding
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  headers:
+    customRequestHeaders:
+      Accept-Encoding: ""
+      If-None-Match: ""
+      If-Modified-Since: ""
+---
+# 2. Outermost: compress the rewritten chunk again for the browser (it still sent its own Accept-Encoding).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-compress
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  compress: {}
+---
+# 2b. The rewritten chunks keep Coder's file names, which Coder marks as cacheable for a year ("immutable"): a browser
+#     would keep an old rewrite long after an update. For these two chunks only, a 5-minute lifetime instead.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-cache
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  headers:
+    customResponseHeaders:
+      Cache-Control: "public, max-age=300"
+---
+# 3. Entry chunk (assets/index-<hash>.js).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-index-rewrite
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  plugin:
+    @@PLUGIN@@:
+      rewrites:
+        # 0) Load dashboard.js on every page (classification marking; announcement Markdown / countdown / "Confirm" and
+        #    who saw / confirmed it). \A is the start of the chunk; a dynamic import is not hoisted like the chunk's
+        #    own imports, and a failure only logs.
+        - regex: '\A'
+          replacement: 'import(`/__coder-ui/dashboard.js`).catch(()=>{});'
+        # a) User menu: drop support links by name. All support links (desktop dropdown, mobile menu, navbar
+        #    buttons) come from this one loop over appearance.support_links, so filtering it covers every menu.
+        - regex: 'for\(let ([\w$]+) of ([\w$]+)\.support_links\?\?\[\]\)'
+          replacement: 'for(let ${1} of (${2}.support_links??[]).filter(__cuiL=>!@@HIDDEN_LINKS@@.includes(String(__cuiL.name).trim().toLowerCase())))'
+        # a2) User menu: a "Dark Mode" switch where "Documentation" was (first after the separator that precedes the
+        #     support links, which (a) removes), shown even when no support link is left. Choosing it keeps the menu open;
+        #     /__coder-ui/theme-toggle.js flips the user's appearance between "Dark default" and "Light default".
+        - regex: '([\w$]+)&&[\w$]+\.length>0&&((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+)\.Fragment,\{children:\[((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{\}\),[\w$]+\.map\(([\w$]+)=>((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{asChild:!0,children:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(`a`,\{href:[\w$]+\.target,target:`_blank`,rel:`noreferrer`,children:\['
+          replacement: '${2}(${3}.Fragment,{children:[${4}(${5},{}),${7}(${8},{role:`menuitemcheckbox`,"aria-checked":!1,className:`coder-ui-theme-item`,onSelect:__cuiE=>{__cuiE.preventDefault();import(`/__coder-ui/theme-toggle.js`).then(__cuiM=>__cuiM.toggle()).catch(()=>{})},children:[${7}(`span`,{className:`coder-ui-theme-icon`,"aria-hidden":!0}),${7}(`span`,{children:`Dark Mode`}),${7}(`span`,{className:`coder-ui-switch`,"aria-hidden":!0,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/theme-toggle.js`).then(__cuiM=>__cuiM.bind(__cuiE)).catch(()=>{})}}})]}),...(${1}??[]).map(${6}=>${7}(${8},{asChild:!0,children:${9}(`a`,{href:${6}.target,target:`_blank`,rel:`noreferrer`,children:['
+        # a3) The dashboard's theme comes from the user's appearance query: expose it (window.__cuiAppearance) so the
+        #     Dark Mode switch can have Coder re-read the setting it just saved, and the theme changes at once.
+        - regex: '([\w$]+)=([\w$]+)\(([\w$]+)\(([\w$]+)\.userAppearance\)\),'
+          replacement: '${1}=(window.__cuiAppearance=${2}(${3}(${4}.userAppearance))),'
+        # b) Navbar: hand the real "may list users" permission to the Admin settings menu. One regex from the
+        #    permissions destructuring to the adminPermissions object, so it is applied completely or not at all.
+        - regex: 'permissions:([\w$]+),signOut:([\w$]+)\}=((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(\)(,.*?)adminPermissions:\{canViewDeployment:'
+          replacement: 'permissions:${1},signOut:${2}}=${3}()${4}adminPermissions:{canViewUsers:!!${1}.viewAllUsers,canViewDeployment:'
+        # c) Admin menu (desktop dropdown and mobile menu share it): "Deployment" is called "Settings" (the section it
+        #    opens is General), and "Accounts" (Coder's users page) follows it.
+        #    `=== true` keeps it hidden if (b) ever stops matching.
+        - regex: '([\w$]+)\.canViewDeployment&&((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{asChild:!0,className:([\w$]+),children:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{to:`/deployment`,children:`Deployment`\}\)\}\)'
+          replacement: '${1}.canViewDeployment&&${2}(${3},{asChild:!0,className:${4},children:${5}(${6},{to:`/deployment`,children:`Settings`})}),${1}.canViewUsers===!0&&${2}(${3},{asChild:!0,className:${4},children:${5}(${6},{to:`/deployment/users`,children:`Accounts`})})'
+        # c2) Admin settings menu: "AI" moves into General's sidebar (see the sidebar rewrites).
+        - regex: '([\w$]+)\.canViewAISettings&&((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{asChild:!0,className:([\w$]+),children:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{to:`/ai/settings`,children:`AI`\}\)\}\)'
+          replacement: '!1'
+        # c2b) Navbar: "Workspaces" becomes a drop-down built exactly like the Admin menu (same outline button, size,
+        #      chevron and 180px menu), its label an icon (/__coder-ui/workspaces-icon.png, made from windows.png), with "Workspace" (the workspaces
+        #      list) and "Templates". Defined next to the Admin menu, whose parts it reuses (menu, trigger, button,
+        #      content, chevron) with the menu item and link of the entry just before it, "Healthcheck", now "Health".
+        #      The Admin menu itself ends with the cluster's CPU and memory, live (/__coder-ui/cluster-gauge.js; admins
+        #      only, it stays empty for anyone else): what the cluster still has to give developers.
+        - regex: '&&((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{asChild:!0,className:([\w$]+),children:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{to:`/health`,children:`Healthcheck`\}\)\}\)\]\}\),([\w$]+=[\w$]+=>Object\.values\([\w$]+\)\.some\([\w$]+=>[\w$]+\)),([\w$]+)=(\(\{permissions:[\w$]+\}\)=>((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{children:\[((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{asChild:!0,children:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(([\w$]+),\{variant:`outline`,size:`lg`,children:\[`Admin settings`,(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(([\w$]+),\{className:`text-content-primary`\}\)\]\}\)\}\),(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(([\w$]+),\{align:`end`,className:`w-\[180px\] min-w-auto`,children:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(`nav`,\{children:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{permissions:[\w$]+\}\)\}\)\}\)\]\}\))'
+          replacement: '&&${1}(${2},{asChild:!0,className:${3},children:${4}(${5},{to:`/health`,children:`Health`})}),${1}(`div`,{className:`coder-ui-cluster`,role:`group`,"aria-label":`Cluster CPU and memory`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/cluster-gauge.js`).then(__cuiM=>__cuiM.mount(__cuiE)).catch(()=>{})}}})]}),${6},${7}=${8},__cuiWsMenu=()=>${9}(${10},{children:[${11}(${12},{asChild:!0,children:${9}(${13},{variant:`outline`,size:`lg`,"aria-label":`Workspaces`,title:`Workspaces`,className:`coder-ui-ws-trigger`,children:[${11}(`img`,{src:`/__coder-ui/workspaces-icon.png`,alt:``,className:`coder-ui-ws-icon`}),${11}(${14},{className:`text-content-primary`})]})}),${11}(${15},{align:`start`,className:`w-[180px] min-w-auto`,children:${9}(`nav`,{children:[${11}(${2},{asChild:!0,children:${11}(${5},{to:`/workspaces`,children:`Workspace`})}),${11}(${2},{asChild:!0,children:${11}(${5},{to:`/templates`,children:`Templates`})})]})})]})'
+        # c2c) ... in place of the "Workspaces" and "Templates" links. "Agents" leaves the navbar: it is
+        #      General > AI > Agents.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\([\w$]+,\{className:\(\{isActive:[\w$]+\}\)=>\(([\w$]+)\.pathname\.startsWith\(`/@`\)&&\([\w$]+=!0\),([\w$]+)\(([\w$]+)\.default,\{\[[\w$]+\.active\]:[\w$]+\}\)\),to:`/workspaces`,children:`Workspaces`\}\),(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{className:\(\{isActive:[\w$]+\}\)=>[\w$]+\([\w$]+\.default,\{\[[\w$]+\.active\]:[\w$]+\}\),to:`/templates`,children:`Templates`\}\),((?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{user:[\w$]+\}\)),[\w$]+&&(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{className:\(\{isActive:[\w$]+\}\)=>[\w$]+\([\w$]+\.default,\{\[[\w$]+\.active\]:[\w$]+\}\),to:`/agents`,children:`Agents`\}\)'
+          replacement: '${1}(__cuiWsMenu,{}),${5}'
+        # c2d) Mobile menu: no "Agents" either.
+        - regex: ',(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{asChild:!0,className:[\w$]+\.default,children:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{to:`/agents`,children:`Agents`\}\)\}\)'
+          replacement: ''
+        # c2e) User settings: "Appearance" moved to General > Customize (its /settings/appearance page still answers).
+        - regex: '(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{href:`appearance`,children:`Appearance`\}\),'
+          replacement: ''
+        # c2f) The "Admin settings" menu is called "Admin" (desktop button and the mobile menu's entry). After c2b,
+        #      which is anchored on the old text.
+        - regex: '\[`Admin settings`,'
+          replacement: '[`Admin`,'
+        # c2g) User menu: "Avatar" after "Account": /__coder-ui/avatar.js opens a dialog to upload your own picture.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{asChild:!0,children:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{to:`/settings/account`,children:\[((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{\}\),(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(`span`,\{children:`Account`\}\)\]\}\)\}\)'
+          replacement: '${1}(${2},{asChild:!0,children:${3}(${4},{to:`/settings/account`,children:[${5}(${6},{}),${5}(`span`,{children:`Account`})]})}),${1}(${2},{className:`coder-ui-avatar-item`,onSelect:()=>{import(`/__coder-ui/avatar.js`).then(__cuiM=>__cuiM.open()).catch(()=>{})},children:[${5}(`span`,{className:`coder-ui-avatar-icon`,"aria-hidden":!0}),${5}(`span`,{children:`Avatar`})]})'
+        # c2g2) Admin > Users (and General > Users), each user's row:
+        #       - a "Chat" button at the right of the name cell (Coder's own Button, ${8}, borrowed from the row's menu
+        #         button), which opens the chat window with that user (/__coder-ui/chat.js). Not for service accounts or
+        #         suspended users; dashboard.css shows it to admins only (chat.js marks <html data-cui-chat-admin>), and
+        #         chat.js hides it on your own row.
+        #       - the row itself opens that user's workspace (/__coder-ui/users-row.js): the workspace if they have
+        #         exactly one, else their workspaces list (what the row menu's "View workspaces" opens). Coder's own
+        #         row hover style (hover prop); clicks on buttons, menus and dialogs inside the row are left alone.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs\)))\(([\w$]+),\{("data-testid":`user-.\{([\w$]+)\.id\}`,children:\[((?:[\w$]+|\(0,[\w$]+\.jsx\)))\([\w$]+,\{children:)((?:[\w$]+|\(0,[\w$]+\.jsx\))\([\w$]+,\{title:[\w$]+\.username,subtitle:[\w$]+\.is_service_account\?`Service Account`:[\w$]+\.email,src:[\w$]+\.avatar_url\}\))(\}\)(?s:.*?)(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(([\w$]+),\{size:`icon-lg`,variant:`subtle`,"aria-label":`Open menu`)'
+          replacement: '${1}(${2},{hover:!0,className:`coder-ui-user-row`,tabIndex:0,onClick:__cuiE=>{let __cuiC={row:__cuiE.currentTarget,target:__cuiE.target,newTab:__cuiE.ctrlKey||__cuiE.metaKey};import(`/__coder-ui/users-row.js`).then(__cuiM=>__cuiM.open(__cuiC,${4})).catch(()=>{})},onKeyDown:__cuiE=>{if(__cuiE.key!==`Enter`||__cuiE.target!==__cuiE.currentTarget)return;let __cuiC={row:__cuiE.currentTarget,target:__cuiE.target,newTab:__cuiE.ctrlKey||__cuiE.metaKey};import(`/__coder-ui/users-row.js`).then(__cuiM=>__cuiM.open(__cuiC,${4})).catch(()=>{})},${3}${1}(`div`,{className:`flex items-center justify-between gap-3`,children:[${6},!${4}.is_service_account&&${4}.status!==`suspended`&&${5}(${8},{size:`sm`,variant:`outline`,className:`coder-ui-chat-user`,"data-user":${4}.id,"aria-label":"Chat with "+${4}.username,onClick:()=>{import(`/__coder-ui/chat.js`).then(__cuiM=>__cuiM.openWith({id:${4}.id,username:${4}.username,name:${4}.name})).catch(()=>{})},children:`Chat`})]})${7}'
+        # c2g3) Navbar inbox bell (top right, every user): a chat indicator at its bottom-right corner (Coder's own unread
+        #       notification count stays at the top-right). Empty here; chat.css draws the number of unread chat
+        #       messages from <html data-cui-chat-unread> / --cui-chat-unread, which chat.js sets. Clicking the
+        #       indicator opens the chats instead of the inbox.
+        - regex: '([\w$]+)=\(\{unreadCount:([\w$]+),\.\.\.([\w$]+)\}\)=>((?:[\w$]+|\(0,[\w$]+\.jsxs\)))\(([\w$]+),\{size:`icon-lg`,variant:`outline`,className:`relative`,\.\.\.([\w$]+),children:\[((?:[\w$]+|\(0,[\w$]+\.jsx\)))\(([\w$]+),\{\}\),'
+          replacement: '${1}=({unreadCount:${2},...${3}})=>${4}(${5},{size:`icon-lg`,variant:`outline`,className:`relative coder-ui-inbox`,...${6},children:[${7}(${8},{}),${7}(`span`,{className:`coder-ui-chat-inbox`,title:`New chat messages: open them`,"aria-hidden":!0,onClick:__cuiE=>{__cuiE.stopPropagation();__cuiE.preventDefault();import(`/__coder-ui/chat.js`).then(__cuiM=>__cuiM.openUnread()).catch(()=>{})}}),'
+        # c2g4) Coder's users page is called "Accounts" (heading, browser tab, "Create account"), as in the Admin menu
+        #       and General's sidebar.
+        - regex: '\(([\w$]+),\{children:`Users`\}\),((?:[\w$]+|\(0,[\w$]+\.jsx\)))\(([\w$]+),\{children:`Manage user accounts and permissions\.`\}\)'
+          replacement: '(${1},{children:`Accounts`}),${2}(${3},{children:`Manage user accounts and permissions.`})'
+        - regex: '\(`title`,\{children:([\w$]+)\(`Users`\)\}\)'
+          replacement: '(`title`,{children:${1}(`Accounts`)})'
+        - regex: '\{to:`create`,children:\[((?:[\w$]+|\(0,[\w$]+\.jsx\)))\(([\w$]+),\{\}\),`Create user`\]\}'
+          replacement: '{to:`create`,children:[${1}(${2},{}),`Create account`]}'
+        # c2h) Latency menu (desktop and mobile): no "Proxy settings" (workspace proxies are not used; its page is gone
+        #      from General too). "Refresh latencies" stays.
+        - regex: '!![\w$]+\.editWorkspaceProxies&&(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{asChild:!0,children:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{to:`/deployment/workspace-proxies`,children:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(`span`,\{children:`Proxy settings`\}\)\}\)\}\),'
+          replacement: ''
+        - regex: '(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{asChild:!0,className:[\w$]+\([\w$]+\.default,[\w$]+\.sub\),children:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{to:`/deployment/workspace-proxies`,children:`Proxy settings`\}\)\}\),'
+          replacement: ''
+        # c2i) User menu: no version link to Coder's source code ("Browse the source code" tooltip); the deployment id
+        #      below it stays.
+        - regex: '(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{disableHoverableContent:!0,children:\[(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{asChild:!0,children:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{className:`text-xs`,asChild:!0,children:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(`a`,\{href:[\w$]+\?\.external_url,(?s:.*?)children:`Browse the source code`\}\)\]\}\),'
+          replacement: ''
+        # c3) User menu: no "Codernauts" (the coder-banner chart used to turn it into a "Banner" link; the banner is
+        #     edited in General > Announcement now, so the item goes altogether).
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{asChild:!0,children:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\([\w$]+,\{to:`/coder-cup`,children:\[.*?((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(`span`,\{children:`Codernauts`\}\)\]\}\)\}\)'
+          replacement: 'null'
+        # c4) Logo: every Coder logo (navigation bar, sign-in, set-up, CLI sign-in, error page) comes from one component
+        #     that shows an image when this function returns a URL. boot.js sets window.__cuiLogo before Coder starts.
+        - regex: '([\w$]+)=\(\)=>\{let ([\w$]+)=document\.head\.querySelector\(`meta\[property=logo-url\]`\)'
+          replacement: '${1}=()=>{if(window.__cuiLogo)return window.__cuiLogo;let ${2}=document.head.querySelector(`meta[property=logo-url]`)'
+        # c5) Health: a "Workspace Health" item under "Workspace Proxy" in the left panel (same link component and
+        #     styles as the others; the icon is painted by /__coder-ui/workspace-health.js) ...
+        - regex: 'children:Object\.entries\(([\w$]+)\)\.sort\(\)\.map\(\(\[([\w$]+),([\w$]+)\]\)=>\{let ([\w$]+)=([\w$]+)\[([\w$]+)\];return ?((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{end:!0,to:(`/health/\$\{\(0,[\w$]+\.default\)\([\w$]+\)\}`),className:(\(\{isActive:[\w$]+\}\)=>(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+\.normal,[\w$]+&&[\w$]+\.active\)),children:\[(.*?)\]\},([\w$]+)\)\}\)\}\)\]\}\),'
+          replacement: 'children:[...Object.entries(${1}).sort().map(([${2},${3}])=>{let ${4}=${5}[${6}];return ${7}(${8},{end:!0,to:${9},className:${10},children:[${11}]},${12})}),${7}(${8},{end:!0,to:`/health/workspace-health`,className:${10},children:[${7}(`span`,{className:`coder-ui-wh-icon`,children:[],ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/workspace-health.js`).then(__cuiM=>__cuiM.icon(__cuiE)).catch(()=>{})}}}),`Workspace Health`]},`workspace-health`)]})]}),'
+        #     ... and its page.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{path:`provisioner-daemons`,element:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{\}\)\}\)'
+          replacement: '${1}(${2},{path:`provisioner-daemons`,element:${3}(${4},{})}),${1}(${2},{path:`workspace-health`,element:${3}(`div`,{className:`coder-ui-view p-6`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`workspace-health`,title:`Workspace Health`})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}},`coder-ui-view-workspace-health`)})'
+        # c6) Router: the AI settings pages (/ai/settings/...) render in the General layout instead of their own, so they
+        #     sit inside General with its sidebar (and the AI tree); their own links keep working because the URLs stay.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{path:`/deployment`,element:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\()([\w$]+)(,\{\}\).*?(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{path:`/ai/settings`,element:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\()[\w$]+(,\{\}\))'
+          replacement: '${1}${2}${3}${2}${4}'
+        # c7) User settings: "Certificates" after "Secrets" (every user; their .p12 files for ~/.cert, stored as their
+        #     own Coder secrets), and its page.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{href:`secrets`,children:`Secrets`\}\)'
+          replacement: '${1}(${2},{href:`secrets`,children:`Secrets`}),${1}(${2},{href:`certificates`,children:`Certificates`})'
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{path:`secrets`,element:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{\}\)\}\)'
+          replacement: '${1}(${2},{path:`secrets`,element:${3}(${4},{})}),${1}(${2},{path:`certificates`,element:${3}(`div`,{className:`coder-ui-view`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`certificates`,title:`Certificates`})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}},`coder-ui-view-certificates`)})'
+        # d) Router (every view element has its own React key: without one, React Router reuses the mounted <div> when
+        #    you move between two of these views, so the page would keep showing the first one).
+        #    /deployment/appearance becomes /deployment/@@VIEW_PATH@@ (the Banner admin page, embedded), and
+        #    /deployment/classification, /deployment/keycloak, /deployment/customize, /deployment/monitoring and
+        #    /deployment/agents are added. Each renders a container div that loads /__coder-ui/views.js. Anchored on the
+        #    following workspace-proxies route so the user's own /settings/appearance route is never touched; the match
+        #    runs on to that route only to borrow its page (${8}), which Customize shows under the logo.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{path:`appearance`,element:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{\}\)\}\),((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{path:`workspace-proxies`((?s:.*?)\{path:`/settings`,element:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{\}\),children:\[(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{path:`account`,element:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{\}\)\}\),(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{path:`appearance`,element:(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(([\w$]+),\{\}\)\}\))'
+          replacement: '${1}(${2},{path:`@@VIEW_PATH@@`,element:${3}(`div`,{className:`coder-ui-view`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`announcement`,title:`@@VIEW_LABEL@@`})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}},`coder-ui-view-announcement`)}),${1}(${2},{path:`classification`,element:${3}(`div`,{className:`coder-ui-view`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`classification`,title:`Classification`})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}},`coder-ui-view-classification`)}),${1}(${2},{path:`keycloak`,element:${3}(`div`,{className:`coder-ui-view`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`keycloak`,title:`Keycloak`})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}},`coder-ui-view-keycloak`)}),${1}(${2},{path:`customize`,element:${3}(`div`,{children:[${3}(`div`,{className:`coder-ui-view`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`customize`,title:`Customize`})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}}),${3}(`section`,{className:`coder-ui-appearance`,"aria-labelledby":`coder-ui-appearance-h`,children:[${3}(`h2`,{id:`coder-ui-appearance-h`,className:`m-0 mb-2 text-2xl font-semibold`,children:`Appearance`}),${3}(`p`,{className:`m-0 mb-8 text-sm text-content-secondary font-medium`,children:`Your own theme and terminal font.`}),${3}(${8},{})]})]},`coder-ui-view-customize`)}),${1}(${2},{path:`agents`,element:${3}(`div`,{className:`coder-ui-view`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`agents`,title:`Agents`})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}},`coder-ui-view-agents`)}),${1}(${2},{path:`monitoring`,element:${3}(`div`,{className:`coder-ui-view`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`monitoring`,title:`Monitoring`})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}},`coder-ui-view-monitoring`)}),${5}(${6},{path:`workspace-proxies`${7}'
+        # f) Router: General > Authentication (Coder's User Authentication page) starts with the Keycloak view (Keycloak <->
+        #    Coder sign-in: discovery, checks, fixes), then Coder's own settings. /deployment/keycloak still opens it alone.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{path:`userauth`,element:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{\}\)\}\)'
+          replacement: '${1}(${2},{path:`userauth`,element:${3}(`div`,{className:`flex flex-col gap-12`,children:[${3}(`div`,{className:`coder-ui-view`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`keycloak`,title:`Keycloak`,keepTitle:!0})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}}),${3}(${4},{})]},`coder-ui-view-userauth`)})'
+        # e) Router: General > Network starts with the live cluster map (views.js), then Coder's own Network settings.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{path:`network`,element:((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{\}\)\}\)'
+          replacement: '${1}(${2},{path:`network`,element:${3}(`div`,{className:`flex flex-col gap-12`,children:[${3}(`div`,{className:`coder-ui-view`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/views.js`).then(__cuiM=>__cuiM.mount(__cuiE,{view:`network`,title:`Cluster Network`})).catch(()=>{__cuiE.textContent=`This view could not be loaded. Reload the page to try again.`})}}}),${3}(${4},{})]},`coder-ui-view-network`)})'
+---
+# 4. Deployment settings sidebar and header (assets/DeploymentSettingsLayout-<hash>.js); the section is called General.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-layout-rewrite
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  plugin:
+    @@PLUGIN@@:
+      rewrites:
+        # 0) The breadcrumb "Admin Settings / Deployment" reads "Admin Settings / General".
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{className:`text-content-primary`,children:`Deployment`\}\)'
+          replacement: '${1}(${2},{className:`text-content-primary`,children:`General`})'
+        # 0b) The frame around the sidebar and the page (gap-28 / py-10 on large screens) gets a class of its own:
+        #     dashboard.css tightens it, so the page starts closer to the sidebar and has that room for itself.
+        - regex: 'className:`flex flex-col gap-8 py-6 lg:flex-row lg:gap-28 lg:py-10`'
+          replacement: 'className:`flex flex-col gap-8 py-6 lg:flex-row lg:gap-28 lg:py-10 coder-ui-settings-frame`'
+        # a) The sidebar, rebuilt in one piece and in alphabetical order (by the default labels). Coder's items keep their
+        #    permissions; "Licenses", "Workspace Proxies", "Groups", "IdP Organization Sync", "Premium" and "External
+        #    Authentication" are left out; "Appearance" becomes "@@VIEW_LABEL@@" (for the admins who may edit the
+        #    deployment); "User Authentication" is called "Authentication" (its page starts with the Keycloak view, see
+        #    router rule f); "Classification", "Customize" (the logo + Coder's Appearance) and "Monitoring" are
+        #    added, "Users" is called "Accounts", and "AI" (moved here from the Admin settings menu) is a tree: a collapsible entry (native <details>, open
+        #    while one of its pages is shown) with "Agents" (Coder Agents, moved here from the navbar; opens inside General)
+        #    and the pages of Coder's own AI settings sidebar, same permissions, but for "AI Governance" and "AI
+        #    Gateway keys" (left out; their URLs still answer). The tree mirrors Coder v2.37's AI sidebar
+        #    (Models top level; no Spend page since v2.37); every link also exists in v2.36. The OAuth2 item keeps Coder's
+        #    own condition (${4}: the oauth2 experiment or a development build).
+        - regex: 'children:\[([\w$]+)\.viewDeploymentConfig&&((?:[\w$]+|\(0,[\w$]+\.jsxs?\)))\(([\w$]+),\{href:`/deployment/overview`,children:`Overview`\}\),(?s:.*?)[\w$]+\.viewDeploymentConfig&&(\([^&]*?\))&&(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{href:`/deployment/oauth2-provider/apps`,children:`OAuth2 Applications`\}\),(?s:.*?)![\w$]+&&(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{href:`/deployment/premium`,children:`(?:Premium|Trial Upgrade)`\}\)\]'
+          replacement: 'children:[${1}.viewAllUsers&&${2}(${3},{href:`/deployment/users`,children:`Accounts`}),(${1}.viewAnyAIProvider||${1}.editDeploymentConfig||${1}.createChat)&&${2}(`details`,{className:`coder-ui-ai-tree`,open:/^[/](ai[/]settings|deployment[/]agents)/.test(location.pathname),children:[${2}(`summary`,{className:`relative text-sm text-content-secondary font-medium py-2 px-3 hover:bg-surface-secondary rounded-md transition ease-in-out duration-150 cursor-pointer select-none flex items-center justify-between`,children:[`AI`,${2}(`span`,{className:`coder-ui-ai-chevron`,"aria-hidden":!0,children:`›`})]}),${2}(`div`,{className:`flex flex-col gap-1 ml-3 mt-1 pl-1 border-0 border-solid border-l border-l-border`,children:[${1}.createChat&&${2}(${3},{href:`/deployment/agents`,children:`Agents`}),${1}.viewAnyAIProvider&&${2}(${3},{href:`/ai/settings/providers`,children:`Providers`}),${1}.editDeploymentConfig&&${2}(${3},{href:`/ai/settings/models`,children:`Models`}),${1}.editDeploymentConfig&&${2}(${3},{href:`/ai/settings/coder-agents`,children:`Coder Agents`}),${1}.editDeploymentConfig&&${2}(`div`,{className:`flex flex-col gap-1 ml-3 pl-1 border-0 border-solid border-l border-l-border`,children:[${2}(${3},{href:`/ai/settings/mcp-servers`,children:`MCP servers`}),${1}.updateAnyTemplate&&${2}(${3},{href:`/ai/settings/templates`,children:`Templates`}),${2}(${3},{href:`/ai/settings/instructions`,children:`Instructions`}),${2}(${3},{href:`/ai/settings/lifecycle`,children:`Lifecycle`})]})]})]}),${1}.editDeploymentConfig&&${2}(${3},{href:`/deployment/@@VIEW_PATH@@`,children:`@@VIEW_LABEL@@`}),${1}.viewDeploymentConfig&&${2}(${3},{href:`/deployment/userauth`,children:`Authentication`}),${1}.editDeploymentConfig&&${2}(${3},{href:`/deployment/classification`,children:`Classification`}),${1}.editDeploymentConfig&&${2}(${3},{href:`/deployment/customize`,children:`Customize`}),${1}.editDeploymentConfig&&${2}(${3},{href:`/deployment/monitoring`,children:`Monitoring`}),${1}.viewDeploymentConfig&&${2}(${3},{href:`/deployment/network`,children:`Network`}),${1}.viewNotificationTemplate&&${2}(${3},{href:`/deployment/notifications`,children:`Notifications`}),${1}.viewDeploymentConfig&&${4}&&${2}(${3},{href:`/deployment/oauth2-provider/apps`,children:`OAuth2 Applications`}),${1}.viewDeploymentConfig&&${2}(${3},{href:`/deployment/observability`,children:`Observability`}),${1}.viewDeploymentConfig&&${2}(${3},{href:`/deployment/overview`,children:`Overview`}),${1}.viewDeploymentConfig&&${2}(${3},{href:`/deployment/security`,children:`Security`})]'
+---
+# 4b. Smaller chunks, each rule only matches in its own: two General pages (assets/SecuritySettingsPage-<hash>.js,
+#     ObservabilitySettingsPage-<hash>.js), Coder's avatar component (assets/Avatar-<hash>.js), the workspace page
+#     (assets/WorkspacePage-<hash>.js) and the Account page (assets/AccountPage-<hash>.js).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-pages-rewrite
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  plugin:
+    @@PLUGIN@@:
+      rewrites:
+        # a) Security: no "Browser-Only Connections" section (heading, text and its Premium notice).
+        - regex: ',(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\(`div`,\{children:\[(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{children:\[(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{level:`h2`,hierarchy:`secondary`,className:`items-center`,children:\[`Browser-Only Connections`(?s:.*?)source:`browser_only`,(?s:.*?)canViewPremium:!0\}\)\]\}\)'
+          replacement: ''
+        # b) Observability: no "Audit Logging" section (heading, text, the retention setting or its Premium notice).
+        - regex: ',(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{children:\[(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{hierarchy:`secondary`,level:`h2`,children:`Audit Logging`\}\),(?s:.*?)\]\}\)\]\}\),[\w$]+\?(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{options:[\w$]+\.filter\([\w$]+=>[\w$]+\.name===`Audit Logs Retention`\)\}\):(?:[\w$]+|\(0,[\w$]+\.jsxs?\))\([\w$]+,\{source:`observability`,message:`Audit Logging`,(?s:.*?)canViewPremium:[\w$]+\}\)'
+          replacement: ''
+        # c) Coder's avatar component (assets/Avatar-<hash>.js), used for every user avatar: a user who uploaded a
+        #    picture (User menu > Avatar) gets it instead, looked up by username (the fallback text Coder passes: the
+        #    user menu, workspace lists and most other places pass the username), shown as a circle inside Coder's
+        #    rounded square (class coder-ui-avatar, dashboard.css). boot.js sets window.__cuiAvatars.
+        #    A user with neither an uploaded picture nor one of Coder's own (Keycloak / OIDC) gets the default avatar, if
+        #    one is installed (resources/defaults/): boot.js sets window.__cuiAvatarDefault and dashboard.js fills
+        #    window.__cuiAvatarUsers, the usernames it applies to (signed-in pages only).
+        - regex: '([\w$]+)=\(\{className:([\w$]+),size:([\w$]+),variant:([\w$]+),src:([\w$]+),fallback:([\w$]+),alt:([\w$]+)=``,children:([\w$]+),\.\.\.([\w$]+)\}\)=>\{'
+          replacement: '${1}=({className:${2},size:${3},variant:${4},src:${5},fallback:${6},alt:${7}=``,children:${8},...${9}})=>{let __cuiA=${4}!==`icon`&&typeof ${6}==`string`&&window.__cuiAvatars?Object.hasOwn(window.__cuiAvatars,${6})?window.__cuiAvatars[${6}]:!${5}&&window.__cuiAvatarDefault&&window.__cuiAvatarUsers?.has(${6})?window.__cuiAvatarDefault:null:null;if(__cuiA){${5}=__cuiA;${2}=[${2},`coder-ui-avatar`].filter(Boolean).join(` `)}'
+        # c2) Account page (assets/AccountPage-<hash>.js): your avatar, large, above Email / Username / Name; a click
+        #     changes it (the User menu's Avatar dialog). /__coder-ui/account-avatar.js draws it.
+        - regex: '((?:[\w$]+|\(0,[\w$]+\.jsx\)))\(([\w$]+),\{field:([\w$]+)\(`email`\),label:`Email`'
+          replacement: '${1}(`div`,{className:`coder-ui-account-avatar`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/account-avatar.js`).then(__cuiM=>__cuiM.mount(__cuiE)).catch(()=>{})}}}),${1}(${2},{field:${3}(`email`),label:`Email`'
+        # d) Workspace page (assets/WorkspacePage-<hash>.js): every agent gets a "Terminal" drop-down right after its
+        #    "Logs" one, built from the same parts (Coder's Collapsible ${4}, its trigger ${5}, button ${6}, chevron ${7}
+        #    and content ${8}): the agent's terminal inside the page, no new window; /__coder-ui/agent-terminal.js fills it
+        #    and offers to end the session when it is closed. The chevron gets no `open` prop: it then turns with the
+        #    trigger's data-state (Coder's group-data-[state=open] variant), so the drop-down needs no React state.
+        #    Anchored on the Logs section's own markup and the end of the agent row (`]},<agent>.id)}`) that follows it.
+        - regex: '(((?:[\w$]+|\(0,[\w$]+\.jsx\)))\(`section`,\{className:`border-0 border-t border-solid border-border`,children:((?:[\w$]+|\(0,[\w$]+\.jsxs\)))\(([\w$]+),\{open:[\w$]+,onOpenChange:[\w$]+,children:\[(?:[\w$]+|\(0,[\w$]+\.jsx\))\(`div`,\{className:`px-4 py-2 relative`,children:(?:[\w$]+|\(0,[\w$]+\.jsx\))\(([\w$]+),\{asChild:!0,children:(?:[\w$]+|\(0,[\w$]+\.jsxs\))\(([\w$]+),\{variant:`subtle`,className:`after:content-\[''''\] after:absolute after:inset-0`,children:\[(?:[\w$]+|\(0,[\w$]+\.jsx\))\(([\w$]+),\{open:[\w$]+\}\),(?:[\w$]+|\(0,[\w$]+\.jsx\))\(`span`,\{children:`Logs`\}\)(?s:.*?)(?:[\w$]+|\(0,[\w$]+\.jsx\))\(([\w$]+),\{children:(?:[\w$]+|\(0,[\w$]+\.jsxs\))\(`div`,\{className:[\w$]+\(`px-4`,(?s:.*?)troubleshootingURL:[\w$]+\.troubleshooting_url(?s:.*?))\]\},([\w$]+)\.id\)\}'
+          replacement: '${1},${2}(`section`,{className:`border-0 border-t border-solid border-border coder-ui-term`,ref:__cuiE=>{if(__cuiE&&!__cuiE.dataset.cui){__cuiE.dataset.cui=`1`;import(`/__coder-ui/agent-terminal.js`).then(__cuiM=>__cuiM.attach(__cuiE,${9})).catch(()=>{})}},children:${3}(${4},{children:[${3}(`div`,{className:`px-4 py-2 relative flex items-center gap-2`,children:[${2}(${5},{asChild:!0,children:${3}(${6},{variant:`subtle`,className:`group after:content-[''''] after:absolute after:inset-0`,children:[${2}(${7},{}),${2}(`span`,{children:`Terminal`})]})}),${2}(`span`,{className:`coder-ui-term-status`})]}),${2}(${8},{children:${2}(`div`,{className:`coder-ui-term-body`})})]})})]},${9}.id)}'
+---
+# 5. Page loads (HTML). This route takes them over from the coder-banner chart's route (see httproute.yaml) and does
+#    what that did (add the banner loader, when the banner is installed) plus: load boot.js first (the logo and the
+#    classification marking, before Coder's own code runs) and point the tab icons at /__coder-ui/favicon/.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-html-rewrite
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  plugin:
+    @@PLUGIN@@:
+      rewrites:
+        - regex: '<head>'
+          replacement: '<head><script src="/__coder-ui/boot.js"></script>'
+        - regex: 'href="/favicons/(favicon-(?:light|dark)\.(?:png|svg))"'
+          replacement: 'href="/__coder-ui/favicon/${1}"'
+@@BANNER_LOADER@@
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-html
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  chain:
+    middlewares:
+      - name: coder-ui-updates-identity-encoding
+      - name: coder-ui-updates-html-rewrite
+---
+# 6. Chains for the JavaScript chunks.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-index
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  chain:
+    middlewares:
+      - name: coder-ui-updates-compress
+      - name: coder-ui-updates-cache
+      - name: coder-ui-updates-identity-encoding
+      - name: coder-ui-updates-index-rewrite
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-layout
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  chain:
+    middlewares:
+      - name: coder-ui-updates-compress
+      - name: coder-ui-updates-cache
+      - name: coder-ui-updates-identity-encoding
+      - name: coder-ui-updates-layout-rewrite
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: coder-ui-updates-pages
+  namespace: @@NAMESPACE@@
+  labels: @@LABELS@@
+spec:
+  chain:
+    middlewares:
+      - name: coder-ui-updates-compress
+      - name: coder-ui-updates-cache
+      - name: coder-ui-updates-identity-encoding
+      - name: coder-ui-updates-pages-rewrite

@@ -1,0 +1,101 @@
+21:34:51 START mode=bundle dry_run=0 pwd=/home/xxx/devbox/data/apps/argocd/coder
+21:34:51 TITLE Coder banner - guided setup
+21:34:51 TITLE BUNDLE: pack everything into one file for the air-gapped cluster
+21:34:51 STEP 1/6 Check that we are in the right place
+21:34:51 STEP 2/6 Check the tools this machine needs
+21:34:51 STEP 3/6 Which Traefik version runs on the AIR-GAPPED cluster?
+21:34:51 ANSWER Traefik chart version on the air-gapped cluster = 41.4.0
+21:34:51 STEP 4/6 Where should the bundle be written?
+21:34:51 ANSWER Output folder = /tmp/claude-1000/-home-xxx-devbox/d323f98f-2318-4cd4-9f7a-d426cdf702bd/scratchpad/bundle-fx
+21:34:51 STEP 5/6 What will go into the bundle
+21:34:51 STEP 6/6 Build it
+21:34:51 CONFIRM Build the bundle now? = yes
+21:34:51 CHANGE ./make-airgap-bundle --out /tmp/claude-1000/-home-xxx-devbox/d323f98f-2318-4cd4-9f7a-d426cdf702bd/scratchpad/bundle-fx --with-traefik-chart=41.4.0
+21:34:52 TITLE Done - the bundle is ready
+07:31:06 START mode=menu dry_run=0 pwd=/home/xxx/devbox/data/apps/argocd/coder
+07:31:06 TITLE Coder banner - guided setup
+07:31:08 CHOICE What would you like to do? = 1
+07:31:08 TITLE BUNDLE: pack everything into one file for the air-gapped cluster
+07:31:08 STEP 1/6 Check that we are in the right place
+07:31:08 STEP 2/6 Check the tools this machine needs
+07:31:08 STEP 3/6 Which Traefik version runs on the AIR-GAPPED cluster?
+07:31:10 ANSWER Traefik chart version on the air-gapped cluster = 41.4.0
+07:31:10 STEP 4/6 Where should the bundle be written?
+07:31:12 ANSWER Output folder = ./dist
+07:31:12 STEP 5/6 What will go into the bundle
+07:31:12 STEP 6/6 Build it
+07:31:15 CONFIRM Build the bundle now? = yes
+07:31:15 CHANGE ./make-airgap-bundle --out ./dist --with-traefik-chart=41.4.0
+07:31:17 TITLE Done - the bundle is ready
+08:19:03 START mode=deploy dry_run=1 pwd=/home/xxx/devbox/data/apps/argocd/coder
+08:19:03 TITLE Coder banner - guided setup
+08:19:03 TITLE DEPLOY: install the banner on the air-gapped cluster
+08:19:03 STEP 1/9 Find and check the bundle
+08:19:03 DIE The input ended before all questions were answered.
+08:19:04 START mode=check dry_run=0 pwd=/home/xxx/devbox/data/apps/argocd/coder
+08:19:04 TITLE Coder banner - guided setup
+08:19:04 TITLE CHECK: is the banner installed and working?
+08:19:04 ANSWER Namespace where the banner is (or should be) = coder
+08:19:04 RUN kubectl -n coder get pods -l app.kubernetes.io/name=coder-banner
+08:19:04 RUN kubectl -n coder get httproute coder-banner -o jsonpath={range .status.parents[0].conditions[*]}{.type}={.status} {end}{"\n"}
+08:19:04 RUN env CODER_NAMESPACE=coder ./verify-menu
+08:19:13 START mode=deploy dry_run=1 pwd=/home/xxx/devbox/data/apps/argocd/coder
+08:19:13 TITLE Coder banner - guided setup
+08:19:13 TITLE DEPLOY: install the banner on the air-gapped cluster
+08:19:13 STEP 1/9 Find and check the bundle
+08:19:13 DIE The input ended before all questions were answered.
+08:25:24 START mode=menu dry_run=0 pwd=/home/xxx/devbox/data/apps/argocd/coder
+08:25:24 TITLE Coder banner - guided setup
+08:25:26 CHOICE What would you like to do? = 1
+08:25:26 TITLE BUNDLE: pack everything into one file for the air-gapped cluster
+08:25:26 STEP 1/6 Check that we are in the right place
+08:25:26 STEP 2/6 Check the tools this machine needs
+08:25:26 STEP 3/6 Which Traefik version runs on the AIR-GAPPED cluster?
+08:25:29 ANSWER Traefik chart version on the air-gapped cluster = 41.4.0
+08:25:30 STEP 4/6 Where should the bundle be written?
+08:25:56 ANSWER Output folder = coder-banner-airgap-bundle
+08:25:56 STEP 5/6 What will go into the bundle
+08:25:56 STEP 6/6 Build it
+08:26:03 CONFIRM Build the bundle now? = yes
+08:26:03 CHANGE ./make-airgap-bundle --out coder-banner-airgap-bundle --with-traefik-chart=41.4.0
+08:26:05 TITLE Done - the bundle is ready
+08:37:15 START mode=bundle dry_run=0 pwd=/home/xxx/devbox/data/apps/argocd/coder
+08:37:15 TITLE Coder banner - guided setup
+08:37:15 TITLE BUNDLE: pack everything into one file for the air-gapped cluster
+08:37:15 STEP 1/6 Check that we are in the right place
+08:37:15 STEP 2/6 Check the tools this machine needs
+08:37:15 STEP 3/6 Which Traefik version runs on the AIR-GAPPED cluster?
+08:37:15 ANSWER Traefik chart version on the air-gapped cluster = 41.4.0
+08:37:15 STEP 4/6 Where should the bundle be written?
+08:37:15 ANSWER Output folder = ./coder-banner-airgap-bundle
+08:37:15 STEP 5/6 What will go into the bundle
+08:37:15 STEP 6/6 Build it
+08:37:16 CONFIRM Build the bundle now? = yes
+08:37:16 CHANGE ./make-airgap-bundle --out ./coder-banner-airgap-bundle --with-traefik-chart=41.4.0
+08:37:17 TITLE Done - the bundle is ready
+09:21:26 START mode=bundle dry_run=0 pwd=/home/xxx/devbox/data/apps/argocd/coder
+09:21:26 TITLE Coder banner - guided setup
+09:21:26 TITLE BUNDLE: pack everything into one file for the air-gapped cluster
+09:21:26 STEP 1/6 Check that we are in the right place
+09:21:26 STEP 2/6 Check the tools this machine needs
+09:21:27 STEP 3/6 Traefik: nothing to choose
+09:21:27 STEP 4/6 Where should the bundle be written?
+09:21:27 ANSWER Output folder = ./coder-banner-airgap-bundle
+09:21:27 STEP 5/6 What will go into the bundle
+09:21:27 STEP 6/6 Build it
+09:21:27 CONFIRM Build the bundle now? = yes
+09:21:27 CHANGE ./make-airgap-bundle --out ./coder-banner-airgap-bundle
+09:21:28 TITLE Done - the bundle is ready
+09:32:28 START mode=bundle dry_run=0 pwd=/home/xxx/devbox/data/apps/argocd/coder
+09:32:28 TITLE Coder banner - guided setup
+09:32:28 TITLE BUNDLE: pack everything into one file for the air-gapped cluster
+09:32:28 STEP 1/6 Check that we are in the right place
+09:32:28 STEP 2/6 Check the tools this machine needs
+09:32:28 STEP 3/6 Traefik: nothing to choose
+09:32:28 STEP 4/6 Where should the bundle be written?
+09:32:28 ANSWER Output folder = ./coder-banner-airgap-bundle
+09:32:28 STEP 5/6 What will go into the bundle
+09:32:29 STEP 6/6 Build it
+09:32:29 CONFIRM Build the bundle now? = yes
+09:32:29 CHANGE ./make-airgap-bundle --out ./coder-banner-airgap-bundle
+09:32:31 TITLE Done - the bundle is ready

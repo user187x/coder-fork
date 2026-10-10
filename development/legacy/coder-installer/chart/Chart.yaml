@@ -1,0 +1,19 @@
+apiVersion: v2
+name: coder-installer
+description: >-
+  Coder exactly as it runs on the minikube cluster: the forked Coder image (ghcr.io/user187x/coder-platform) on the
+  upstream coder chart, its CloudNativePG database, the dashboard add-on service
+  (coder-ui-updates: its Python service, route, log database and RBAC), the workspace template and its icon
+  server. Needs Traefik v3 (Gateway API provider and the rewrite-body plugin), the CloudNativePG operator and Keycloak. The
+  announcement banner is its own release (../banner), as on the cluster: together they exceed Helm's 1 MiB release
+  record.
+type: application
+version: 1.0.0
+appVersion: "2.0.0-platform.4"
+kubeVersion: ">=1.27.0-0"
+keywords: [coder, cloudnative-pg, traefik, gateway-api]
+# Vendored in charts/ (the exact versions the cluster runs), so the install needs no chart repository.
+dependencies:
+  - name: coder
+    version: 2.37.3
+    repository: https://helm.coder.com/v2

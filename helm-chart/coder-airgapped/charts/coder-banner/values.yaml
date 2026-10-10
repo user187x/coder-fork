@@ -1,0 +1,77 @@
+# Namespace of the Coder release (Middleware/HTTPRoute must live next to the Coder Service).
+namespace: ""   # defaults to the release namespace (helm -n <coder namespace> / Argo CD destination)
+
+coder:
+  host: coder.xxx.com
+  service:
+    name: coder
+    port: 80
+
+gateway:
+  name: traefik-gateway
+  namespace: traefik
+
+plugin:
+  # Must match the key under `experimental.plugins` in Traefik's static config
+  # (see ../support/traefik/rewrite-body-plugin.yaml).
+  name: rewrite-body
+
+# Path prefixes that are never rewritten. Workspace apps (code-server, noVNC, ...) serve their
+# own HTML under /@user/workspace.agent/apps/..., so they bypass the middleware entirely.
+passthroughPathPrefixes:
+  - /@
+
+# The banner service: serves the loader script, the live banner.json and the admin page. Standard-library
+# Python (3.8 or newer) whose code is mounted from a ConfigMap, so there is no custom image to build - any
+# image with `python3` works. In an air-gapped cluster point this at your internal registry, e.g.
+#   --set image.registry=registry.internal:5000 --set image.repository=library/python
+image:
+  registry: docker.io
+  repository: library/python
+  tag: 3.13-alpine
+  digest: ""            # optional "sha256:..." - when set it is used instead of the tag
+  pullPolicy: IfNotPresent
+imagePullSecrets: []    # e.g. [{name: internal-registry}]
+
+# Live push: open Coder tabs hold a WebSocket to the banner service, so a published banner appears at once
+# (without it tabs poll every banner.refreshSeconds). One replica holds thousands of idle tabs cheaply.
+live:
+  enabled: true
+  maxConnections: 5000       # further tabs are refused with 503 and fall back to polling
+  heartbeatSeconds: 20       # tabs treat 3 missed heartbeats as a dead connection and reconnect
+
+admin:
+  # Coder roles allowed to use https://<coder.host>/__banner/admin. Admins sign in with their normal
+  # Coder session; there are no separate accounts.
+  roles:
+    - owner
+
+# Replace the "Codernauts" item in Coder's user menu with a link to the admin page. The dashboard is
+# client-rendered, so this rewrites Coder's JavaScript bundle with a second rewrite-body middleware.
+menu:
+  enabled: true
+  label: Banner
+  # Only users holding one of admin.roles see the item (the admin page enforces this regardless).
+  adminOnly: true
+
+# ---- Chart defaults for the banner. These show until an admin publishes something from the admin page
+# (https://<coder.host>/__banner/admin); after that the admin page wins until it is reset. ----
+banner:
+  enabled: true
+  level: info            # info | success | warning | critical
+  title: ""              # optional bold lead-in
+  message: "Scheduled maintenance: Coder will be briefly unavailable this Saturday from 02:00 to 03:00 UTC."
+  linkText: ""           # optional link, shown after the message
+  linkUrl: ""            # http(s):// or /path
+  dismissible: true
+  # Users who dismissed the banner see it again when this changes. Empty = derived from the
+  # level/title/message/link, so editing the text re-shows it automatically.
+  id: ""
+  # Coder's login page has no header to anchor under, so show the banner above the page instead.
+  showOnLoginPage: true
+  refreshSeconds: 60     # how often open browser tabs re-check banner.json (min 15)
+  # Text effect (Anime.js, bundled in the chart - nothing is downloaded). Browsers whose user asked for
+  # reduced motion always see plain text.
+  #   none | typewriter | fade | rise | wave | bounce | flip | shake | pulse | rainbow
+  effect: none
+  repeat: false          # true = keep repeating; false = play once each time the banner appears

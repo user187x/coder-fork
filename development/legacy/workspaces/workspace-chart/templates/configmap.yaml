@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-terraform
+  namespace: {{ .Values.namespace | default "coder" }}
+data:
+  # The workspace template. files/main.tf is the template as pushed to Coder; files/certificates.tf installs each
+  # user's PKCS#12 certificate (Coder > Settings > Certificates) as ~/.cert/<username>.p12 when a workspace starts.
+  # Source of certificates.tf: ../coder-ui-updates/resources/workspace-certificates.tf (keep the copy in step).
+  main.tf: |
+{{ .Files.Get "files/main.tf" | indent 4 }}
+  certificates.tf: |
+{{ .Files.Get "files/certificates.tf" | indent 4 }}
+  # agent-audit.tf records what runs in the workspace (every command/process, i.e. an LLM agent's actions) and
+  # forwards it to coder-ui-updates for Observability > Agent Activity.
+  agent-audit.tf: |
+{{ .Files.Get "files/agent-audit.tf" | indent 4 }}

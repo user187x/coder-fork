@@ -1,0 +1,30 @@
+# The namespace Coder creates workspace pods in: list them (to match a workspace to its pod by the
+# com.coder.workspace.id label) and read their logs, for Monitoring. Read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coder-ui-updates-workspaces
+  namespace: @@WORKSPACE_NAMESPACE@@
+  labels: @@LABELS@@
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coder-ui-updates-workspaces
+  namespace: @@WORKSPACE_NAMESPACE@@
+  labels: @@LABELS@@
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coder-ui-updates-workspaces
+subjects:
+  - kind: ServiceAccount
+    name: coder-ui-updates
+    namespace: @@NAMESPACE@@

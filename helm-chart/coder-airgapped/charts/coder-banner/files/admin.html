@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Announcement banner · Coder admin</title>
+  <link rel="stylesheet" href="/__banner/admin/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>Announcement banner</h1>
+      <div class="who"><a href="/">← Back to Coder</a><span id="who"></span></div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="card" aria-labelledby="preview-h">
+      <div class="card-head">
+        <h2 id="preview-h">What developers see</h2>
+        <span id="status" class="pill" role="status">Loading…</span>
+      </div>
+      <div class="preview-frame"><div id="preview"></div></div>
+      <p class="hint" id="preview-note">Live preview of your draft below. Nothing is published until you press <b>Publish changes</b>.</p>
+    </section>
+
+    <section class="card" aria-labelledby="edit-h">
+      <div class="card-head"><h2 id="edit-h">Message</h2></div>
+
+      <div class="chips" role="group" aria-label="Start from a template">
+        <span class="chips-label">Start from:</span>
+        <button type="button" class="chip" data-preset="maintenance">Scheduled maintenance</button>
+        <button type="button" class="chip chip-danger" data-preset="emergency">Emergency patch</button>
+        <button type="button" class="chip" data-preset="clear">All clear</button>
+      </div>
+
+      <label class="field">
+        <span class="label">Message <span class="count" id="count"></span></span>
+        <textarea id="message" rows="3" maxlength="400" placeholder="What do developers need to know?"></textarea>
+      </label>
+
+      <fieldset class="field">
+        <legend class="label">Style</legend>
+        <div class="levels" id="levels">
+          <label class="level level-info"><input type="radio" name="level" value="info"><span>Info</span></label>
+          <label class="level level-success"><input type="radio" name="level" value="success"><span>Success</span></label>
+          <label class="level level-warning"><input type="radio" name="level" value="warning"><span>Warning</span></label>
+          <label class="level level-critical"><input type="radio" name="level" value="critical"><span>Critical</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="field">
+        <legend class="label">Text effect</legend>
+        <div class="effect-row">
+          <select id="effect" aria-describedby="effect-hint">
+            <option value="none" data-hint="Plain text, no animation.">None</option>
+            <option value="typewriter" data-hint="Letters appear one by one, as if typed.">Typewriter</option>
+            <option value="fade" data-hint="Words fade in one after another.">Fade in</option>
+            <option value="rise" data-hint="Letters slide up into place.">Rise</option>
+            <option value="wave" data-hint="A wave of movement runs through the letters.">Wave</option>
+            <option value="bounce" data-hint="Letters drop in and bounce.">Bounce</option>
+            <option value="flip" data-hint="Letters flip into view.">Flip</option>
+            <option value="shake" data-hint="The whole message shakes: best kept for urgent notices.">Shake</option>
+            <option value="pulse" data-hint="The message gently pulses.">Pulse</option>
+            <option value="rainbow" data-hint="Colours sweep through the letters.">Rainbow</option>
+          </select>
+          <label class="check"><input id="repeat" type="checkbox"><span>Repeat continuously <small>(otherwise it plays once when the banner appears)</small></span></label>
+          <button type="button" id="replay" class="btn">▶ Replay</button>
+        </div>
+        <p class="hint" id="effect-hint"></p>
+      </fieldset>
+
+      <div class="grid">
+        <div class="field lead-field">
+          <label class="label" for="title">Bold lead-in <em>(optional)</em></label>
+          <div class="lead-row">
+            <button type="button" id="emoji-btn" class="btn emoji-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="emoji-pop" aria-label="Insert an emoji" title="Insert an emoji">😀</button>
+            <input id="title" type="text" maxlength="80" placeholder="e.g. Security patch:">
+          </div>
+          <div id="emoji-pop" class="emoji-pop" role="dialog" aria-label="Insert an emoji" hidden></div>
+        </div>
+        <label class="field"><span class="label">Link text <em>(optional)</em></span>
+          <input id="linkText" type="text" maxlength="60" placeholder="e.g. Status page"></label>
+        <label class="field grid-wide"><span class="label">Link address <em>(optional)</em></span>
+          <input id="linkUrl" type="text" maxlength="500" placeholder="https://…"></label>
+      </div>
+
+      <div class="options">
+        <label class="check"><input id="dismissible" type="checkbox"><span>Let people dismiss it <small>(untick for urgent notices)</small></span></label>
+        <label class="check"><input id="showOnLoginPage" type="checkbox"><span>Also show on the sign-in page</span></label>
+      </div>
+
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <label class="field inline"><span class="label">Open tabs check for changes every</span>
+          <input id="refreshSeconds" type="number" min="15" max="3600" step="5"> <span>seconds</span></label>
+        <p class="hint">Lower is faster to reach people who already have Coder open (minimum 15).</p>
+      </details>
+
+      <div id="problem" class="problem" role="alert" hidden></div>
+
+      <div class="actions">
+        <button type="button" id="publish" class="btn btn-primary" disabled>Publish changes</button>
+        <button type="button" id="revert" class="btn" disabled>Discard edits</button>
+        <span class="spacer"></span>
+        <button type="button" id="toggle" class="btn">Hide banner</button>
+      </div>
+      <p class="hint" id="dirty" aria-live="polite"></p>
+    </section>
+
+    <section class="card card-emergency" aria-labelledby="emergency-h">
+      <div class="card-head"><h2 id="emergency-h">Emergency: show it again</h2></div>
+      <p>People who dismissed the banner will not see it again on their own. Use this when something urgent needs everyone's attention, for example a zero-day patch, so they can save their work.</p>
+      <div class="actions">
+        <button type="button" id="reappear" class="btn btn-danger">Show again to everyone</button>
+      </div>
+      <p class="hint" id="reappear-note"></p>
+    </section>
+
+    <section class="meta">
+      <p id="meta"></p>
+      <p><button type="button" id="reset" class="link" hidden>Discard everything published here and use the chart defaults</button></p>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/__banner/banner.js" data-preview></script>
+  <script src="/__banner/admin/emoji-picker.js"></script>
+  <script src="/__banner/admin/app.js"></script>
+</body>
+</html>

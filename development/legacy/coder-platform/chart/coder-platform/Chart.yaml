@@ -1,0 +1,26 @@
+apiVersion: v2
+name: coder-platform
+description: >-
+  Coder with everything this platform adds, as one release: the CloudNativePG operator and database, Coder
+  (air-gap image with a Terraform provider mirror), Keycloak (OIDC) sign-in, the first admin and the workspace
+  template, the announcement banner, and the dashboard add-ons (Announcement, Classification, Keycloak, Change Logo,
+  Monitoring, Workspace Health, Certificates). Needs Traefik v3 with the Gateway API provider and its rewrite-body plugin.
+type: application
+version: 1.0.0
+appVersion: "2.37.3"
+kubeVersion: ">=1.27.0-0"
+keywords: [coder, cloudnative-pg, traefik, gateway-api, air-gap]
+dependencies:
+  - name: cloudnative-pg
+    version: 0.29.1
+    repository: https://cloudnative-pg.github.io/charts
+    condition: cloudnative-pg.enabled
+  - name: coder
+    version: 2.37.3
+    repository: https://helm.coder.com/v2
+    condition: coder.enabled          # false = attach to an existing Coder (./upgrade)
+  # ../../banner-update/banner-chart, packaged into charts/ by ../../sync-sources
+  - name: coder-banner
+    version: 0.4.3
+    repository: file://../../../banner-update/banner-chart
+    condition: coder-banner.enabled

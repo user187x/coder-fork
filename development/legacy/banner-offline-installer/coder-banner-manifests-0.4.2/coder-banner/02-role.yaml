@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coder-banner-state
+  namespace: coder
+  labels:
+    app.kubernetes.io/name: coder-banner
+    app.kubernetes.io/instance: coder-banner
+    app.kubernetes.io/part-of: coder
+    app.kubernetes.io/managed-by: kubectl
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["coder-banner-state"]
+    verbs: ["get", "update", "patch"]

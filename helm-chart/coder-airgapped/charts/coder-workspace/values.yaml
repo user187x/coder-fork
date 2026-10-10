@@ -1,0 +1,43 @@
+# Workspaces, the template push and every resource of this chart live here. The template accepts only "coder".
+namespace: "coder"
+
+# Prefix of every object name (<prefix>-terraform, <prefix>-icons, <prefix>-push-template). Empty = the release name.
+namePrefix: ""
+
+coder:
+  url: "https://coder.grey-marshall.com"
+  # Secret (in `namespace`, key "token") with a Coder session token for the template push. install-workspace-chart
+  # creates it for the install and deletes it afterwards. Without it the Job logs in with Secret coder-init-auth.
+  tokenSecret: "coder-workspace-push-token"
+  # URL the push Job uses instead of `url` (e.g. the in-cluster Service, so the push needs no Gateway or DNS).
+  internalUrl: ""
+
+# Image of the template-push Job's coder CLI.
+cliImage: "ghcr.io/coder/coder:latest"
+# Any image with python3: signs in with coder-init-auth when there is no token Secret.
+loginImage: "docker.io/library/python:3.13-alpine"
+
+# Container image of the workspace pods, substituted for "codercom/enterprise-base:ubuntu" in files/main.tf.
+workspaceImage: "codercom/enterprise-base:ubuntu"
+
+imagePullSecrets: []    # e.g. [{name: registry-pull}], for the push Job and the icons Deployment
+
+# Secrets the template and the push Job read (they must exist in `namespace`).
+secrets:
+  tlsCa: tls-ca              # key ca.crt; also substituted for "tls-ca" in files/main.tf (workspace trust store)
+  initAuth: coder-init-auth  # keys email, password: the push Job's sign-in when there is no token Secret
+
+template:
+  name: "ubuntu-vnc-desktop"
+
+# Add files/agent-audit.tf (Observability > Agent Activity: every command run in a workspace) to the template.
+# Off by default: the reference cluster's active template is main.tf + certificates.tf only.
+agentAudit: false
+
+# Custom app icons (files/icons/*), served at https://<host>/__icons/<file> (templates/icons.yaml)
+icons:
+  image: "nginxinc/nginx-unprivileged:1.30.5-alpine"
+  host: ""            # default: coder.url without https://
+  gateway:
+    name: traefik-gateway
+    namespace: traefik
