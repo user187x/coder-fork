@@ -18,8 +18,14 @@ It asks only what it cannot work out, and offers a default you accept with Enter
    Keycloak's issuer / client secret / CA, Helm or Argo CD
 
 Then it does the rest: Gateway API CRDs, Traefik, CloudNativePG, Secrets, the chart, and on Minikube the
-`local-path` storage, a Keycloak, the tunnel and `/etc/hosts` (sudo asks for your password). At the end it prints
-the URL and the sign-in (`admin@admin.com` / `admin`). Re-running it is safe; it remembers your answers.
+`local-path` storage and a Keycloak. At the end it prints the URL and the sign-in (`admin@admin.com` / `admin`).
+Re-running it is safe; it remembers your answers.
+
+**Minikube and sudo:** reaching the cluster from your machine needs root for up to three things – the
+`minikube tunnel`, `/etc/hosts` entries, and trusting the CA. Right after you name the profile, the script lists the
+ones still needed (it skips a running tunnel, names your DNS already resolves, and a CA you already trust) and asks
+once. Say yes and sudo asks for your password then; the steps run at the end of the install with no further
+questions. Say no and it prints the exact commands instead.
 
 `./make --deploy --yes` takes every remembered answer without asking. Helpers it uses, which also work on their own:
 `./x509-support` (certificates), `./minikube-support` (e.g. `./minikube-support expose coder <domain>` after a

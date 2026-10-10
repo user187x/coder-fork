@@ -5,6 +5,9 @@
 * `./make --deploy`: guided install for Minikube or EKS. Asks the domain (derives `coder.`, `*.`, `keycloak.`),
   creates self-signed certificates or checks the ones you bring (pair, chain, hostnames, expiry; DER and
   encrypted keys converted), then installs the prerequisites, Secrets and chart. Answers are remembered.
+* Minikube: the sudo steps (tunnel, `/etc/hosts`, trusting the CA) are planned and agreed to up front; sudo asks
+  for the password once, then and there, and the steps run at the end unattended. Steps already done are skipped;
+  without sudo the exact commands are printed.
 * `minikube-support`: profile, `local-path` storage as default (minikube's hostpath class breaks CloudNativePG
   replicas on multi-node clusters), image loading, CoreDNS rewrite of `*.<domain>` to Traefik, a development
   Keycloak with client `coder`, `minikube-expose-services` / `minikube-sync-hosts` (profile-aware versions of the

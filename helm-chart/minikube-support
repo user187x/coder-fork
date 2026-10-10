@@ -16,6 +16,8 @@
 #   ./minikube-support minikube-sync-hosts PROFILE DOMAIN /etc/hosts block for the cluster's hostnames (sudo)
 #   ./minikube-support expose PROFILE DOMAIN           both of the above - run it again after a reboot
 #   ./minikube-support trust-ca CA                     trust CA on this machine (system store + browsers' NSS db)
+#   ./minikube-support ca-trusted CA                   exit 0 when CA is trusted already (no sudo)
+#   ./minikube-support tunnel-pid PROFILE              PID of the profile's running tunnel, if any (no sudo)
 #   ./minikube-support status PROFILE
 #
 # New profiles: MK_NODES (3) MK_CPUS (8) MK_MEMORY (24576) MK_DISK (20000mb) MK_K8S (v1.35.1)
@@ -258,6 +260,18 @@ minikube_sync_hosts() {
 	for line in $names; do say "$ip  $line"; done
 }
 
+# Is CA trusted here already? System store, and every browser NSS database that exists.
+mk_ca_trusted() {
+	local ca="$1" name db
+	name="coder-airgapped-$(openssl x509 -in "$ca" -noout -hash)"
+	openssl verify -CApath /etc/ssl/certs "$ca" >/dev/null 2>&1 || return 1
+	command -v certutil >/dev/null || return 0
+	for db in "$HOME/.pki/nssdb" "$HOME"/.mozilla/firefox/*.default* "$HOME"/snap/firefox/common/.mozilla/firefox/*.default*; do
+		[[ -d "$db" ]] || continue
+		certutil -d "sql:$db" -L -n "$name" >/dev/null 2>&1 || return 1
+	done
+}
+
 mk_trust_ca() {
 	local ca="$1" name
 	name="coder-airgapped-$(openssl x509 -in "$1" -noout -hash)"
@@ -292,6 +306,8 @@ minikube-expose-services) PROFILE="${1:?profile}"; minikube_expose_services ;;
 minikube-sync-hosts) PROFILE="${1:?profile}"; minikube_sync_hosts "${2:?domain}" ;;
 expose) PROFILE="${1:?profile}"; minikube_expose_services; minikube_sync_hosts "${2:?domain}" ;;
 trust-ca) mk_trust_ca "${1:?CA file}" ;;
+ca-trusted) mk_ca_trusted "${1:?CA file}" ;;
+tunnel-pid) PROFILE="${1:?profile}"; tunnel_pid "$PROFILE" ;;
 status) PROFILE="${1:?profile}"; mk_status ;;
 *) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 2 ;;
 esac

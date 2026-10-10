@@ -11,7 +11,7 @@
 # environment variables, which are then not asked:
 #   TARGET=minikube|eks DOMAIN=example.com CERTS=new|existing TLS_CRT=… TLS_KEY=… CA_BUNDLE=…
 #   PROFILE=coder KEYCLOAK=dev|existing OIDC_ISSUER=… OIDC_CA=… OIDC_SECRET_FILE=…
-#   REGISTRY=… PUSH_IMAGES=y|n STORAGE_CLASS=… METHOD=helm|argocd TRUST_CA=y|n EXPOSE=y|n
+#   REGISTRY=… PUSH_IMAGES=y|n STORAGE_CLASS=… METHOD=helm|argocd SUDO_STEPS=y|n
 #
 # Helpers in this directory: x509-support (certificates), minikube-support (Minikube), install.sh (secrets + chart),
 # mirror-images.sh (images, chart push). Generated files (certificates, values, secrets) go to .deploy/.
@@ -23,7 +23,7 @@ source "${here}/x509-support"
 STATE_ROOT="${here}/.deploy"
 ANSWERS="${STATE_ROOT}/answers.env"
 VARS=(TARGET DOMAIN CERTS TLS_CRT TLS_KEY CA_BUNDLE PROFILE KEYCLOAK OIDC_ISSUER OIDC_CA OIDC_SECRET_FILE
-	REGISTRY PUSH_IMAGES STORAGE_CLASS METHOD TRUST_CA EXPOSE)
+	REGISTRY PUSH_IMAGES STORAGE_CLASS METHOD SUDO_STEPS)
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -178,11 +178,70 @@ oidc_existing() {
 	grep -q 'BEGIN CERTIFICATE' "$OIDC_CA" && cp "$OIDC_CA" "$OIDC_CA_PEM"
 }
 
+# ---- sudo on this machine (Minikube) -------------------------------------------------------------------------
+# Three steps need root: `minikube tunnel` (adds a route to the cluster's service range), the /etc/hosts entries, and
+# trusting the CA. They are planned and agreed to up front, sudo asks for the password once right then, a
+# background loop keeps it fresh through the long install, and the steps run at the end without further questions.
+# Steps already done (tunnel running, names resolving, CA trusted) are skipped.
+NEED_TUNNEL=0 NEED_HOSTS=0 NEED_TRUST=0 SUDO_KEEPALIVE="" DO_SUDO=0   # DO_SUDO: this run (SUDO_STEPS: your answer)
+names_resolve_to() { # IP NAME... : every NAME resolves to IP
+	local ip="$1" n; shift
+	for n in "$@"; do [[ "$(getent ahostsv4 "$n" 2>/dev/null | awk 'NR==1{print $1}')" == "$ip" ]] || return 1; done
+}
+plan_sudo() {
+	local pin steps=()
+	pin=$("${here}/minikube-support" pin-ip "$DOMAIN")
+	[[ -n "$("${here}/minikube-support" tunnel-pid "$PROFILE")" ]] || { NEED_TUNNEL=1; steps+=("start 'minikube tunnel' for $PROFILE in the background (route to the cluster)"); }
+	if [[ -n "$pin" ]] && names_resolve_to "$pin" "coder.${DOMAIN}" "keycloak.${DOMAIN}"; then
+		say "coder.${DOMAIN} and keycloak.${DOMAIN} already resolve to $pin: /etc/hosts stays as it is"
+	else NEED_HOSTS=1; steps+=("add coder.${DOMAIN} and keycloak.${DOMAIN} to /etc/hosts (own block; others untouched)"); fi
+	if "${here}/minikube-support" ca-trusted "$CA_PEM"; then say "the CA is already trusted on this machine"
+	else NEED_TRUST=1; steps+=("trust the CA ($(basename "$CA_PEM")) in the system store and your browsers"); fi
+	if ((${#steps[@]} == 0)); then say "nothing on this machine needs sudo"; return; fi
+
+	step "This machine: ${#steps[@]} step(s) need sudo, at the end of the install"
+	local s; for s in "${steps[@]}"; do say "- $s"; done
+	yes_no SUDO_STEPS "Do them for you? (sudo asks for your password once, now; nothing else asks later)" y
+	[[ "$SUDO_STEPS" == y ]] || { say "OK - the commands are printed at the end instead"; return; }
+	if ! sudo -n true 2>/dev/null; then
+		if [[ -t 0 || -t 2 ]] && sudo -v; then :; else
+			warn "sudo is not available here (no terminal / wrong password): the commands are printed at the end"
+			return
+		fi
+	fi
+	( while kill -0 "$$" 2>/dev/null; do sudo -n -v 2>/dev/null; sleep 50; done ) & SUDO_KEEPALIVE=$!
+	trap '[[ -n "$SUDO_KEEPALIVE" ]] && kill "$SUDO_KEEPALIVE" 2>/dev/null' EXIT
+	DO_SUDO=1; say "sudo: OK"
+}
+run_sudo_steps() {
+	local cmds=() ip
+	step "This machine"
+	((NEED_TUNNEL || NEED_HOSTS)) && cmds+=("./minikube-support minikube-expose-services $PROFILE")
+	((NEED_HOSTS)) && cmds+=("./minikube-support minikube-sync-hosts $PROFILE $DOMAIN")
+	((NEED_TRUST)) && cmds+=("./minikube-support trust-ca $CA_PEM")
+	if ((${#cmds[@]} == 0)); then say "nothing to do: the tunnel runs, the names resolve and the CA is trusted"; return 0; fi
+	if ((DO_SUDO == 0)); then
+		if ((${#cmds[@]})); then say "Run these to reach https://coder.${DOMAIN} from this machine (they use sudo):"; local c; for c in "${cmds[@]}"; do say "  cd ${here} && $c"; done; fi
+		return 0
+	fi
+	"${here}/minikube-support" minikube-expose-services "$PROFILE"
+	ip=$(kube -n traefik get svc traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+	if ((NEED_HOSTS)) || ! names_resolve_to "$ip" "coder.${DOMAIN}" "keycloak.${DOMAIN}"; then
+		"${here}/minikube-support" minikube-sync-hosts "$PROFILE" "$DOMAIN"
+	fi
+	((NEED_TRUST)) && "${here}/minikube-support" trust-ca "$CA_PEM"
+	if names_resolve_to "$ip" "coder.${DOMAIN}"; then
+		curl -s -o /dev/null --max-time 10 --cacert "$CA_PEM" "https://coder.${DOMAIN}/healthz" && say "https://coder.${DOMAIN} answers from this machine" ||
+			warn "https://coder.${DOMAIN} does not answer yet from this machine (tunnel: ./minikube-support status $PROFILE)"
+	fi
+}
+
 # ---- Minikube -----------------------------------------------------------------------------------------------
 prepare_minikube() {
 	need minikube docker curl
 	step "Minikube"
 	ask PROFILE "minikube profile" coder nonempty
+	plan_sudo
 	"${here}/minikube-support" ensure "$PROFILE"
 	"${here}/minikube-support" load-images "$PROFILE"
 	REGISTRY="" STORAGE_CLASS="local-path" METHOD=helm   # local-path: see minikube-support mk_storage
@@ -323,7 +382,10 @@ summary() {
 		say "Keycloak admin: admin / \$(kubectl -n keycloak get secret keycloak-initial-admin -o jsonpath='{.data.password}' | base64 -d)"
 	say "CA:       ${CA_PEM}  (browsers must trust it)"
 	say "Settings: ${VALUES}  (answers: ${ANSWERS})"
-	[[ "$TARGET" == minikube ]] && say "After a reboot: ./minikube-support expose ${PROFILE} ${DOMAIN}   (tunnel + /etc/hosts)"
+	if [[ "$TARGET" == minikube ]]; then
+		if ((NEED_HOSTS)); then say "After a reboot: ./minikube-support expose ${PROFILE} ${DOMAIN}   (tunnel + /etc/hosts; sudo)"
+		else say "After a reboot: ./minikube-support minikube-expose-services ${PROFILE}   (the tunnel; sudo)"; fi
+	fi
 	return 0
 }
 
@@ -357,16 +419,7 @@ deploy() {
 	secret_args
 	if [[ "$METHOD" == argocd ]]; then install_argocd; else install_helm; fi
 
-	if [[ "$TARGET" == minikube ]]; then
-		step "Reaching it from this machine"
-		yes_no EXPOSE "Start the minikube tunnel and add the hostnames to /etc/hosts now? (sudo)" y
-		[[ "$EXPOSE" == y ]] && "${here}/minikube-support" expose "$PROFILE" "$DOMAIN"
-		if [[ "$CERTS" == new ]]; then
-			yes_no TRUST_CA "Trust the new CA on this machine (system + browsers) so https://coder.${DOMAIN} shows no warning? (sudo)" y
-			[[ "$TRUST_CA" == y ]] && "${here}/minikube-support" trust-ca "$CA_PEM"
-		fi
-		save_answers
-	fi
+	[[ "$TARGET" != minikube ]] || run_sudo_steps
 	summary
 }
 
