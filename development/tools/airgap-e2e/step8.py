@@ -117,5 +117,45 @@ if "ubuntu-vnc-desktop" in names:
             print("INFO agent lifecycle: %s; apps: %s" % (a.get("lifecycle_state"),
                   ", ".join("%s=%s" % (x.get("slug"), x.get("health")) for x in a.get("apps") or [])))
 
+# --- 1.7.0: HUD, security posture, Global Workspace Scheduler (platform service, admin + Keycloak user) ---
+def ui(path, body=None, token=None):
+    h = {"Content-Type": "application/json", "X-Requested-With": "coder-ui"}
+    if token:
+        h["Coder-Session-Token"] = token
+    req = urllib.request.Request(CODER + path, data=json.dumps(body).encode() if body is not None else None, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
+            return r.status, json.loads(r.read() or b"null")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"null")
+
+s_, hudr = ui("/__coder-ui/api/hud", token=admin)
+ids = {m["id"] for m in (hudr or {}).get("metrics", [])} if s_ == 200 else set()
+want = {"users", "workspaces", "active", "cpu", "memory", "gpu", "top-cpu", "top-memory", "top-gpu", "top-workspaces",
+        "top-online", "top-failures", "top-ping", "long-failure"}
+check("HUD: every requested metric", want <= ids, "missing %s" % sorted(want - ids) if s_ == 200 else str(s_))
+s_, post = ui("/__coder-ui/api/monitoring/posture", token=admin)
+cats = {c["category"] for c in (post or {}).get("checks", [])} if s_ == 200 else set()
+check("Monitoring: security posture (identity, exposure, runtime, signals)", cats >= {"Identity", "Exposure", "Runtime", "Signals"},
+      "%s, %s" % (sorted(cats), (post or {}).get("summary")) if s_ == 200 else str(s_))
+s_, _ = ui("/__coder-ui/api/hud", token=user)
+check("HUD is for admins only", s_ == 403, str(s_))
+
+s_, saved = ui("/__coder-ui/api/scheduler", {"enabled": True, "mode": "user", "maxActiveHours": 10, "ignoreAdmins": True,
+                                              "excludedUsers": []}, token=admin)
+check("Scheduler: enabled by the admin", s_ == 200 and saved["settings"]["enabled"], str(s_))
+if s_ == 200 and "ubuntu-vnc-desktop" in names:
+    s_, r = api("/api/v2/organizations/%s/members/me/workspaces" % tpl["organization_id"], {"template_id": tpl["id"], "name": "nosched"}, token=user)
+    check("Scheduler: a workspace without a schedule is refused", s_ == 403 and "start time" in str(r), "%s %s" % (s_, str(r)[:160]))
+    s_, r = api("/api/v2/organizations/%s/members/me/workspaces" % tpl["organization_id"],
+                {"template_id": tpl["id"], "name": "sched", "autostart_schedule": "CRON_TZ=UTC 0 9 * * 1-5", "ttl_ms": 8 * 3600000}, token=user)
+    check("Scheduler: a workspace with a valid schedule is created", s_ in (200, 201), "%s %s" % (s_, str(r)[:160]))
+    if s_ in (200, 201):
+        long_ttl = api("/api/v2/workspaces/%s/ttl" % r["id"], {"ttl_ms": 20 * 3600000}, method="PUT", token=user)[0]
+        check("Scheduler: a stop time over the maximum is refused", long_ttl == 403, str(long_ttl))
+    s_, me = ui("/__coder-ui/api/scheduler/me", token=user)
+    check("Scheduler: the user's status", s_ == 200 and me["enforced"] and all(w["compliant"] for w in me["workspaces"]), str(me)[:200])
+ui("/__coder-ui/api/scheduler", {"enabled": False}, token=admin)
+
 print("\n%d/%d checks passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

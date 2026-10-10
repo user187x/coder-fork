@@ -111,60 +111,31 @@ resource "coder_agent" "main" {
   startup_script = <<-EOT
     set -e
 
+    # No core dumps (the pod's command already sets this for the agent and all it starts), and remove the ones an
+    # earlier workspace image left in the home directory: light-locker crashed at every desktop start, writing
+    # core.<pid>. Only files named core.<digits> that are ELF core dumps are removed.
+    ulimit -c 0
+    for f in /home/coder/core.[0-9]*; do
+      [ -f "$f" ] || continue
+      if [ "$(head -c 4 "$f" | od -An -c | tr -d ' ')" = "177ELF" ] && [ "$(od -An -tu1 -j16 -N1 "$f" | tr -d ' ')" = "4" ]; then
+        rm -f "$f"
+      fi
+    done
+
+    # tmux (in the workspace image): the bundled configuration, for users who have none yet.
+    if command -v tmux-mirror-setup > /dev/null && [ ! -e ~/.config/tmux ] && [ ! -e ~/.tmux.conf ]; then
+      tmux-mirror-setup > /tmp/tmux-mirror-setup.log 2>&1 || true
+    fi
+
     # ~/.cert/<owner>.p12 is installed by the "Certificates" script (certificates.tf) from Settings > Certificates.
 
-    # 1. Install & Start code-server
-    if [ ! -d "/tmp/code-server" ]; then
-      curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=/tmp/code-server
-    fi
-    # Probe the port rather than pgrep -f: the agent runs this script as `sh -c '<script>'`,
-    # so `pgrep -f` matches the script's own command line and never starts anything.
-    if ! curl -fs http://localhost:13337/healthz > /dev/null; then
-      /tmp/code-server/bin/code-server --auth none --port 13337 >/tmp/code-server.log 2>&1 &
-    fi
-
-    # 2. Install & Start Filebrowser
-    if ! command -v filebrowser >/dev/null; then
-      curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | sudo bash
-    fi
-    # Path-based apps are proxied with their full /@user/workspace.agent/apps/<slug> prefix
-    # intact, so filebrowser must serve under it or its assets 404 (endless spinner).
-    # The agent name ("main") is hardcoded: referencing coder_agent.main here would be a cycle.
-    if ! pgrep -x filebrowser > /dev/null; then
-      filebrowser --noauth --root /home/coder --port 13339 \
-        --baseurl "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/filebrowser" \
-        >/tmp/filebrowser.log 2>&1 &
-    fi
-
-    # 3. Install & Start marimo (Python notebooks). The venv lives on the home PVC, so it is
-    # installed once per workspace and again only when MARIMO_VERSION changes.
-    MARIMO_VERSION=0.24.2
-    MARIMO_VENV=/home/coder/.marimo-venv
-    MARIMO_BASE="/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/marimo"
-    if [ "$($MARIMO_VENV/bin/marimo --version 2>/dev/null)" != "$MARIMO_VERSION" ]; then
-      python3 -m venv $MARIMO_VENV
-      $MARIMO_VENV/bin/pip install --quiet --upgrade "marimo==$MARIMO_VERSION"
-    fi
-    # marimo has no setting for its home page "Resources" section (external links): hide it
-    # with a CSS rule in marimo's own index.html (the column whose 3-column grid holds
-    # target=_blank cards; nothing else matches).
-    MARIMO_INDEX=$($MARIMO_VENV/bin/python -c 'import marimo, os; print(os.path.join(os.path.dirname(marimo.__file__), "_static", "index.html"))')
-    if ! grep -q marimo-hide-resources "$MARIMO_INDEX"; then
-      sed -i 's#</head>#<style id="marimo-hide-resources">div.flex.flex-col.gap-2:has(> div.grid.gap-3.lg\\:grid-cols-3 > a[target="_blank"]){display:none !important}</style></head>#' "$MARIMO_INDEX"
-    fi
-    mkdir -p /home/coder/notebooks
-    # --no-token: no marimo login page. marimo listens on 127.0.0.1 only, so the Coder agent's
-    # proxy is the only way in, and the app is share = "owner": Coder decides who gets in.
-    if ! curl -fs "http://localhost:2718$MARIMO_BASE/health" > /dev/null; then
-      $MARIMO_VENV/bin/marimo edit --headless --host 127.0.0.1 --port 2718 --no-token \
-        --skip-update-check --base-url "$MARIMO_BASE" /home/coder/notebooks \
-        >/tmp/marimo.log 2>&1 &
-    fi
-
-    # 4. Install Desktop Environment & noVNC
+    # 1. Desktop Environment & noVNC, first: it needs no network. It is in the workspace image
+    # (ghcr.io/user187x/coder-workspace, without light-locker); installed here only on an image without it.
+    # code-server, File Browser and marimo below are downloaded; offline they are skipped, the rest still starts.
     if [ ! -f /usr/bin/vncserver ]; then
       sudo apt-get update
-      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies dbus-x11 tigervnc-standalone-server novnc websockify
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies dbus-x11 tigervnc-standalone-server novnc websockify light-locker- lightdm- lightdm-gtk-greeter-
+      sudo rm -f /etc/xdg/autostart/light-locker.desktop /etc/xdg/autostart/xfce4-screensaver.desktop
     fi
 
     # Serve the noVNC client as the directory index so the bare app URL loads it.
@@ -191,6 +162,57 @@ VNC_SCRIPT
     # prefix before proxying, so the stock web root works as-is.
     if ! pgrep -x websockify > /dev/null; then
       websockify --web=/usr/share/novnc/ 6901 localhost:5901 > /tmp/novnc.log 2>&1 &
+    fi
+
+    # 2. Install & Start code-server
+    if [ ! -d "/tmp/code-server" ]; then
+      curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=/tmp/code-server
+    fi
+    # Probe the port rather than pgrep -f: the agent runs this script as `sh -c '<script>'`,
+    # so `pgrep -f` matches the script's own command line and never starts anything.
+    if ! curl -fs http://localhost:13337/healthz > /dev/null; then
+      /tmp/code-server/bin/code-server --auth none --port 13337 >/tmp/code-server.log 2>&1 &
+    fi
+
+    # 3. Install & Start Filebrowser
+    if ! command -v filebrowser >/dev/null; then
+      curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | sudo bash
+    fi
+    # Path-based apps are proxied with their full /@user/workspace.agent/apps/<slug> prefix
+    # intact, so filebrowser must serve under it or its assets 404 (endless spinner).
+    # The agent name ("main") is hardcoded: referencing coder_agent.main here would be a cycle.
+    if ! pgrep -x filebrowser > /dev/null; then
+      filebrowser --noauth --root /home/coder --port 13339 \
+        --baseurl "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/filebrowser" \
+        >/tmp/filebrowser.log 2>&1 &
+    fi
+
+    # 4. Install & Start marimo (Python notebooks). The venv lives on the home PVC, so it is
+    # installed once per workspace and again only when MARIMO_VERSION changes.
+    MARIMO_VERSION=0.24.2
+    MARIMO_VENV=/home/coder/.marimo-venv
+    MARIMO_BASE="/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/marimo"
+    if [ "$($MARIMO_VENV/bin/marimo --version 2>/dev/null)" != "$MARIMO_VERSION" ]; then
+      python3 -m venv $MARIMO_VENV
+      # Needs PyPI (or a mirror): without it marimo is skipped and the rest of the workspace still starts.
+      $MARIMO_VENV/bin/pip install --quiet --upgrade "marimo==$MARIMO_VERSION" || echo "marimo could not be installed (no package index?): skipped"
+    fi
+    if [ -x $MARIMO_VENV/bin/marimo ]; then
+      # marimo has no setting for its home page "Resources" section (external links): hide it
+      # with a CSS rule in marimo's own index.html (the column whose 3-column grid holds
+      # target=_blank cards; nothing else matches).
+      MARIMO_INDEX=$($MARIMO_VENV/bin/python -c 'import marimo, os; print(os.path.join(os.path.dirname(marimo.__file__), "_static", "index.html"))')
+      if ! grep -q marimo-hide-resources "$MARIMO_INDEX"; then
+        sed -i 's#</head>#<style id="marimo-hide-resources">div.flex.flex-col.gap-2:has(> div.grid.gap-3.lg\\:grid-cols-3 > a[target="_blank"]){display:none !important}</style></head>#' "$MARIMO_INDEX"
+      fi
+      mkdir -p /home/coder/notebooks
+      # --no-token: no marimo login page. marimo listens on 127.0.0.1 only, so the Coder agent's
+      # proxy is the only way in, and the app is share = "owner": Coder decides who gets in.
+      if ! curl -fs "http://localhost:2718$MARIMO_BASE/health" > /dev/null; then
+        $MARIMO_VENV/bin/marimo edit --headless --host 127.0.0.1 --port 2718 --no-token \
+          --skip-update-check --base-url "$MARIMO_BASE" /home/coder/notebooks \
+          >/tmp/marimo.log 2>&1 &
+      fi
     fi
   EOT
 
@@ -430,8 +452,10 @@ resource "kubernetes_deployment_v1" "main" {
         container {
           name              = "dev"
           image             = "codercom/enterprise-base:ubuntu"
-          image_pull_policy = "Always"
-          command           = ["sh", "-c", coder_agent.main.init_script]
+          # The workspace image is versioned (a new build gets a new tag), and offline there is nothing to pull from.
+          image_pull_policy = "IfNotPresent"
+          # No core dumps from the agent or anything it starts (terminals, the desktop, apps).
+          command = ["sh", "-c", join("\n", ["ulimit -c 0", coder_agent.main.init_script])]
           security_context {
             run_as_user = "1000"
           }

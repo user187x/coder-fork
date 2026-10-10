@@ -4,13 +4,13 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.5-airgap   sha256:0f489d3c3ea6712fddb7fbf7b341a55bbadf86da8350fc03b4997b46a5617208   coder (server); = the fork's platform.5 (ea80521c2) + Terraform provider mirror
+ghcr.io/user187x/coder-platform:2.0.0-platform.6-airgap   sha256:06b0660d14eabe117d5d9d875b22387f141d3488f08d23cac6243c6ed6282549   coder (server); = the fork's platform.6 (a65bc39b7) + Terraform provider mirror
+ghcr.io/user187x/coder-workspace:1.0.0                    sha256:2c4d37b99fd38ec0c2e6dfe41d0bdf116fbef345ea665ec8de51f7c6c1e22e0a   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), JetBrains Mono Nerd Font, tmux (development/workspace-image)
 
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage
 docker.io/library/python:3.13-alpine                      sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a   coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor)
 ghcr.io/coder/coder:latest                                sha256:38a4cfc548b096484d6d1743e5f1a5af18301ed9a7ffde5150663822f9887026   coder-workspace push-template Job (floating tag, pinned here)
-codercom/enterprise-base:ubuntu                           sha256:96f02cb6ca6a6d23a7f75c36134e8df1854de27a5e6ce0290175bd99e7493605   workspace pods (ubuntu-vnc-desktop)
 
 [prereqs]   images/public/prereqs/     public; only if you install these from prereqs/
 ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0              sha256:a2701eb97cdd2a34b1fdb2cb51987f544b706e40bec72ae7146cd8580efefebb   CloudNativePG operator (prereqs/cloudnative-pg-0.29.0.tgz, install.sh --cnpg)

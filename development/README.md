@@ -13,6 +13,7 @@ Everything needed to keep developing the coder-airgapped deliverable, other than
 | Platform service, dashboard add-ons (JS/CSS), their images | `../helm-chart/coder-airgapped/files/ui-updates/` |
 | Default logo (animated GIF) and default user avatar | `../helm-chart/defaults/` (installed as ConfigMaps by `install.sh`) |
 | First user / template-push bootstrap | `../helm-chart/coder-airgapped/files/bootstrap/bootstrap.py`, `templates/bootstrap-job.yaml` |
+| Workspace image (desktop, fonts, tmux, preinstalled tools) | `workspace-image/` (then `tools/build-workspace-image.sh`) |
 | Workspace template `ubuntu-vnc-desktop` | `../helm-chart/coder-airgapped/charts/coder-workspace/files/*.tf` |
 | Announcement banner | `../helm-chart/coder-airgapped/charts/coder-banner/` |
 | The Coder server itself (UI, API) | the fork, `~/workspace/coder` – see `coder-fork/FORK.md` |
@@ -32,8 +33,10 @@ minikube profile `coder` is the development cluster. Deploy (or redeploy) the wo
 | Path | What |
 |---|---|
 | `coder-fork/FORK.md` | Which fork commit the Coder image is built from, and how to build a new one |
+| `workspace-image/` | Dockerfile of the workspace image `ghcr.io/user187x/coder-workspace` (enterprise-base + desktop without light-locker, JetBrains Mono Nerd Font, tmux from `packages/tmux-installation.deb`); build with `tools/build-workspace-image.sh` |
 | `airgap-image/` | Dockerfile + `terraformrc` of the `-airgap` Coder image (the fork's image + a Terraform provider mirror); `template/` is filled by the build |
 | `tools/build-bundle.sh` | Lint + render the chart, fetch missing public image archives, write `../dist/coder-airgapped-<version>[-slim].tar.gz` |
+| `tools/build-workspace-image.sh` | Build the workspace image, check it, and save it into `../helm-chart/images/custom/` |
 | `tools/build-airgap-image.sh` | Build the `-airgap` image and save it into `../helm-chart/images/custom/` |
 | `tools/airgap-e2e/` | Fresh end-to-end test of DEPLOY.md on a kind cluster with egress blocked (`README.md` there) |
 | `tools/apply-platform-patch.py` | Applies the "platform patch" (templated values, `global.imagePullSecrets`, quoted checksums) to a vendored subchart |

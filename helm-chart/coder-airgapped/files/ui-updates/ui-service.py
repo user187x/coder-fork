@@ -44,6 +44,12 @@
   GET  /__coder-ui/api/quota               limits, every user's usage (built with / running / live) and the cluster
   POST /__coder-ui/api/quota               {"default": {workspaces, cpu, memory}, "users": {name: {...}}, "exemptAdmins"}
   POST /__coder-ui/api/quota/check         {owner, template_id | template_version_id, rich_parameter_values}: allowed?
+  Global Workspace Scheduler (Health > User Quota; admins, and Coder's own check before it creates or reschedules)
+  GET  /__coder-ui/api/scheduler           admins: the settings and the workspaces that break them
+  POST /__coder-ui/api/scheduler           admins: {enabled, mode: user|fixed, fixed: {start, stop, days, timezone},
+                                            maxActiveHours, ignoreAdmins, excludedUsers}
+  GET  /__coder-ui/api/scheduler/me        anyone signed in: the rules for them and their workspaces that break them
+  POST /__coder-ui/api/scheduler/check     {owner, action: create|autostart|ttl, autostart_schedule, ttl_ms}: allowed?
   GET  /__coder-ui/api/keycloak/status     admins: is Keycloak's admin API usable (General sidebar's check)
   GET  /__coder-ui/api/certificates[?refresh]  admins: TLS of Coder / Keycloak / database and every mounted certificate
   POST /__coder-ui/api/chat/delete {"to"}   the whole conversation, for both (either participant); the other side's
@@ -55,6 +61,8 @@
 
   Monitoring (admins; workspace pod logs streamed into the temporary Postgres coder-ui-logs-db, 5 MB per instance)
   GET  /__coder-ui/api/monitoring          users and their running workspaces
+  GET  /__coder-ui/api/monitoring/posture  zero-trust checks and runtime signals (identity, exposure, pods, failures)
+  GET  /__coder-ui/api/hud                 admins: the HUD's metrics (totals, leaders, health), cached 5 seconds
   GET  /__coder-ui/api/monitoring/logs?workspace=<id>&after=<seq>   new log lines (starts / keeps the follower)
 
   Keycloak <-> Coder sign-in (admins)
@@ -5148,6 +5156,603 @@ def quota_check(token, user, body):
     return {"allowed": True, "message": "within quota", "limits": limits, "usage": usage, "request": {"cpu": want_cpu, "memory": want_mem}}
 
 
+# --------------------------------------------------------------------------- Global Workspace Scheduler (Health > User Quota)
+# Makes every workspace have a start and a stop time. "user": each user picks their own (a daily start time on chosen
+# days, and a stop time, i.e. Coder's autostart schedule and its time-to-stop); "fixed": the admin's schedule applies to
+# every workspace. Optionally a cap on how long a workspace may stay up after it starts. Admins can be left out, and
+# users excluded by name. Coder (the platform build) asks /api/scheduler/check before it creates a workspace or changes
+# a schedule, and refuses (or, "fixed", applies the admin's schedule); the dashboard asks /api/scheduler/me and makes
+# the user fix workspaces that break the rules before going on.
+SCHEDULER_DEFAULT = {"enabled": False, "mode": "user",
+                     "fixed": {"start": "08:00", "stop": "18:00", "days": [1, 2, 3, 4, 5], "timezone": "UTC"},
+                     "maxActiveHours": None, "ignoreAdmins": True, "excludedUsers": []}
+_HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def scheduler_settings():
+    s = STORE.get_setting("workspace_scheduler", None) or {}
+    out = json.loads(json.dumps(SCHEDULER_DEFAULT))
+    out.update({k: v for k, v in s.items() if k in SCHEDULER_DEFAULT})
+    out["fixed"] = {**SCHEDULER_DEFAULT["fixed"], **(s.get("fixed") or {})}
+    return out
+
+
+def clean_scheduler(raw):
+    mode = raw.get("mode", "user")
+    if mode not in ("user", "fixed"):
+        raise ValueError("Mode must be \"user\" or \"fixed\".")
+    fixed = raw.get("fixed") or {}
+    start, stop = str(fixed.get("start") or "08:00"), str(fixed.get("stop") or "18:00")
+    if not _HHMM.match(start) or not _HHMM.match(stop):
+        raise ValueError("Start and stop times must be HH:MM (24-hour).")
+    if start == stop:
+        raise ValueError("The stop time must differ from the start time.")
+    days = sorted({int(d) for d in fixed.get("days") or [] if str(d).isdigit() and 0 <= int(d) <= 6})
+    if mode == "fixed" and not days:
+        raise ValueError("Pick at least one day for the schedule.")
+    tz = str(fixed.get("timezone") or "UTC")
+    if not re.match(r"^[A-Za-z0-9_+\-/]{1,64}$", tz):
+        raise ValueError("Unknown time zone %r." % tz)
+    hours = raw.get("maxActiveHours")
+    if hours in (None, "", 0):
+        hours = None
+    else:
+        try:
+            hours = round(float(hours), 2)
+        except (TypeError, ValueError):
+            raise ValueError("The maximum active time must be a number of hours.")
+        if not 0.5 <= hours <= 168:
+            raise ValueError("The maximum active time must be between 0.5 and 168 hours.")
+    if mode == "fixed" and hours and _fixed_ttl_ms(start, stop) > hours * 3600000:
+        raise ValueError("The schedule (%s to %s) is longer than the maximum active time (%g h)." % (start, stop, hours))
+    excluded = []
+    for name in raw.get("excludedUsers") or []:
+        if not re.match(r"^[A-Za-z0-9._@-]{1,64}$", str(name)):
+            raise ValueError("Unknown user name %r." % name)
+        if str(name) not in excluded:
+            excluded.append(str(name))
+    return {"enabled": raw.get("enabled") is True, "mode": mode,
+            "fixed": {"start": start, "stop": stop, "days": days, "timezone": tz},
+            "maxActiveHours": hours, "ignoreAdmins": raw.get("ignoreAdmins", True) is not False,
+            "excludedUsers": excluded}
+
+
+def _fixed_ttl_ms(start, stop):
+    (h1, m1), (h2, m2) = (map(int, start.split(":")), map(int, stop.split(":")))
+    minutes = (h2 * 60 + m2) - (h1 * 60 + m1)
+    return (minutes if minutes > 0 else minutes + 24 * 60) * 60000
+
+
+def fixed_schedule(settings):
+    """The admin's schedule as Coder stores it: an autostart cron (CRON_TZ=<tz> M H * * <days>) and a time-to-stop."""
+    f = settings["fixed"]
+    h, m = map(int, f["start"].split(":"))
+    days = "*" if len(f["days"]) == 7 else ",".join(str(d) for d in f["days"])
+    return {"autostart_schedule": "CRON_TZ=%s %d %d * * %s" % (f["timezone"], m, h, days),
+            "ttl_ms": _fixed_ttl_ms(f["start"], f["stop"])}
+
+
+def scheduler_exempt(settings, username, roles):
+    if not settings["enabled"]:
+        return "the scheduler is off"
+    if username in settings["excludedUsers"]:
+        return "excluded"
+    if settings["ignoreAdmins"] and set(roles) & ADMIN_ROLES:
+        return "admins are not required"
+    return ""
+
+
+def schedule_problem(settings, autostart, ttl_ms):
+    """Why a workspace's schedule breaks the rules, or "" when it complies."""
+    if settings["mode"] == "fixed":
+        want = fixed_schedule(settings)
+        if (autostart or "") != want["autostart_schedule"] or (ttl_ms or 0) != want["ttl_ms"]:
+            return "it must use the required schedule"
+        return ""
+    if not autostart:
+        return "it has no start time"
+    if not ttl_ms or ttl_ms <= 0:
+        return "it has no stop time"
+    cap = settings["maxActiveHours"]
+    if cap and ttl_ms > cap * 3600000:
+        return "it stays up %g h, more than the %g h allowed" % (round(ttl_ms / 3600000, 2), cap)
+    return ""
+
+
+def _scheduler_target(token, user, owner):
+    owner = str(owner or "me")
+    if owner in ("me", user["username"], user["id"]):
+        return {"username": user["username"], "id": user["id"], "roles": user["roles"]}
+    status, u = _coder_get(token, "/api/v2/users/%s" % urllib.parse.quote(owner))
+    if status != 200 or not isinstance(u, dict):
+        return None
+    return {"username": u.get("username"), "id": u.get("id"), "roles": sorted({r.get("name") for r in u.get("roles") or []})}
+
+
+def scheduler_check(token, user, body):
+    """Before Coder creates a workspace (action "create") or changes its start ("autostart") or stop ("ttl") time:
+    {"allowed", "message", "apply"?}. "apply" (mode "fixed", on create) is the schedule Coder sets on the workspace."""
+    settings = scheduler_settings()
+    target = _scheduler_target(token, user, body.get("owner"))
+    if target is None:
+        return {"allowed": True, "message": "owner not readable; not checked"}
+    why = scheduler_exempt(settings, target["username"], target["roles"])
+    if why:
+        return {"allowed": True, "message": why}
+    action = body.get("action") or "create"
+    autostart, ttl = body.get("autostart_schedule") or "", body.get("ttl_ms")
+    if settings["mode"] == "fixed":
+        want = fixed_schedule(settings)
+        if action == "create":
+            return {"allowed": True, "message": "the required schedule is applied", "apply": want}
+        want_part = {"autostart": (autostart or "") == want["autostart_schedule"],
+                     "ttl": (ttl or 0) == want["ttl_ms"]}.get(action, not schedule_problem(settings, autostart, ttl))
+        if not want_part:
+            return {"allowed": False, "message": "An administrator sets every workspace's schedule (%s to %s, %s). "
+                    "It cannot be changed here." % (settings["fixed"]["start"], settings["fixed"]["stop"],
+                                                     settings["fixed"]["timezone"])}
+        return {"allowed": True, "message": "the required schedule"}
+    # A change is judged on its own half (start time, or stop time), so a schedule can be set in two steps; creating
+    # a workspace needs both, and the dashboard makes users complete them.
+    if action == "autostart":
+        problem = "" if autostart else "it has no start time"
+    elif action == "ttl":
+        problem = schedule_problem(settings, "-", ttl)
+    else:
+        problem = schedule_problem(settings, autostart, ttl)
+    if problem:
+        cap = settings["maxActiveHours"]
+        rule = "Every workspace needs a start time and a stop time" + (" (up to %g hours apart)" % cap if cap else "")
+        return {"allowed": False, "message": "%s: %s. Set them in the workspace's schedule." % (rule, problem)}
+    return {"allowed": True, "message": "the schedule complies"}
+
+
+def _workspace_schedules(token, owner=None):
+    q = {"limit": 1000}
+    if owner:
+        q["q"] = "owner:" + owner
+    status, data = _coder_get(token, "/api/v2/workspaces?" + urllib.parse.urlencode(q))
+    if status != 200 or not isinstance(data, dict):
+        raise RuntimeError("Coder's workspaces API answered HTTP %s" % status)
+    return [{"id": w.get("id"), "name": w.get("name"), "owner": w.get("owner_name"),
+             "autostart_schedule": w.get("autostart_schedule") or None, "ttl_ms": w.get("ttl_ms") or None}
+            for w in data.get("workspaces") or []]
+
+
+def scheduler_me(token, user):
+    """For the dashboard: the rules that apply to this user, and their workspaces that break them."""
+    settings = scheduler_settings()
+    why = scheduler_exempt(settings, user["username"], user["roles"])
+    out = {"enforced": not why, "reason": why, "mode": settings["mode"], "maxActiveHours": settings["maxActiveHours"]}
+    if settings["mode"] == "fixed":
+        out["fixed"] = dict(settings["fixed"], **fixed_schedule(settings))
+    if why:
+        out["workspaces"] = []
+        return out
+    rows = []
+    for w in _workspace_schedules(token, owner=user["username"]):
+        problem = schedule_problem(settings, w["autostart_schedule"], w["ttl_ms"])
+        rows.append(dict(w, compliant=not problem, problem=problem))
+    out["workspaces"] = rows
+    return out
+
+
+def scheduler_report(token):
+    """Health > User Quota > Global Workspace Scheduler: the settings and the workspaces that break them."""
+    settings = scheduler_settings()
+    users, offset = {}, 0
+    while offset < 5000:
+        status, page = _coder_get(token, "/api/v2/users?" + urllib.parse.urlencode({"q": "status:active", "limit": 500, "offset": offset}))
+        if status != 200:
+            raise RuntimeError("Coder's users API answered HTTP %s" % status)
+        rows = page.get("users") or []
+        for u in rows:
+            users[u.get("username")] = sorted({r.get("name") for r in u.get("roles") or []})
+        if len(rows) < 500:
+            break
+        offset += 500
+    workspaces, broken, exempt = _workspace_schedules(token), [], 0
+    for w in workspaces:
+        if scheduler_exempt(settings, w["owner"], users.get(w["owner"], [])):
+            exempt += 1
+            continue
+        problem = schedule_problem(settings, w["autostart_schedule"], w["ttl_ms"])
+        if problem:
+            broken.append(dict(w, problem=problem))
+    out = {"settings": settings, "workspaces": len(workspaces), "exempt": exempt, "noncompliant": broken,
+           "users": sorted(users), "generatedAt": now()}
+    if settings["mode"] == "fixed":
+        out["fixedSchedule"] = fixed_schedule(settings)
+    return out
+
+
+# --------------------------------------------------------------------------- Security posture (General > Monitoring)
+# Zero-trust checks and runtime signals no other page shows: who holds privilege and how they sign in, what is exposed
+# beyond its owner, how workspace pods run, and what is failing. Each check: severity critical | warning | ok | unknown,
+# a summary, the items behind it and how to fix them. Read with the requesting admin's session (Coder), the service's
+# own Kubernetes access (pods, network policies in the workspace namespace) and Keycloak admin access (MFA).
+POSTURE_IDLE_DAYS = 30
+POSTURE_TOKEN_MAX_DAYS = 30
+
+
+def _ts(iso):
+    """Epoch seconds of an RFC 3339 time, or None (Coder writes 0001-01-01 for "never")."""
+    if not iso or str(iso).startswith("0001-"):
+        return None
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _days_since(iso):
+    t = _ts(iso)
+    return None if t is None else (time.time() - t) / 86400
+
+
+def _check(cid, category, title, severity, summary, items=None, fix=""):
+    return {"id": cid, "category": category, "title": title, "severity": severity, "summary": summary,
+            "items": (items or [])[:200], "count": len(items or []), "fix": fix}
+
+
+def _all_users(token):
+    users, offset = [], 0
+    while offset < 5000:
+        status, page = _coder_get(token, "/api/v2/users?" + urllib.parse.urlencode({"q": "status:active", "limit": 500, "offset": offset}))
+        if status != 200:
+            raise RuntimeError("Coder's users API answered HTTP %s" % status)
+        rows = page.get("users") or []
+        users += rows
+        if len(rows) < 500:
+            break
+        offset += 500
+    return users
+
+
+def _mfa_check(users):
+    """OIDC users whose Keycloak account has no second factor (OTP or WebAuthn)."""
+    status, dep = KUBE.call("GET", "/apis/apps/v1/namespaces/%s/deployments/%s" % (CODER_NAMESPACE, CODER_DEPLOYMENT))
+    settings = kc_settings(container_env(dep) if status == 200 else {})[0]
+    url, realm = settings.get("keycloakUrl") or "", settings.get("realm") or "master"
+    oidc = [u for u in users if u.get("login_type") == "oidc" and u.get("email")]
+    if not url:
+        return _check("identity.mfa", "Identity", "Multi-factor sign-in", "unknown", "Keycloak's address is unknown.")
+    kc = Keycloak(url)
+    if not kc.login():
+        return _check("identity.mfa", "Identity", "Multi-factor sign-in", "unknown",
+                      "Keycloak's admin API is not reachable (%s)." % (kc.secret_state or kc.error or "no access"))
+    missing = []
+    for u in oidc[:500]:
+        found = kc.api("GET", "/%s/users?%s" % (realm, urllib.parse.urlencode({"email": u["email"], "exact": "true"}))) or []
+        if not found:
+            continue
+        creds = kc.api("GET", "/%s/users/%s/credentials" % (realm, found[0]["id"])) or []
+        types = {c.get("type") for c in creds}
+        if not types & {"otp", "webauthn", "webauthn-passwordless"} and not (found[0].get("requiredActions") or []).count("CONFIGURE_TOTP"):
+            missing.append({"label": u.get("username"), "note": u.get("email")})
+    if not oidc:
+        return _check("identity.mfa", "Identity", "Multi-factor sign-in", "ok", "No Keycloak (OIDC) accounts yet.")
+    sev = "warning" if missing else "ok"
+    return _check("identity.mfa", "Identity", "Multi-factor sign-in", sev,
+                  "%d of %d Keycloak accounts have no second factor (OTP or security key)." % (len(missing), len(oidc))
+                  if missing else "Every Keycloak account has a second factor.",
+                  missing, "In Keycloak, require OTP or WebAuthn (Authentication > Required actions, or a flow with a "
+                           "conditional OTP step) for the Coder realm.")
+
+
+def monitoring_posture(token):
+    hit = CACHE.get("posture:" + token[:16])
+    if hit is not None:
+        return hit
+    checks = []
+    users = _all_users(token)
+    roles_of = {u.get("username"): {r.get("name") for r in u.get("roles") or []} for u in users}
+
+    # ---- Identity: privilege, sign-in method, dormant accounts, MFA, tokens
+    admins = [u for u in users if roles_of[u.get("username")] & ADMIN_ROLES]
+    idle_admins = [u for u in admins if (_days_since(u.get("last_seen_at")) or 10 ** 6) > POSTURE_IDLE_DAYS]
+    checks.append(_check(
+        "identity.privileged", "Identity", "Privileged accounts", "warning" if idle_admins or len(admins) > 5 else "ok",
+        "%d accounts hold administrator roles%s." % (len(admins), ", %d of them unused for %d+ days" % (len(idle_admins), POSTURE_IDLE_DAYS) if idle_admins else ""),
+        [{"label": u.get("username"), "note": "%s · last seen %s" % (", ".join(sorted(roles_of[u.get("username")] & ADMIN_ROLES)),
+          "never" if _days_since(u.get("last_seen_at")) is None else "%d d ago" % _days_since(u.get("last_seen_at")))} for u in admins],
+        "Keep few administrators; remove the role from accounts that do not need it, suspend unused ones."))
+    pw = [u for u in users if u.get("login_type") == "password"]
+    checks.append(_check(
+        "identity.password", "Identity", "Accounts that bypass SSO", "warning" if pw else "ok",
+        "%d accounts sign in with a password instead of Keycloak (no SSO policy or MFA applies to them)." % len(pw) if pw else "Everyone signs in with Keycloak.",
+        [{"label": u.get("username"), "note": "admin" if u in admins else "user"} for u in pw],
+        "Give each person a Keycloak account; keep at most one break-glass password admin, with a strong password."))
+    dormant = [u for u in users if (_days_since(u.get("last_seen_at")) or 10 ** 6) > POSTURE_IDLE_DAYS]
+    checks.append(_check(
+        "identity.dormant", "Identity", "Dormant accounts", "warning" if dormant else "ok",
+        "%d active accounts have not been used for %d+ days." % (len(dormant), POSTURE_IDLE_DAYS) if dormant else "Every active account was used in the last %d days." % POSTURE_IDLE_DAYS,
+        [{"label": u.get("username"), "note": "never signed in" if _days_since(u.get("last_seen_at")) is None else "%d days" % _days_since(u.get("last_seen_at"))} for u in dormant],
+        "Suspend accounts that are no longer used (Admin > Accounts); they keep their workspaces."))
+    try:
+        checks.append(_mfa_check(users))
+    except Exception as e:  # noqa: BLE001
+        checks.append(_check("identity.mfa", "Identity", "Multi-factor sign-in", "unknown", "Not checked: %s" % str(e)[:160]))
+    status, toks = _coder_get(token, "/api/v2/users/me/keys/tokens?include_all=true")
+    if status == 200 and isinstance(toks, list):
+        risky = []
+        for t in toks:
+            life = (t.get("lifetime_seconds") or 0) / 86400
+            unused = _days_since(t.get("last_used"))
+            age = _days_since(t.get("created_at")) or 0
+            why = []
+            if life > POSTURE_TOKEN_MAX_DAYS:
+                why.append("valid %d days" % life)
+            if unused is None and age > 7:
+                why.append("never used")
+            elif unused is not None and unused > POSTURE_IDLE_DAYS:
+                why.append("unused %d days" % unused)
+            if why:
+                risky.append({"label": "%s / %s" % (t.get("username") or "?", t.get("token_name") or t.get("id")), "note": ", ".join(why)})
+        checks.append(_check(
+            "access.tokens", "Identity", "API tokens", "warning" if risky else "ok",
+            "%d of %d API tokens are long-lived or unused." % (len(risky), len(toks)) if risky else "%d API tokens, none long-lived or stale." % len(toks),
+            risky, "Delete stale tokens; cap token lifetimes (--max-token-lifetime) and prefer short-lived sessions."))
+    else:
+        checks.append(_check("access.tokens", "Identity", "API tokens", "unknown", "Coder's tokens API answered HTTP %s." % status))
+
+    # ---- Exposure, agents and builds (one pass over the workspaces)
+    status, data = _coder_get(token, "/api/v2/workspaces?" + urllib.parse.urlencode({"limit": 1000}))
+    workspaces = (data or {}).get("workspaces") or [] if status == 200 else []
+    st, info = _coder_get(token, "/api/v2/buildinfo")
+    server_version = str((info or {}).get("version") or "").split("+")[0] if st == 200 else ""
+    ports, apps, offline, outdated, failed, no_stop = [], [], [], [], [], []
+    for w in workspaces:
+        name = "%s/%s" % (w.get("owner_name"), w.get("name"))
+        build = w.get("latest_build") or {}
+        running = build.get("status") == "running" and build.get("transition") == "start"
+        if build.get("status") == "failed":
+            failed.append({"label": name, "note": ((build.get("job") or {}).get("error") or "build failed")[:140]})
+        if running and not w.get("ttl_ms"):
+            no_stop.append({"label": name, "note": "running, no stop time"})
+        for res in build.get("resources") or []:
+            for a in res.get("agents") or []:
+                if running and a.get("status") in ("disconnected", "timeout"):
+                    offline.append({"label": "%s.%s" % (name, a.get("name")), "note": a.get("status")})
+                ver = str(a.get("version") or "").split("+")[0]
+                if running and ver and server_version and ver != server_version:
+                    outdated.append({"label": "%s.%s" % (name, a.get("name")), "note": "agent %s, server %s" % (ver, server_version)})
+                for app in a.get("apps") or []:
+                    if app.get("sharing_level") in ("public", "authenticated", "organization"):
+                        apps.append({"label": "%s · %s" % (name, app.get("display_name") or app.get("slug")), "note": app.get("sharing_level"),
+                                     "level": app.get("sharing_level")})
+        if running:
+            stp, shares = _coder_get(token, "/api/v2/workspaces/%s/port-share" % w.get("id"))
+            for sh in (shares or {}).get("shares") or [] if stp == 200 else []:
+                ports.append({"label": "%s · port %s" % (name, sh.get("port")), "note": "%s (%s)" % (sh.get("share_level"), sh.get("protocol")),
+                              "level": sh.get("share_level")})
+    exposed = ports + apps
+    public = [x for x in exposed if x.get("level") == "public"]
+    checks.append(_check(
+        "exposure.shared", "Exposure", "Shared ports and apps", "critical" if public else "warning" if exposed else "ok",
+        ("%d shared beyond their owner, %d of them public (anyone with the link, no sign-in)." % (len(exposed), len(public))) if exposed else "Nothing is shared beyond its owner.",
+        [{"label": x["label"], "note": x["note"]} for x in exposed],
+        "Share only what is needed and only with signed-in users; public shares bypass Coder's sign-in entirely."))
+
+    # ---- Runtime: workspace pods (security context, images), network policies, restarts
+    status, pods = KUBE.call("GET", "/api/v1/namespaces/%s/pods" % WORKSPACE_NAMESPACE)
+    pods = [p for p in (pods or {}).get("items") or [] if ((p.get("metadata") or {}).get("labels") or {}).get("com.coder.workspace.id")] if status == 200 else []
+    privileged, rootish, images, restarts = [], [], [], []
+    for pod in pods:
+        meta, spec = pod.get("metadata") or {}, pod.get("spec") or {}
+        who = "%s/%s" % ((meta.get("labels") or {}).get("com.coder.user.username"), (meta.get("labels") or {}).get("com.coder.workspace.name"))
+        flags = [k for k in ("hostNetwork", "hostPID", "hostIPC") if spec.get(k)]
+        flags += ["hostPath %s" % v["hostPath"].get("path") for v in spec.get("volumes") or [] if v.get("hostPath")]
+        psc = spec.get("securityContext") or {}
+        for c in (spec.get("containers") or []) + (spec.get("initContainers") or []):
+            sc = c.get("securityContext") or {}
+            if sc.get("privileged"):
+                flags.append("%s privileged" % c.get("name"))
+            uid = sc.get("runAsUser", psc.get("runAsUser"))
+            if uid == 0 or (uid is None and not sc.get("runAsNonRoot", psc.get("runAsNonRoot"))):
+                rootish.append({"label": who, "note": "container %s may run as root" % c.get("name")})
+            img = c.get("image") or ""
+            if img.endswith(":latest") or ":" not in img.rsplit("/", 1)[-1]:
+                images.append({"label": who, "note": "%s (no fixed version)" % img})
+        if flags:
+            privileged.append({"label": who, "note": ", ".join(flags)})
+        for cs in (pod.get("status") or {}).get("containerStatuses") or []:
+            last = ((cs.get("lastState") or {}).get("terminated") or {})
+            if cs.get("restartCount") or last.get("reason") == "OOMKilled":
+                restarts.append({"label": who, "note": "%s restarted %d× (last: %s)" % (cs.get("name"), cs.get("restartCount") or 0, last.get("reason") or "-")})
+    checks.append(_check(
+        "runtime.isolation", "Runtime", "Workspace pod isolation", "critical" if privileged else "warning" if rootish else "ok",
+        ("%d workspace pods reach into the node (privileged, host namespaces or host paths)." % len(privileged)) if privileged
+        else ("%d containers may run as root." % len(rootish)) if rootish else "%d workspace pods run unprivileged, as non-root." % len(pods),
+        privileged + rootish, "Run workspaces non-privileged as a non-root user (the template's security_context); never mount host paths."))
+    st_np, np = KUBE.call("GET", "/apis/networking.k8s.io/v1/namespaces/%s/networkpolicies" % WORKSPACE_NAMESPACE)
+    if st_np == 200:
+        policies = (np or {}).get("items") or []
+        checks.append(_check(
+            "runtime.network", "Runtime", "Network segmentation", "ok" if policies else "warning",
+            "%d network policies in namespace %s." % (len(policies), WORKSPACE_NAMESPACE) if policies
+            else "No network policy in namespace %s: every workspace can reach every pod and service in the cluster." % WORKSPACE_NAMESPACE,
+            [{"label": (x.get("metadata") or {}).get("name"), "note": ", ".join((x.get("spec") or {}).get("policyTypes") or [])} for x in policies],
+            "Add a default-deny NetworkPolicy for workspaces, allowing only Coder, DNS and what they need."))
+    else:
+        checks.append(_check("runtime.network", "Runtime", "Network segmentation", "unknown", "Network policies not readable (HTTP %s)." % st_np))
+    checks.append(_check(
+        "runtime.images", "Runtime", "Image provenance", "warning" if images else "ok",
+        "%d workspace containers use an image without a fixed version." % len(images) if images else "Every workspace image has a fixed version.",
+        images, "Pin workspace images to versioned tags (or digests) from your own registry."))
+
+    # ---- Signals
+    checks.append(_check("signals.stability", "Signals", "Restarts and out-of-memory kills", "warning" if restarts else "ok",
+                         "%d workspace containers restarted." % len(restarts) if restarts else "No workspace container restarted.",
+                         restarts, "Look at the workspace's logs (below); raise its memory if it was OOMKilled."))
+    checks.append(_check("signals.builds", "Signals", "Failed workspaces", "warning" if failed else "ok",
+                         "%d workspaces' latest build failed." % len(failed) if failed else "No workspace's latest build failed.",
+                         failed, "Open the workspace's build log; fix the template or the parameters and rebuild."))
+    checks.append(_check("signals.agents", "Signals", "Workspace agents", "warning" if offline else "info" if outdated else "ok",
+                         ("%d running workspaces' agents are not connected." % len(offline)) if offline
+                         else ("%d agents run an older version than the server." % len(outdated)) if outdated else "Every running workspace's agent is connected and current.",
+                         offline + outdated, "Restart workspaces whose agent is disconnected; restarting also updates the agent."))
+    checks.append(_check("signals.autostop", "Signals", "Workspaces without a stop time", "info" if no_stop else "ok",
+                         "%d running workspaces never stop on their own." % len(no_stop) if no_stop else "Every running workspace has a stop time.",
+                         no_stop, "Turn on the Global Workspace Scheduler (Health > User Quota) to require stop times."))
+
+    summary = {k: sum(1 for c in checks if c["severity"] == k) for k in ("critical", "warning", "info", "ok", "unknown")}
+    out = {"checks": checks, "summary": summary, "workspaces": len(workspaces), "pods": len(pods), "users": len(users),
+           "generatedAt": now()}
+    CACHE.put("posture:" + token[:16], out, 30)
+    return out
+
+
+# --------------------------------------------------------------------------- HUD (top-level overview, admins)
+# The platform at a glance, refreshed every few seconds by the dashboard: totals (users, workspaces, claimed CPU /
+# memory / GPUs), who leads (highest live CPU / memory, most GPUs, most workspaces, longest online, most failures,
+# highest latency), the workspace failing longest, and the cluster's own figures. Each metric: id, label, group, value
+# (a number, or None), unit, and who / what it is about.
+HUD_FAILURE_DAYS = 7
+GPU_RESOURCE = re.compile(r"(^|/)gpu$|\.com/gpu$|gpu\.")
+
+
+def _gpus(resources):
+    """GPUs a container asks for (limits, else requests): any extended resource named like a GPU."""
+    total = 0.0
+    for key in ("limits", "requests"):
+        for name, v in ((resources or {}).get(key) or {}).items():
+            if GPU_RESOURCE.search(name):
+                total = max(total, quantity(v) or 0)
+        if total:
+            break
+    return total
+
+
+def _workspace_failures(token, workspace_id):
+    """Failed builds of one workspace in the last HUD_FAILURE_DAYS days (cached two minutes)."""
+    key = "hud-failures:" + workspace_id
+    hit = CACHE.get(key)
+    if hit is not None:
+        return hit
+    status, builds = _coder_get(token, "/api/v2/workspaces/%s/builds?limit=50" % workspace_id)
+    since = time.time() - HUD_FAILURE_DAYS * 86400
+    n = sum(1 for b in builds if b.get("status") == "failed" and (_ts(b.get("created_at")) or 0) >= since) \
+        if status == 200 and isinstance(builds, list) else 0
+    CACHE.put(key, n, 120)
+    return n
+
+
+def hud_report(token):
+    hit = CACHE.get("hud:" + token[:16])
+    if hit is not None:
+        return hit
+    users = _all_users(token)
+    status, data = _coder_get(token, "/api/v2/workspaces?" + urllib.parse.urlencode({"limit": 1000}))
+    workspaces = (data or {}).get("workspaces") or [] if status == 200 else []
+    claimed = {w["id"]: w for w in quota_workspaces(token)}      # cores / GiB each workspace was built with
+    live = _pod_usage_by_owner()                                  # live usage per owner (metrics-server)
+    snapshot = cluster_snapshot()
+    pods = [p for p in snapshot["pods"] if ((p.get("metadata") or {}).get("labels") or {}).get("com.coder.workspace.id")]
+    gpu_by_ws = {}
+    for pod in pods:
+        wid = ((pod.get("metadata") or {}).get("labels") or {}).get("com.coder.workspace.id")
+        gpu_by_ws[wid] = gpu_by_ws.get(wid, 0) + sum(_gpus(c.get("resources")) for c in (pod.get("spec") or {}).get("containers") or [])
+    gpu_capacity = sum(sum(quantity(v) or 0 for k, v in ((n.get("status") or {}).get("capacity") or {}).items() if GPU_RESOURCE.search(k))
+                       for n in snapshot["nodes"])
+
+    nowt = time.time()
+    per_owner = {}
+    running, starting, longest_up, worst_failure, latencies, disconnected, unhealthy = 0, 0, None, None, [], 0, 0
+    for w in workspaces:
+        owner = w.get("owner_name") or "?"
+        o = per_owner.setdefault(owner, {"workspaces": 0, "gpus": 0.0, "failures": 0, "ping": None, "up": 0.0})
+        o["workspaces"] += 1
+        build = w.get("latest_build") or {}
+        is_running = build.get("status") == "running" and build.get("transition") == "start"
+        if build.get("status") in ("pending", "starting", "stopping", "deleting"):
+            starting += 1
+        if is_running:
+            running += 1
+            o["gpus"] += gpu_by_ws.get(w.get("id"), 0)
+            up = nowt - (_ts(build.get("created_at")) or nowt)
+            o["up"] = max(o["up"], up)
+            if longest_up is None or up > longest_up[0]:
+                longest_up = (up, owner, w.get("name"))
+            for res in build.get("resources") or []:
+                for a in res.get("agents") or []:
+                    if a.get("status") != "connected":
+                        disconnected += 1
+                        continue
+                    unhealthy += sum(1 for app in a.get("apps") or [] if app.get("health") == "unhealthy")
+                    lat = [v.get("latency_ms") for v in (a.get("latency") or {}).values() if v.get("preferred")] or \
+                          [v.get("latency_ms") for v in (a.get("latency") or {}).values()]
+                    lat = [x for x in lat if isinstance(x, (int, float))]
+                    if lat:
+                        latencies.append(min(lat))
+                        o["ping"] = max(o["ping"] or 0, min(lat))
+        if build.get("status") == "failed":
+            since = nowt - (_ts((build.get("job") or {}).get("completed_at")) or _ts(build.get("updated_at")) or nowt)
+            if worst_failure is None or since > worst_failure[0]:
+                worst_failure = (since, owner, w.get("name"), ((build.get("job") or {}).get("error") or "")[:120])
+    for w in workspaces[:300]:
+        per_owner[w.get("owner_name") or "?"]["failures"] += _workspace_failures(token, w.get("id"))
+
+    def leader(key, source=None):
+        rows = [(v[key], k) for k, v in (source or per_owner).items() if v.get(key)]
+        return max(rows) if rows else None
+
+    def fmt_hours(sec):
+        return "%dd %dh" % (sec // 86400, (sec % 86400) // 3600) if sec >= 86400 else "%dh %dm" % (sec // 3600, (sec % 3600) // 60)
+
+    cpu_claimed = sum(claimed[w["id"]]["cpu"] for w in workspaces if w.get("id") in claimed and claimed[w["id"]]["running"])
+    mem_claimed = sum(claimed[w["id"]]["memory"] for w in workspaces if w.get("id") in claimed and claimed[w["id"]]["running"])
+    gpu_ws = sum(1 for v in gpu_by_ws.values() if v)
+    try:
+        cluster = cluster_usage()
+    except Exception:  # noqa: BLE001
+        cluster = None
+    online = sum(1 for u in users if (_days_since(u.get("last_seen_at")) or 10 ** 6) * 1440 <= 5)
+    top_cpu = max(((v.get("cpu") or 0, k) for k, v in live.items()), default=None)
+    top_mem = max(((v.get("memory") or 0, k) for k, v in live.items()), default=None)
+    top_gpu, top_ws, top_fail, top_ping = leader("gpus"), leader("workspaces"), leader("failures"), leader("ping")
+    top_up = max(((v["up"], k) for k, v in per_owner.items() if v["up"]), default=None)
+    latencies.sort()
+
+    def m(mid, label, group, value, unit="", detail="", hint=""):
+        return {"id": mid, "label": label, "group": group, "value": value, "unit": unit, "detail": detail, "hint": hint}
+
+    metrics = [
+        m("users", "Unique users", "totals", len(users), "", "%d online now" % online, "Active accounts"),
+        m("workspaces", "Workspaces created", "totals", len(workspaces), "", "%d starting or stopping" % starting if starting else "", "Existing workspaces"),
+        m("active", "Workspaces active", "totals", running, "", "of %d" % len(workspaces), "Running now"),
+        m("cpu", "CPU claimed", "totals", round(cpu_claimed, 2), "cores",
+          "of %g allocatable" % round(cluster["cpu"]["total"], 1) if cluster else "", "Cores running workspaces were built with"),
+        m("memory", "Memory claimed", "totals", round(mem_claimed, 2), "GiB",
+          "of %g allocatable" % round(cluster["memory"]["total"] / 1024 ** 3, 1) if cluster else "", "GiB running workspaces were built with"),
+        m("gpu", "GPU workspaces", "totals", gpu_ws, "",
+          ("%g of %g GPUs claimed" % (sum(gpu_by_ws.values()), gpu_capacity)) if gpu_capacity else "no GPU nodes yet",
+          "Running workspaces with a GPU (nvidia.com/gpu, amd.com/gpu, ...)"),
+        m("top-cpu", "Highest CPU", "leaders", round(top_cpu[0], 2) if top_cpu else None, "cores", top_cpu[1] if top_cpu else "", "Live, from metrics-server"),
+        m("top-memory", "Highest memory", "leaders", round(top_mem[0], 2) if top_mem else None, "GiB", top_mem[1] if top_mem else "", "Live, from metrics-server"),
+        m("top-gpu", "Most GPUs", "leaders", top_gpu[0] if top_gpu else None, "GPUs", top_gpu[1] if top_gpu else "", "GPUs claimed by running workspaces"),
+        m("top-workspaces", "Most workspaces", "leaders", top_ws[0] if top_ws else None, "", top_ws[1] if top_ws else ""),
+        m("top-online", "Longest online", "leaders", round(top_up[0] / 3600, 2) if top_up else None, "h",
+          ("%s · %s" % (top_up[1], fmt_hours(top_up[0]))) if top_up else "", "Longest-running workspace"),
+        m("top-failures", "Most failures", "leaders", top_fail[0] if top_fail else 0, "builds",
+          top_fail[1] if top_fail else "none in %d days" % HUD_FAILURE_DAYS, "Failed builds in the last %d days" % HUD_FAILURE_DAYS),
+        m("top-ping", "Highest ping", "leaders", round(top_ping[0], 1) if top_ping else None, "ms", top_ping[1] if top_ping else "", "Agent latency to Coder"),
+        m("long-failure", "Failing longest", "health", round(worst_failure[0] / 3600, 2) if worst_failure else None, "h",
+          ("%s/%s · %s" % (worst_failure[1], worst_failure[2], fmt_hours(worst_failure[0]))) if worst_failure else "no failed workspace",
+          (worst_failure[3] if worst_failure else "") or "Workspace whose latest build failed longest ago"),
+        m("cluster-cpu", "Cluster CPU in use", "health", round(100 * cluster["cpu"]["used"] / cluster["cpu"]["total"], 1) if cluster and cluster["cpu"]["total"] else None, "%",
+          "%d nodes" % cluster["nodes"] if cluster else "", "Live" if cluster and cluster["live"] else "Requested (no metrics-server)"),
+        m("cluster-memory", "Cluster memory in use", "health", round(100 * cluster["memory"]["used"] / cluster["memory"]["total"], 1) if cluster and cluster["memory"]["total"] else None, "%",
+          "", "Live" if cluster and cluster["live"] else "Requested (no metrics-server)"),
+        m("median-ping", "Median ping", "health", round(latencies[len(latencies) // 2], 1) if latencies else None, "ms", "%d agents" % len(latencies) if latencies else ""),
+        m("disconnected", "Agents disconnected", "health", disconnected, "", "running workspaces"),
+        m("unhealthy-apps", "Unhealthy apps", "health", unhealthy, "", "in running workspaces"),
+    ]
+    out = {"metrics": metrics, "generatedAt": now(), "live": bool(live)}
+    CACHE.put("hud:" + token[:16], out, 5)
+    return out
+
+
 # --------------------------------------------------------------------------- Certificates (General > Security)
 def _secret_bytes(ns, name):
     status, s = KUBE.call("GET", "/api/v1/namespaces/%s/secrets/%s" % (ns, name))
@@ -5570,6 +6175,40 @@ class Handler(BaseHTTPRequestHandler):
             return self.chat_get(
                 path[len(BASE + "/api/chat/") :], urllib.parse.parse_qs(url.query)
             )
+        if path == BASE + "/api/hud":
+            user, err = self.user(admin=True)
+            if err:
+                return
+            try:
+                return self.send_json(200, hud_report(self.token()))
+            except Exception as e:  # noqa: BLE001
+                log(event="hud-failed", error=str(e)[:300])
+                return self.send_json(503, {"error": str(e)[:300]})
+        if path == BASE + "/api/monitoring/posture":
+            user, err = self.user(admin=True)
+            if err:
+                return
+            try:
+                return self.send_json(200, monitoring_posture(self.token()))
+            except Exception as e:  # noqa: BLE001
+                log(event="posture-failed", error=str(e)[:300])
+                return self.send_json(503, {"error": str(e)[:300]})
+        if path == BASE + "/api/scheduler/me":
+            user, err = self.user()
+            if err:
+                return
+            try:
+                return self.send_json(200, scheduler_me(self.token(), user))
+            except Exception as e:  # noqa: BLE001
+                return self.send_json(503, {"error": str(e)[:300]})
+        if path == BASE + "/api/scheduler":
+            user, err = self.user(admin=True)
+            if err:
+                return
+            try:
+                return self.send_json(200, scheduler_report(self.token()))
+            except Exception as e:  # noqa: BLE001
+                return self.send_json(503, {"error": str(e)[:300]})
         if path in (BASE + "/api/keycloak/status", BASE + "/api/quota", BASE + "/api/certificates"):
             user, err = self.user(admin=True)
             if err:
@@ -6059,6 +6698,8 @@ class Handler(BaseHTTPRequestHandler):
             BASE + "/api/avatar/reset",
             BASE + "/api/quota",
             BASE + "/api/quota/check",
+            BASE + "/api/scheduler",
+            BASE + "/api/scheduler/check",
         }
         if path not in routes and not path.startswith(BASE + "/api/chat/"):
             return self.send(404, "not found\n")
@@ -6089,9 +6730,31 @@ class Handler(BaseHTTPRequestHandler):
             if not result.get("allowed"):
                 log(event="quota-refused", user=user["username"], owner=payload.get("owner"), reason=result.get("message"))
             return self.send_json(200, result)
+        if path == BASE + "/api/scheduler/check":   # Coder asks, with the requester's session
+            user, err = self.user()
+            if err:
+                return
+            try:
+                result = scheduler_check(self.token(), user, payload)
+            except Exception as e:  # noqa: BLE001 - Coder goes ahead when the check itself fails
+                log(event="scheduler-check-failed", user=user["username"], error=str(e)[:200])
+                return self.send_json(503, {"error": "The schedule could not be checked: %s" % str(e)[:200]})
+            if not result.get("allowed"):
+                log(event="scheduler-refused", user=user["username"], owner=payload.get("owner"),
+                    action=payload.get("action"), reason=result.get("message"))
+            return self.send_json(200, result)
         user, err = self.user(admin=True)
         if err:
             return
+        if path == BASE + "/api/scheduler":
+            try:
+                value = clean_scheduler(payload)
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            STORE.put_setting("workspace_scheduler", value)
+            log(event="scheduler-saved", user=user["username"], enabled=value["enabled"], mode=value["mode"],
+                max_hours=value["maxActiveHours"], excluded=len(value["excludedUsers"]))
+            return self.send_json(200, {"ok": True, "settings": scheduler_settings()})
         if path == BASE + "/api/quota":
             try:
                 value = clean_quota(payload)

@@ -5,15 +5,15 @@ loads them from here and pushes them to your registry – no internet needed.
 
 | Folder | What | Size | Keep? |
 |---|---|---:|---|
-| `custom/` | The fork's Coder server image. **On no public registry.** | 311 MB | **Always keep** – nothing else can replace it |
-| `public/chart/` | Public images the chart runs (database, Python add-ons, template push, workspace) | 884 MB | Remove if your registry already has them |
+| `custom/` | The fork's Coder server image and the workspace image. **On no public registry.** | ~1.1 GB | **Always keep** – nothing else can replace them |
+| `public/chart/` | Public images the chart runs (database, Python add-ons, template push) | 513 MB | Remove if your registry already has them |
 | `public/prereqs/` | CloudNativePG operator, Traefik – for the charts in `../prereqs/` | 87 MB | Remove if those are already installed |
 | `public/platform/` | Argo CD and Keycloak as the reference cluster runs them – reference only, not pushed by default | 986 MB | Remove if you have Argo CD and Keycloak |
 
 ## Make the bundle smaller
 
 ```bash
-rm -rf images/public              # keeps only custom/: ~300 MB instead of ~2.2 GB
+rm -rf images/public              # keeps only custom/: ~1.1 GB instead of ~2.7 GB
 # or just one folder:  rm -rf images/public/platform
 ```
 
@@ -33,7 +33,8 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
-| `ghcr.io_user187x_coder-platform_2.0.0-platform.5-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.5-airgap` | 311 MB | coder (server); = the fork's platform.5 (ea80521c2) + Terraform provider mirror |
+| `ghcr.io_user187x_coder-platform_2.0.0-platform.6-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.6-airgap` | 312 MB | coder (server); = the fork's platform.6 (a65bc39b7) + Terraform provider mirror |
+| `ghcr.io_user187x_coder-workspace_1.0.0.tar.gz` | `ghcr.io/user187x/coder-workspace:1.0.0` | 767 MB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), JetBrains Mono Nerd Font, tmux |
 
 ### `public/chart/`
 
@@ -42,7 +43,6 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 | `ghcr.io_cloudnative-pg_postgresql_18.4-system-trixie.tar.gz` | `ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie` | 249 MB | database, uiUpdates.logsDb, uiUpdates.pgImage |
 | `docker.io_library_python_3.13-alpine.tar.gz` | `docker.io/library/python:3.13-alpine` | 19 MB | coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor) |
 | `ghcr.io_coder_coder_latest.tar.gz` | `ghcr.io/coder/coder:latest` | 244 MB | coder-workspace push-template Job (floating tag, pinned here) |
-| `codercom_enterprise-base_ubuntu.tar.gz` | `codercom/enterprise-base:ubuntu` | 371 MB | workspace pods (ubuntu-vnc-desktop) |
 
 ### `public/prereqs/`
 

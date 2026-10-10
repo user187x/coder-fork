@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.7.0 – 2026-10-10
+
+Coder image `2.0.0-platform.6-airgap` (fork `a65bc39b7`) and a new workspace image `ghcr.io/user187x/coder-workspace:1.0.0`.
+
+* **Fixed: `core.<pid>` files in every workspace home.** The template installed `xfce4-goodies` at every start, which
+  pulls in light-locker; the screen locker needs a display manager, crashed at each desktop start, and with unlimited
+  core dumps left a ~45 MB `core.<pid>` each time. The workspace image leaves light-locker (and LightDM) out and does not
+  start the XFCE screensaver; the pod starts the agent with `ulimit -c 0`; the startup script removes the core dumps
+  earlier workspaces left (only `core.<digits>` files that are ELF core dumps).
+* **Workspace image** (`development/workspace-image`, `tools/build-workspace-image.sh`): enterprise-base with the desktop
+  preinstalled (no `apt-get` at start, so it also works offline), JetBrains Mono Nerd Font as the desktop's and its
+  terminal's font and the default monospace, and tmux 3.8 with the bundled configuration (`tmux-installation.deb`; set
+  up for each user without one). `codercom/enterprise-base` is no longer shipped. The startup script starts the desktop
+  first, and a failed marimo download (no internet) no longer stops the rest of it.
+* **Web terminal:** JetBrains Mono Nerd Font is bundled and the default terminal font. The agent terminal drop-down has
+  a Pop out button (a floating window with the same session; closing it leaves the drop-down collapsed) and text size
+  buttons that start at the largest size fitting 80x24 (btop's minimum) and show the columns x rows.
+* **Global Workspace Scheduler** (Health > User Quota): require start and stop times on every workspace (each user's, or
+  one schedule for all), a maximum active time, ignore admins, exclude users. Enforced by Coder on create and on every
+  schedule change; users fix existing workspaces in a dialog before going on; the create form asks for the schedule.
+* **Monitoring:** a security posture panel - zero-trust checks (privileged and dormant accounts, password sign-in, MFA in
+  Keycloak, API tokens, shared ports and apps, pod isolation, network policies, image provenance) and runtime signals
+  (restarts and OOM kills, failed workspaces, disconnected or outdated agents, workspaces that never stop).
+* **HUD** (navbar, `/hud`, admins): totals, top accounts and health figures updated in place every 10 s, with changes
+  and sparklines; click a figure to move it to the top.
+* `minikube-support`: every custom image is loaded (`minikube ssh` read the rest of the image list from stdin, so only
+  the first one was), and a build is recognised by its creation time and layers rather than the image ID, which differs
+  between Docker's containerd image store and the nodes' (images were reloaded, and their pods restarted, every time).
+
 ## 1.6.0 – 2026-10-10
 
 * Coder image `2.0.0-platform.5-airgap` (fork commit `ea80521c2`). The Admin menu starts with Settings and an add row
