@@ -1,0 +1,380 @@
+#!/usr/bin/env bash
+# make: install coder-airgapped with as few questions as possible.
+#
+#   ./make --deploy          asks where to deploy (Minikube or EKS), the domain, and the certificates, then does
+#                            everything else: prerequisites, secrets, Keycloak (Minikube), the chart, and (Minikube)
+#                            the tunnel + /etc/hosts entries. Re-run it any time: it is idempotent.
+#   ./make --deploy --yes    no questions: remembered answers (or defaults) for everything
+#   ./make --help
+#
+# Every answer is remembered (.deploy/answers.env) and offered as the default next time. Answers can also be given as
+# environment variables, which are then not asked:
+#   TARGET=minikube|eks DOMAIN=example.com CERTS=new|existing TLS_CRT=… TLS_KEY=… CA_BUNDLE=…
+#   PROFILE=coder KEYCLOAK=dev|existing OIDC_ISSUER=… OIDC_CA=… OIDC_SECRET_FILE=…
+#   REGISTRY=… PUSH_IMAGES=y|n STORAGE_CLASS=… METHOD=helm|argocd TRUST_CA=y|n EXPOSE=y|n
+#
+# Helpers in this directory: x509-support (certificates), minikube-support (Minikube), install.sh (secrets + chart),
+# mirror-images.sh (images, chart push). Generated files (certificates, values, secrets) go to .deploy/.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=x509-support
+source "${here}/x509-support"
+STATE_ROOT="${here}/.deploy"
+ANSWERS="${STATE_ROOT}/answers.env"
+VARS=(TARGET DOMAIN CERTS TLS_CRT TLS_KEY CA_BUNDLE PROFILE KEYCLOAK OIDC_ISSUER OIDC_CA OIDC_SECRET_FILE
+	REGISTRY PUSH_IMAGES STORAGE_CLASS METHOD TRUST_CA EXPOSE)
+
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
+say() { printf '    %s\n' "$*"; }
+warn() { printf '\033[33m    %s\033[0m\n' "$*" >&2; }
+die() { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# ---- asking ---------------------------------------------------------------------------------------------------
+declare -A FIXED=()
+INTERACTIVE=1
+[[ -t 0 ]] || INTERACTIVE=0
+
+# ask VAR "question" DEFAULT [validator]: env answer > typed answer > remembered/DEFAULT
+ask() {
+	local var="$1" q="$2" def="${!1:-$3}" check="${4:-}" ans
+	if [[ -n "${FIXED[$var]:-}" ]]; then printf '    %s: %s\n' "$q" "${!var}"; return; fi
+	while :; do
+		if ((INTERACTIVE)); then
+			read -r -e -p "    $q${def:+ [$def]}: " ans || die "no answer"
+			ans="${ans:-$def}"
+		else ans="$def"; printf '    %s: %s\n' "$q" "$ans"; fi
+		ans="${ans/#\~/$HOME}"
+		if [[ -n "$check" ]] && ! "$check" "$ans"; then
+			((INTERACTIVE)) || die "$q: '$ans' is not valid"
+			continue
+		fi
+		printf -v "$var" '%s' "$ans"; return
+	done
+}
+# choose VAR "question" DEFAULT_KEY "key|label"...
+choose() {
+	local var="$1" q="$2" def="${!1:-$3}" i=1 n ans opt keys=(); shift 3
+	if [[ -n "${FIXED[$var]:-}" ]]; then printf '    %s: %s\n' "$q" "${!var}"; return; fi
+	printf '    %s\n' "$q"
+	for opt in "$@"; do
+		keys+=("${opt%%|*}")
+		printf '      %d) %s%s\n' "$i" "${opt#*|}" "$([[ "${opt%%|*}" == "$def" ]] && echo '  (default)')"
+		i=$((i + 1))
+	done
+	while :; do
+		if ((INTERACTIVE)); then read -r -p "    choice: " ans || die "no answer"; else ans=""; fi
+		[[ -z "$ans" ]] && { printf -v "$var" '%s' "$def"; ((INTERACTIVE)) || say "-> $def"; return; }
+		if [[ "$ans" =~ ^[0-9]+$ ]] && ((ans >= 1 && ans <= ${#keys[@]})); then printf -v "$var" '%s' "${keys[ans - 1]}"; return; fi
+		for n in "${keys[@]}"; do [[ "$ans" == "$n" ]] && { printf -v "$var" '%s' "$n"; return; }; done
+		say "type a number from 1 to ${#keys[@]}"
+	done
+}
+yes_no() { # VAR "question" y|n -> VAR=y|n
+	local var="$1" q="$2" def="${!1:-$3}" ans
+	if [[ -n "${FIXED[$var]:-}" ]]; then printf '    %s: %s\n' "$q" "${!var}"; return; fi
+	if ((INTERACTIVE)); then
+		read -r -p "    $q [$([[ $def == y ]] && echo Y/n || echo y/N)]: " ans || die "no answer"
+		ans="${ans:-$def}"
+	else ans="$def"; printf '    %s: %s\n' "$q" "$ans"; fi
+	[[ "${ans,,}" == y* ]] && printf -v "$var" y || printf -v "$var" n
+}
+ask_secret() { # VAR "question"
+	local var="$1" q="$2" ans
+	((INTERACTIVE)) || die "$q: needed, but there is no terminal to ask on"
+	read -r -s -p "    $q: " ans; echo
+	printf -v "$var" '%s' "$ans"
+}
+
+valid_domain() { [[ "$1" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || { say "a domain like example.com (lowercase)"; return 1; }; }
+readable() { [[ -r "$1" && -f "$1" ]] || { say "cannot read '$1'"; return 1; }; }
+optional_file() { [[ -z "$1" ]] || readable "$1"; }
+nonempty() { [[ -n "$1" ]] || { say "required"; return 1; }; }
+
+save_answers() {
+	mkdir -p "$STATE_ROOT"; chmod 700 "$STATE_ROOT"
+	local v; : >"$ANSWERS"
+	for v in "${VARS[@]}"; do [[ -n "${!v:-}" ]] && printf '%s=%q\n' "$v" "${!v}" >>"$ANSWERS"; done
+	return 0
+}
+
+need() { local b; for b in "$@"; do command -v "$b" >/dev/null || die "'$b' is required but not installed"; done; }
+kube() { kubectl "$@"; }
+
+# ---- certificates -------------------------------------------------------------------------------------------
+certificates() {
+	step "TLS certificates for coder.${DOMAIN} and *.${DOMAIN}"
+	choose CERTS "Certificates:" new \
+		"new|Create new self-signed certificates (a private CA; you trust it once)" \
+		"existing|Use my own certificate files"
+	if [[ "$CERTS" == new ]]; then
+		x509_create "$DOMAIN" "${STATE}/pki" || die "creating the certificates failed"
+		TLS_CRT="${STATE}/pki/tls.crt" TLS_KEY="${STATE}/pki/tls.key" CA_BUNDLE="${STATE}/pki/ca-bundle.pem"
+		CERT_DIR="${STATE}/pki"; return
+	fi
+	CERT_DIR="${STATE}/certs"; mkdir -p "$CERT_DIR"; chmod 700 "$CERT_DIR"
+	while :; do
+		ask TLS_CRT "Server certificate for *.${DOMAIN} (PEM or DER; may include the chain)" "" readable
+		ask TLS_KEY "Its private key" "$(guess_sibling "$TLS_CRT" key)" readable
+		ask CA_BUNDLE "CA bundle that signed it (root + any intermediates)" "$(guess_sibling "$TLS_CRT" ca)" readable
+		if [[ -n "$(grep -l ENCRYPTED "$TLS_KEY" 2>/dev/null)" && -z "${X509_KEY_PASS:-}" ]]; then
+			ask_secret X509_KEY_PASS "The key is passphrase-protected; passphrase"; export X509_KEY_PASS
+		fi
+		if x509_to_pem "$TLS_CRT" "$CERT_DIR/tls.crt" cert && x509_to_pem "$TLS_KEY" "$CERT_DIR/tls.key" key &&
+			x509_to_pem "$CA_BUNDLE" "$CERT_DIR/ca-bundle.pem" cert &&
+			x509_check "$CERT_DIR/tls.crt" "$CERT_DIR/tls.key" "$CERT_DIR/ca-bundle.pem" \
+				"coder.${DOMAIN}" "keycloak.${DOMAIN}" "app.${DOMAIN}"; then
+			say "certificates OK"; break
+		fi
+		((INTERACTIVE)) && [[ -z "${FIXED[TLS_CRT]:-}" ]] || die "the certificate files do not fit (see above)"
+		say "Choose the files again."; TLS_KEY="" CA_BUNDLE=""
+	done
+	# the CA may be a whole bundle (several PEMs); keep it as given, in PEM
+	cat "$CA_BUNDLE" | grep -q 'BEGIN CERTIFICATE' && cp "$CA_BUNDLE" "$CERT_DIR/ca-bundle.pem"
+	TLS_CRT_PEM="$CERT_DIR/tls.crt" TLS_KEY_PEM="$CERT_DIR/tls.key" CA_PEM="$CERT_DIR/ca-bundle.pem"
+}
+guess_sibling() { # FILE key|ca : a likely companion file next to FILE
+	local d f; d=$(dirname "$1"); [[ -d "$d" ]] || return 0
+	if [[ "$2" == key ]]; then
+		for f in "${1%.*}.key" "$d/tls.key" "$d/privkey.pem" "$d/server.key" "$d"/*.key; do [[ -f "$f" ]] && { echo "$f"; return; }; done
+	else
+		for f in "$d/ca-bundle.pem" "$d/ca-bundle.crt" "$d/ca.crt" "$d/chain.pem" "$d/fullchain.pem" "$d/ca.pem"; do [[ -f "$f" ]] && { echo "$f"; return; }; done
+	fi
+}
+
+# ---- prerequisites shared by both targets -------------------------------------------------------------------
+gateway_crds() {
+	kube get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1 && { say "Gateway API CRDs: present"; return; }
+	say "Gateway API CRDs: installing v1.5.1"
+	kube apply --server-side -f "${here}/prereqs/gateway-api-v1.5.1-standard-install.yaml" >/dev/null
+}
+
+traefik() { # [pinned ClusterIP]
+	local pin="${1:-}" vals="${STATE}/traefik-values.yaml" args=() cur
+	kube create namespace traefik --dry-run=client -o yaml | kube apply -f - >/dev/null
+	kube -n traefik create secret tls coder-airgapped-tls --cert="$TLS_CRT_PEM" --key="$TLS_KEY_PEM" --dry-run=client -o yaml |
+		kube apply -f - >/dev/null
+	sed 's/name: grey-marshall-tls/name: coder-airgapped-tls/' "${here}/prereqs/traefik-41.4.0.reference-values.yaml" >"$vals"
+	if [[ -n "$pin" ]]; then
+		cur=$(kube -n traefik get svc traefik -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+		if [[ -z "$cur" || "$cur" == "$pin" ]]; then args+=(--set "service.spec.clusterIP=$pin"); say "Traefik keeps $pin (what coder.${DOMAIN} already resolves to)"
+		else warn "Traefik already has ClusterIP $cur (coder.${DOMAIN} resolves to $pin): left as is"; fi
+	fi
+	[[ -z "$REGISTRY" ]] || args+=(--set "image.registry=$REGISTRY")
+	say "Traefik: installing / upgrading (prereqs/traefik-41.4.0.tgz, Gateway traefik/traefik-gateway)"
+	helm upgrade --install traefik "${here}/prereqs/traefik-41.4.0.tgz" -n traefik -f "$vals" "${args[@]}" --wait --timeout 10m >/dev/null
+}
+
+oidc_existing() {
+	ask OIDC_ISSUER "OIDC issuer URL" "https://keycloak.${DOMAIN}/realms/master" nonempty
+	ask OIDC_SECRET_FILE "File with the 'coder' client's secret (Enter to type it instead)" "" optional_file
+	if [[ -z "$OIDC_SECRET_FILE" ]]; then
+		local s; ask_secret s "Client secret of the 'coder' client"
+		OIDC_SECRET_FILE="${STATE}/oidc-client-secret.txt"; (umask 077; printf '%s\n' "$s" >"$OIDC_SECRET_FILE")
+	fi
+	ask OIDC_CA "CA that signed the OIDC provider's certificate" "$CA_BUNDLE" readable
+	OIDC_CA_PEM="${STATE}/oidc-ca.pem"; x509_to_pem "$OIDC_CA" "$OIDC_CA_PEM" cert || die "cannot read $OIDC_CA"
+	grep -q 'BEGIN CERTIFICATE' "$OIDC_CA" && cp "$OIDC_CA" "$OIDC_CA_PEM"
+}
+
+# ---- Minikube -----------------------------------------------------------------------------------------------
+prepare_minikube() {
+	need minikube docker curl
+	step "Minikube"
+	ask PROFILE "minikube profile" coder nonempty
+	"${here}/minikube-support" ensure "$PROFILE"
+	"${here}/minikube-support" load-images "$PROFILE"
+	REGISTRY="" STORAGE_CLASS="local-path" METHOD=helm   # local-path: see minikube-support mk_storage
+
+	step "Prerequisites"
+	gateway_crds
+	traefik "$("${here}/minikube-support" pin-ip "$DOMAIN")"
+	"${here}/minikube-support" dns "$PROFILE" "$DOMAIN"
+	CNPG=1
+
+	step "Keycloak (sign-in for everyone except the admin)"
+	choose KEYCLOAK "Keycloak:" dev \
+		"dev|Deploy a development Keycloak in the cluster (https://keycloak.${DOMAIN})" \
+		"existing|Use an existing Keycloak / OIDC provider"
+	if [[ "$KEYCLOAK" == dev ]]; then
+		OIDC_SECRET_FILE="${STATE}/oidc-client-secret.txt"
+		"${here}/minikube-support" keycloak "$PROFILE" "$DOMAIN" "$OIDC_SECRET_FILE"
+		OIDC_ISSUER="https://keycloak.${DOMAIN}/realms/master" OIDC_CA_PEM="$CA_PEM"
+	else
+		oidc_existing
+	fi
+}
+
+# ---- EKS (or any other cluster) -----------------------------------------------------------------------------
+prepare_eks() {
+	step "Cluster"
+	local ctx; ctx=$(kube config current-context 2>/dev/null) || die "kubectl has no current context"
+	local go=y; yes_no go "Deploy to kubectl context '$ctx'?" y
+	[[ "$go" == y ]] || die "switch first: kubectl config use-context <name>"
+	kube version --request-timeout=10s >/dev/null 2>&1 || die "kubectl cannot reach '$ctx'"
+
+	step "Images"
+	ask REGISTRY "Registry the cluster pulls from (e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com)" "" nonempty
+	REGISTRY="${REGISTRY%/}"
+	yes_no PUSH_IMAGES "Push the bundled images to $REGISTRY now? (needs 'docker login $REGISTRY')" y
+	if [[ "$PUSH_IMAGES" == y ]]; then
+		need docker
+		ECR=$([[ "$REGISTRY" == *.amazonaws.com ]] && echo 1 || echo 0) "${here}/mirror-images.sh" push "$REGISTRY" |
+			grep -E '^(loading|using|pulling|.* -> )' | sed 's/^/    /'
+	fi
+
+	step "Prerequisites"
+	local def_sc; def_sc=$(kube get sc -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{end}' 2>/dev/null)
+	ask STORAGE_CLASS "Storage class for the database and add-on volumes" "${def_sc:-gp3}" nonempty
+	gateway_crds
+	if kube -n traefik get gateway traefik-gateway >/dev/null 2>&1; then
+		say "Gateway traefik/traefik-gateway: present (its HTTPS certificate must cover coder.${DOMAIN} and *.${DOMAIN})"
+	else
+		local t=y; yes_no t "No Gateway traefik/traefik-gateway. Install Traefik from prereqs/ (LoadBalancer Service)?" y
+		[[ "$t" == y ]] && traefik || warn "Coder needs a Gateway traefik/traefik-gateway with an HTTPS listener"
+	fi
+	CNPG=0
+	kube get crd clusters.postgresql.cnpg.io >/dev/null 2>&1 && say "CloudNativePG: present" || { say "CloudNativePG: will be installed"; CNPG=1; }
+
+	step "Keycloak / OIDC (sign-in for everyone except the admin)"
+	KEYCLOAK=existing; oidc_existing
+
+	step "Install method"
+	if kube get ns argocd >/dev/null 2>&1; then
+		choose METHOD "Install with:" helm "helm|Helm, now, from this machine" "argocd|Argo CD (pushes the chart to $REGISTRY/charts and applies an Application)"
+	else METHOD=helm; say "Argo CD not found: installing with Helm"; fi
+}
+
+# ---- values + install -----------------------------------------------------------------------------------------
+write_values() {
+	local kc_view=false argo_view=false
+	kube -n keycloak get secret keycloak-initial-admin >/dev/null 2>&1 && kc_view=true
+	kube get ns argocd >/dev/null 2>&1 && kube -n argocd get application coder >/dev/null 2>&1 && argo_view=true
+	[[ "$METHOD" == argocd ]] && argo_view=true
+	VALUES="${STATE}/values.yaml"
+	cat >"$VALUES" <<EOF
+# Written by ./make --deploy ($(date -u +%FT%TZ)); re-running it rewrites this file.
+global:
+  domain: ${DOMAIN}
+  registry: "${REGISTRY}"
+  oidc:
+    issuerUrl: "${OIDC_ISSUER}"
+coder:
+  coder:
+    extraEnv:
+    - {name: CODER_TELEMETRY_ENABLE, value: "false"}
+    - {name: CODER_UPDATE_CHECK, value: "false"}
+database:
+  storage: {storageClass: ${STORAGE_CLASS}}
+uiUpdates:
+  persistence: {storageClass: ${STORAGE_CLASS}}
+  keycloak: {enabled: ${kc_view}}
+  argocd: {enabled: ${argo_view}}
+EOF
+	say "values: ${VALUES}"
+}
+
+secret_args() {
+	SECRET_ARGS=(--ca "$CA_PEM" --oidc-ca "$OIDC_CA_PEM" --oidc-secret-file "$OIDC_SECRET_FILE"
+		--tls-crt "$TLS_CRT_PEM" --tls-key "$TLS_KEY_PEM" --force-secrets)
+	((CNPG)) && SECRET_ARGS+=(--cnpg)
+	return 0
+}
+
+install_helm() {
+	step "Installing coder-airgapped (Helm; up to 20 minutes on a fresh cluster)"
+	[[ -z "$REGISTRY" ]] || export CNPG_IMAGE="${REGISTRY}/cloudnative-pg/cloudnative-pg:1.30.0"
+	"${here}/install.sh" -f "$VALUES" "${SECRET_ARGS[@]}" | sed 's/^/    /'
+}
+
+install_argocd() {
+	step "Installing coder-airgapped (Argo CD)"
+	[[ -z "$REGISTRY" ]] || export CNPG_IMAGE="${REGISTRY}/cloudnative-pg/cloudnative-pg:1.30.0"
+	"${here}/install.sh" --prepare-only "${SECRET_ARGS[@]}" | sed 's/^/    /'
+	ECR=$([[ "$REGISTRY" == *.amazonaws.com ]] && echo 1 || echo 0) "${here}/mirror-images.sh" chart "${REGISTRY}/charts" | sed 's/^/    /'
+	local user pass app="${STATE}/argocd-application.yaml"
+	if [[ "$REGISTRY" == *.amazonaws.com ]]; then user=AWS; pass=$(aws ecr get-login-password) || die "aws ecr get-login-password failed"
+	else ask REG_USER "Registry username for Argo CD" "" nonempty; user="$REG_USER"; ask_secret pass "Registry password for Argo CD"; fi
+	sed -e "s#^  url: .*#  url: ${REGISTRY}/charts#" -e "s#^  username: .*#  username: ${user}#" -e "s#^  password: .*#  password: ${pass}#" \
+		-e "s#^    repoURL: .*#    repoURL: ${REGISTRY}/charts#" \
+		-e "s#^          domain: .*#          domain: ${DOMAIN}#" -e "s#^          registry: .*#          registry: ${REGISTRY}#" \
+		-e "s#^            issuerUrl: .*#            issuerUrl: ${OIDC_ISSUER}#" -e "s#storageClass: gp3 .*#storageClass: ${STORAGE_CLASS}#" \
+		"${here}/argocd/coder-airgapped-application.yaml" >"$app"
+	(umask 077; chmod 600 "$app")
+	kube apply -f "$app" >/dev/null
+	say "applied ${app}; waiting for Argo CD (up to 20 minutes)"
+	local s
+	for _ in $(seq 240); do
+		s=$(kube -n argocd get application coder -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null || true)
+		[[ "$s" == Synced/Healthy ]] && { say "Argo CD: Synced / Healthy"; return; }
+		sleep 5
+	done
+	warn "Argo CD is not Synced/Healthy yet ($s): kubectl -n argocd get application coder"
+}
+
+summary() {
+	local url="https://coder.${DOMAIN}"
+	step "Done"
+	bold "    Coder:    ${url}"
+	say "Admin:    admin@admin.com / admin   (change the password: avatar > Account > Security)"
+	say "Others:   'Sign in with your certificate' -> Keycloak (${OIDC_ISSUER%/realms/*})"
+	[[ "$TARGET" == minikube && "$KEYCLOAK" == dev ]] &&
+		say "Keycloak admin: admin / \$(kubectl -n keycloak get secret keycloak-initial-admin -o jsonpath='{.data.password}' | base64 -d)"
+	say "CA:       ${CA_PEM}  (browsers must trust it)"
+	say "Settings: ${VALUES}  (answers: ${ANSWERS})"
+	[[ "$TARGET" == minikube ]] && say "After a reboot: ./minikube-support expose ${PROFILE} ${DOMAIN}   (tunnel + /etc/hosts)"
+	return 0
+}
+
+deploy() {
+	# answers given as environment variables are fixed; remembered answers are only defaults
+	local v; for v in "${VARS[@]}"; do [[ -n "${!v:-}" ]] && FIXED[$v]=1; done
+	if [[ -f "$ANSWERS" ]]; then
+		while IFS='=' read -r v _; do [[ -n "${FIXED[$v]:-}" ]] || eval "$(grep "^${v}=" "$ANSWERS")"; done <"$ANSWERS"
+	fi
+	need kubectl helm openssl
+	bold "coder-airgapped $(sed -n 's/^version: *//p' "${here}/coder-airgapped/Chart.yaml") - deploy"
+	((INTERACTIVE)) && say "Press Enter to take the [default]."
+
+	step "Where"
+	choose TARGET "Deploy to:" minikube \
+		"minikube|Minikube on this machine (development)" \
+		"eks|Amazon EKS (or another Kubernetes cluster kubectl can reach)"
+	ask DOMAIN "Domain (Coder at coder.<domain>)" "${DOMAIN:-example.com}" valid_domain
+	say "-> Coder https://coder.${DOMAIN}, workspace apps *.${DOMAIN}, Keycloak https://keycloak.${DOMAIN}"
+	STATE="${STATE_ROOT}/${TARGET}-${DOMAIN}"; mkdir -p "$STATE"; chmod 700 "$STATE_ROOT" "$STATE"
+	save_answers
+
+	certificates
+	TLS_CRT_PEM="${TLS_CRT_PEM:-$TLS_CRT}" TLS_KEY_PEM="${TLS_KEY_PEM:-$TLS_KEY}" CA_PEM="${CA_PEM:-$CA_BUNDLE}"
+	save_answers
+
+	if [[ "$TARGET" == minikube ]]; then prepare_minikube; else prepare_eks; fi
+	save_answers
+
+	write_values
+	secret_args
+	if [[ "$METHOD" == argocd ]]; then install_argocd; else install_helm; fi
+
+	if [[ "$TARGET" == minikube ]]; then
+		step "Reaching it from this machine"
+		yes_no EXPOSE "Start the minikube tunnel and add the hostnames to /etc/hosts now? (sudo)" y
+		[[ "$EXPOSE" == y ]] && "${here}/minikube-support" expose "$PROFILE" "$DOMAIN"
+		if [[ "$CERTS" == new ]]; then
+			yes_no TRUST_CA "Trust the new CA on this machine (system + browsers) so https://coder.${DOMAIN} shows no warning? (sudo)" y
+			[[ "$TRUST_CA" == y ]] && "${here}/minikube-support" trust-ca "$CA_PEM"
+		fi
+		save_answers
+	fi
+	summary
+}
+
+case "${1:-}" in
+--deploy)
+	shift
+	[[ "${1:-}" == --yes || "${1:-}" == -y ]] && INTERACTIVE=0
+	deploy ;;
+-h | --help | "") sed -n '2,/^set -euo/p' "$0" | sed '$d' ;;
+*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+esac

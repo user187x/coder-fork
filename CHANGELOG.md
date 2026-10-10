@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0 – 2026-10-10
+
+* `./make --deploy`: guided install for Minikube or EKS. Asks the domain (derives `coder.`, `*.`, `keycloak.`),
+  creates self-signed certificates or checks the ones you bring (pair, chain, hostnames, expiry; DER and
+  encrypted keys converted), then installs the prerequisites, Secrets and chart. Answers are remembered.
+* `minikube-support`: profile, `local-path` storage as default (minikube's hostpath class breaks CloudNativePG
+  replicas on multi-node clusters), image loading, CoreDNS rewrite of `*.<domain>` to Traefik, a development
+  Keycloak with client `coder`, `minikube-expose-services` / `minikube-sync-hosts` (profile-aware versions of the
+  ~/devbox functions; own `/etc/hosts` block), `trust-ca`. Traefik keeps the in-cluster IP `coder.<domain>` already
+  resolves to, so existing DNS keeps working.
+* `x509-support`: CA (with keyUsage, accepted by strict TLS clients), wildcard server certificate, CA bundle,
+  client certificates, and the checks above. Adapted from ~/devbox/data/util/x509/pki-toolkit.
+* Python images default to `docker.io/library/python` (no longer the reference cluster's Harbor).
+* `install.sh`: works with Helm 4 (no `--show-resources`), quieter output.
+
 ## 1.3.0 – 2026-10-10
 
 * Default admin `admin` / `admin@admin.com` / password `admin` (`global.firstUser`), created on a fresh database. The

@@ -19,3 +19,5 @@ __pycache__/
 *.pyc
 *.swp
 .DS_Store
+# ./make --deploy state: generated certificates, keys, client secret, answers
+/helm-chart/.deploy/

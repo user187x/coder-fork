@@ -21,6 +21,12 @@ Everything needed to keep developing the coder-airgapped deliverable, other than
 After a change: bump `version` in `../helm-chart/coder-airgapped/Chart.yaml`, add a `../CHANGELOG.md` entry, build with
 `tools/build-bundle.sh`, test with `tools/airgap-e2e/`, commit, and tag `v<version>`.
 
+## Development cluster
+
+minikube profile `coder` is the development cluster. Deploy (or redeploy) the working tree onto it with
+`cd ../helm-chart && ./make --deploy` (Minikube, your domain, new or existing certificates). After a reboot:
+`../helm-chart/minikube-support expose coder <domain>`.
+
 ## What is here
 
 | Path | What |

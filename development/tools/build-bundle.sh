@@ -25,7 +25,7 @@ done
 zip=$(command -v pigz || echo gzip); mkdir -p "$dist"
 build() { # OUT [tar options...]
 	local out="$1"; shift
-	tar -I "$zip" -C "$top" -cf "${dist}/${out}.part" --exclude='*.part' --exclude='__pycache__' "$@" \
+	tar -I "$zip" -C "$top" -cf "${dist}/${out}.part" --exclude='*.part' --exclude='__pycache__' --exclude='helm-chart/.deploy' "$@" \
 		--transform "s|^helm-chart|${name}|" helm-chart
 	mv "${dist}/${out}.part" "${dist}/${out}"; (cd "$dist" && sha256sum "$out" >"${out}.sha256")
 	echo "wrote dist/${out} ($(du -h "${dist}/${out}" | cut -f1))"

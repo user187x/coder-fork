@@ -1,4 +1,5 @@
-# coder-airgapped: with these defaults the chart renders exactly what the reference cluster runs (captured 2026-10-09).
+# coder-airgapped. The defaults follow the reference cluster (captured 2026-10-09) except where CHANGELOG.md says
+# otherwise (e.g. public image sources, the default admin, a blank banner).
 # Install into namespace "coder" with release name "coder" (the workspace template refuses any other namespace).
 #
 # For another cluster set `global:` (domain, registry, OIDC, secret names, first user, gateway) - from -f my-values.yaml
@@ -219,7 +220,7 @@ secrets:
 bootstrap:
   enabled: true
   # Any image with python3 (the add-on services' image is reused so there is nothing extra to mirror).
-  image: '{{ include "platform.image" (list . "harbor.grey-marshall.com/library/python:3.13-alpine") }}'
+  image: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   timeoutSeconds: 900
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -229,7 +230,7 @@ bootstrap:
 # ---------------------------------------------------------------------------------------------------------------
 uiUpdates:
   enabled: true
-  image: '{{ include "platform.image" (list . "harbor.grey-marshall.com/library/python:3.13-alpine") }}'
+  image: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'
@@ -286,7 +287,7 @@ coder-banner:
     name: '{{ .Values.global.gateway.name }}'
     namespace: '{{ .Values.global.gateway.namespace }}'
   image:
-    registry: '{{ include "platform.registryHost" (list . "harbor.grey-marshall.com") }}'
+    registry: '{{ include "platform.registryHost" (list . "docker.io") }}'
     repository: library/python
     tag: 3.13-alpine
   imagePullSecrets: []
@@ -309,7 +310,7 @@ coder-workspace:
     # Push through the in-cluster Service (live pushed via the public URL).
     internalUrl: 'http://coder.{{ .Release.Namespace }}.svc.cluster.local'
   cliImage: '{{ include "platform.image" (list . "ghcr.io/coder/coder:latest") }}'
-  loginImage: '{{ include "platform.image" (list . "harbor.grey-marshall.com/library/python:3.13-alpine") }}'
+  loginImage: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   workspaceImage: '{{ include "platform.image" (list . "codercom/enterprise-base:ubuntu") }}'
   imagePullSecrets: []
   secrets:

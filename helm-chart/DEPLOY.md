@@ -1,9 +1,39 @@
 # How to deploy Coder (air-gapped)
 
+## The quick way: `./make --deploy`
+
+```bash
+tar -xzf coder-airgapped-1.4.0.tar.gz && cd coder-airgapped-1.4.0
+./make --deploy
+```
+
+It asks only what it cannot work out, and offers a default you accept with Enter:
+
+1. **Minikube** (this machine, for development) or **EKS** (or any cluster `kubectl` points at)
+2. **Your domain** – Coder becomes `https://coder.<domain>`, workspace apps `*.<domain>` (worked out for you)
+3. **Certificates** – create new self-signed ones (a private CA you trust once), or point it at your own
+   certificate, key and CA bundle (PEM or DER; an encrypted key is decrypted after asking for its passphrase).
+   They are checked before anything is installed.
+4. Minikube: whether to deploy a development Keycloak (default) · EKS: registry, image push, storage class, your
+   Keycloak's issuer / client secret / CA, Helm or Argo CD
+
+Then it does the rest: Gateway API CRDs, Traefik, CloudNativePG, Secrets, the chart, and on Minikube the
+`local-path` storage, a Keycloak, the tunnel and `/etc/hosts` (sudo asks for your password). At the end it prints
+the URL and the sign-in (`admin@admin.com` / `admin`). Re-running it is safe; it remembers your answers.
+
+`./make --deploy --yes` takes every remembered answer without asking. Helpers it uses, which also work on their own:
+`./x509-support` (certificates), `./minikube-support` (e.g. `./minikube-support expose coder <domain>` after a
+reboot), `./install.sh`, `./mirror-images.sh`.
+
+The steps below are the same install done by hand.
+
+---
+
+## By hand
+
 Takes about 30 minutes. Steps 1–2 happen before you go in, steps 3–8 on a machine **inside** the air-gapped network.
 No internet is needed – every image is in the bundle.
 
----
 
 ## Before you start
 
@@ -35,8 +65,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.3.0.tar.gz
-cd coder-airgapped-1.3.0
+tar -xzf coder-airgapped-1.4.0.tar.gz
+cd coder-airgapped-1.4.0
 ./mirror-images.sh list
 ```
 
@@ -47,14 +77,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.3.0` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.4.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.3.0
+cd coder-airgapped-1.4.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY

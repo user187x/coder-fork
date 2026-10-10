@@ -64,7 +64,7 @@ if ((cnpg)) && ! ((dry)); then
 	log "CloudNativePG operator (prereqs/cloudnative-pg-0.29.0.tgz)"
 	img=()
 	if [[ -n "${CNPG_IMAGE:-}" ]]; then img=(--set "image.repository=${CNPG_IMAGE%:*}" --set "image.tag=${CNPG_IMAGE##*:}"); fi
-	helm upgrade --install cnpg "${here}/prereqs/cloudnative-pg-0.29.0.tgz" -n cnpg-system --create-namespace --wait "${img[@]}"
+	helm upgrade --install cnpg "${here}/prereqs/cloudnative-pg-0.29.0.tgz" -n cnpg-system --create-namespace --wait "${img[@]}" >/dev/null
 fi
 missing=0
 ((prepare)) || for crd in clusters.postgresql.cnpg.io httproutes.gateway.networking.k8s.io middlewares.traefik.io; do
@@ -132,6 +132,6 @@ if ((dry)); then
 	exit 0
 fi
 log "helm upgrade --install $release ($ns)"
-helm upgrade --install "$release" "$chart" -n "$ns" "${values[@]}" --wait --timeout 20m
+helm upgrade --install "$release" "$chart" -n "$ns" "${values[@]}" --wait --timeout 20m >/dev/null
 log "Done"
-helm -n "$ns" status "$release" --show-resources=false | sed -n '/NOTES:/,$p'
+helm -n "$ns" status "$release" | sed -n '/NOTES:/,$p'
