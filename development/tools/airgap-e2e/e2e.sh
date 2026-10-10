@@ -19,6 +19,7 @@ kubectl -n default patch endpointslice airgap-registry-1 --type=json -p "[{\"op\
 docker exec airgap-test-control-plane sh -c "crictl images | awk '/^localhost:5001/{print \$1\":\"\$2}' | xargs -r crictl rmi" >/dev/null 2>&1
 for d in deploy/argocd-redis deploy/argocd-repo-server statefulset/argocd-application-controller; do kubectl -n argocd rollout restart $d >/dev/null; kubectl -n argocd rollout status $d --timeout=180s >/dev/null; done  # clear Argo CD caches (same chart version re-pushed)
 echo "registry empty: $(curl -s http://127.0.0.1:5001/v2/_catalog); node mirror images: $(docker exec airgap-test-control-plane crictl images | grep -c localhost:5001)"
+"$W/airgap-on.sh" >/dev/null; "$W/keycloak-setup.sh" >/dev/null   # both are lost when the node restarts
 docker exec airgap-test-control-plane timeout 30 crictl pull docker.io/library/alpine:3.20 >/dev/null 2>&1 && { echo "AIR GAP BROKEN"; exit 1; } || echo "air gap in force"
 rm -rf $W/connected $W/airgap; mkdir -p $W/connected $W/airgap; tar -xzf "$TARBALL" -C $W/connected; B=$(ls -d $W/connected/coder-airgapped-*)
 say "Step 1"; (cd $B && ./mirror-images.sh verify && ./mirror-images.sh list) > $W/s1.log 2>&1 || { echo FAILED; tail $W/s1.log; exit 1; }
@@ -45,7 +46,6 @@ sec["stringData"] = {"name": "coder-airgapped-charts", "type": "helm", "enableOC
 app["spec"]["source"]["repoURL"] = rc
 v = app["spec"]["source"]["helm"]["valuesObject"]; g = v["global"]
 g["domain"] = "airgap.test"; g["registry"] = "localhost:5001"; g["oidc"]["issuerUrl"] = "https://keycloak.airgap.test/realms/master"
-g["firstUser"]["email"] = "tester@airgap.test"
 v["database"]["storage"]["storageClass"] = "standard"; v["uiUpdates"]["persistence"]["storageClass"] = "standard"
 yaml.safe_dump_all([sec, app], open(p, "w"), sort_keys=False); print("filled in, chart", app["spec"]["source"]["targetRevision"])
 PY
