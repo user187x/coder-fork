@@ -2,7 +2,12 @@
 coder-airgapped {{ .Chart.Version }} (Coder image {{ .Values.coder.coder.image.repo }}:{{ .Values.coder.coder.image.tag }}) in namespace {{ .Release.Namespace }}.
 
 Open:            {{ .Values.uiUpdates.accessUrl }}
-Sign in:         Keycloak (OIDC). Owner: the Keycloak account with email {{ .Values.secrets.initAuth.email }}
+{{- if eq (toString .Values.global.disablePasswordAuth) "true" }}
+Sign in:         Keycloak (OIDC) only. Owner: the Keycloak account with email {{ .Values.secrets.initAuth.email }}
+{{- else }}
+Sign in:         owner {{ .Values.secrets.initAuth.username }} / {{ .Values.secrets.initAuth.email }} with the password in Secret {{ .Values.secrets.initAuth.name }}
+                 (change it after the first sign-in); everyone else with Keycloak (OIDC)
+{{- end }}
 Database:        kubectl -n {{ .Release.Namespace }} get cluster {{ .Values.database.name }}
 Template push:   kubectl -n {{ .Release.Namespace }} logs job/{{ index .Values "coder-workspace" "namePrefix" | default .Release.Name }}-push-template
 {{- if or (eq .Release.Namespace "coder" | not) }}

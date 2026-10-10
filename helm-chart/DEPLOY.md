@@ -14,8 +14,7 @@ The air-gapped cluster needs these already running:
 - [ ] **Traefik v3** with a **Gateway** that serves HTTPS for `coder.<your-domain>` and `*.<your-domain>`
       (plus Traefik's `rewrite-body` plugin – see `prereqs/traefik-41.4.0.reference-values.yaml`)
 - [ ] **Keycloak** (or another OIDC login) with a client called `coder`
-      and redirect URL `https://coder.<your-domain>/api/v2/users/oidc/callback`,
-      and **a Keycloak account for you** (you'll put its email in Step 6 – that account becomes Coder's admin)
+      and redirect URL `https://coder.<your-domain>/api/v2/users/oidc/callback` – your users sign in with it
 - [ ] **DNS** for `coder.<your-domain>` and `*.<your-domain>`
 - [ ] **Argo CD**
 - [ ] **A container registry** (ECR, Harbor, ...)
@@ -36,8 +35,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.2.0.tar.gz
-cd coder-airgapped-1.2.0
+tar -xzf coder-airgapped-1.3.0.tar.gz
+cd coder-airgapped-1.3.0
 ./mirror-images.sh list
 ```
 
@@ -48,14 +47,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.2.0` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.3.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.2.0
+cd coder-airgapped-1.3.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -94,10 +93,10 @@ Open `argocd/coder-airgapped-application.yaml` and change every line marked **`C
 | Registry password | ECR: output of `aws ecr get-login-password` |
 | `domain` | `example.com` |
 | `oidc.issuerUrl` | `https://keycloak.example.com/realms/master` |
-| `firstUser.email` | **the email of your Keycloak account** – it becomes the Coder admin |
 | `storageClass` (2 places) | `gp3` |
 
-Everything else can stay as it is.
+Everything else can stay as it is. The admin account is `admin` / `admin@admin.com` with password **`admin`**
+(`firstUser`); you change the password in Step 8.
 
 ## Step 7 – Deploy
 
@@ -114,11 +113,14 @@ kubectl -n coder get pods                    # everything Running (takes 5–10 
 
 ## Step 8 – Sign in
 
-Open **`https://coder.<your-domain>`**, click **Sign in with your certificate**, and log in to Keycloak with the
-account whose email you put in `firstUser.email`. You are the Coder admin (owner). Everyone else who signs in with
-Keycloak gets a normal account.
+Open **`https://coder.<your-domain>`** and sign in with email **`admin@admin.com`** and password **`admin`**.
+You are the Coder admin (owner).
 
-There is no password login (Keycloak only, by design), so Coder can only be signed in to while Keycloak is up.
+**Change the password now:** your avatar › **Account** › **Security**. (Later syncs never reset it.)
+
+Everyone else clicks **Sign in with your certificate** and logs in with Keycloak; they get a normal account. The
+admin can make others admins in **Admin settings › Users**. The banner starts empty – publish one at
+`https://coder.<your-domain>/__banner/admin`.
 
 Done.
 
@@ -138,7 +140,7 @@ Done.
 | `coder` pod stuck in `ContainerCreating` | Step 5 – the secrets are missing: `kubectl -n coder get secrets` |
 | Database not starting | `kubectl -n coder get cluster` – is CloudNativePG installed? Is the storage class right? |
 | Login page doesn't load | DNS and the Gateway's HTTPS certificate for `coder.<your-domain>` |
-| Signed in, but you are not admin | `firstUser.email` must be exactly your Keycloak account's email. Fix it before the first deploy |
+| `admin` / `admin` is refused | The admin's password was changed, or the database was not fresh: `kubectl -n coder logs job/coder-bootstrap-first-user` |
 | No workspace template in Coder | `kubectl -n coder logs job/coder-bootstrap-first-user` and `job/coder-workspace-push-template` |
 
 ---

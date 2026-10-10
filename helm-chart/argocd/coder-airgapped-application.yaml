@@ -46,7 +46,7 @@ spec:
   source:
     repoURL: 123456789012.dkr.ecr.us-east-1.amazonaws.com/charts  # CHANGE-ME: same as the repository url above
     chart: coder-airgapped
-    targetRevision: 1.2.0
+    targetRevision: 1.3.0
     helm:
       releaseName: coder
       valuesObject:
@@ -70,15 +70,19 @@ spec:
             allowSignups: "true"
             signInText: Sign in with your certificate
             iconUrl: /icon/keycloak.svg
-          disablePasswordAuth: "true"
+          # "false": the admin signs in with its password, everyone else with Keycloak. "true": Keycloak only (the
+          # admin is then the Keycloak account with firstUser.email).
+          disablePasswordAuth: "false"
+          # The first owner, created on a fresh database. Change its password after the first sign-in (later syncs
+          # never reset it).
           firstUser:
             username: admin
-            # CHANGE-ME: the email of YOUR Keycloak account. That account becomes Coder's owner on its first sign-in.
-            email: ""                               # "" = <username>@<domain>
+            email: admin@admin.com
+            password: admin
           database:
             name: coder-db
           secretNames:
-            initAuth: coder-init-auth               # created by the chart (random password)
+            initAuth: coder-init-auth               # created by the chart (firstUser)
             logsDb: coder-ui-logs-db                # created by the chart (random password)
             tlsCa: tls-ca                           # must exist (step 3)
             oidcCa: keycloaking-coder-ca            # must exist (step 3)

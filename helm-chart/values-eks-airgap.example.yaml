@@ -19,9 +19,11 @@ global:
   oidc:
     issuerUrl: https://keycloak.example.com/realms/master # CHANGE-ME
     clientId: coder
-  firstUser:
-    username: admin                                       # CHANGE-ME
-    email: ""                                             # "" = <username>@<domain>
+  disablePasswordAuth: "false"                            # "true" = Keycloak only (admin = Keycloak account with firstUser.email)
+  firstUser:                                              # first owner; change the password after the first sign-in
+    username: admin
+    email: admin@admin.com
+    password: admin
   secretNames:                                            # rename here and pass --secret-name KEY=NAME to install.sh
     tlsCa: tls-ca
     oidcCa: keycloaking-coder-ca

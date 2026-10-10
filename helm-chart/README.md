@@ -1,4 +1,4 @@
-# coder-airgapped 1.2.0: portable Helm chart of the live Coder fork
+# coder-airgapped 1.3.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -12,7 +12,7 @@ Gateway) configures everything, from a values file or from an Argo CD Applicatio
 |---|---|---|
 | Coder server, `ghcr.io/user187x/coder-platform:2.0.0-platform.4` (Coder 2.37.3 + fork, built from `d01b8f6`) | Argo CD app `argocd/coder` (chart `coder` 2.37.3) | `charts/coder/` (upstream 2.37.3 + platform patch) + `values.yaml › coder` |
 | PostgreSQL `coder-db` (CloudNativePG, 2 instances) | extraTemplate of `argocd/coder` | `templates/database.yaml` |
-| Announcement banner | Argo CD app `argocd/coder-banner` (chart 0.4.1) | `charts/coder-banner/` (Harbor's 0.4.1 + platform patch) |
+| Announcement banner | Argo CD app `argocd/coder-banner` (chart 0.4.1) | `charts/coder-banner/` (unreleased 0.4.3 + platform patch; starts blank) |
 | Platform service `coder-ui-updates` + `coder-ui-logs-db` + RBAC | `coder-ui-updates apply` (plain manifests) | `templates/ui-updates*.yaml`, `files/ui-updates/` (48 files, identical to the live ConfigMap) |
 | Workspace template `ubuntu-vnc-desktop` + `/__icons/` server | Helm release `coder/coder-workspace` rev 13 | `charts/coder-workspace/` (0.1.1-platform.1, see *Changes*) |
 | First owner | created by hand on the reference cluster | `templates/bootstrap-job.yaml` (new) |
@@ -62,7 +62,8 @@ it, e.g. `'coder.{{ .Values.global.domain }}'`. The defaults reproduce the refer
 | `global.imagePullSecrets` | `[]` | every pod that sets none of its own |
 | `global.gateway.{name,namespace}` | `traefik-gateway` / `traefik` | parentRef of every HTTPRoute |
 | `global.oidc.*` | issuer `https://keycloak.<domain>/realms/master`, client `coder`, ... | Coder's OIDC settings |
-| `global.firstUser.{username,email}` | `admin` / `<username>@<domain>` | first owner: the Keycloak account with this email, from its first sign-in |
+| `global.disablePasswordAuth` | `"false"` | `"false"`: the admin signs in with its password, everyone else with Keycloak. `"true"`: Keycloak only |
+| `global.firstUser.{username,email,password}` | `admin` / `admin@admin.com` / `admin` | first owner, created on a fresh database (password set once, never reset). With `disablePasswordAuth: "true"`: the Keycloak account with this email |
 | `global.database.name` | `coder-db` | CNPG Cluster; Secrets `<name>-app`, `<name>-ca` |
 | `global.secretNames.*` | `coder-init-auth`, `coder-ui-logs-db`, `tls-ca`, `keycloaking-coder-ca`, `keycloaking-coder-oidc`, `tls-wild-cert` | every reference to those Secrets, including the workspace template's `tls-ca` |
 
@@ -119,19 +120,24 @@ Use namespace `coder` and release `coder`: the workspace template refuses other 
 
 What happens: Coder, its database, the banner, the platform service and the icon server start. Then the
 `coder-bootstrap-first-user` hook creates Coder's first user (owner) from Secret `coder-init-auth` if Coder has
-none. With password sign-in off it also links that owner to Keycloak by email (`global.firstUser.email`), and mints
-a 30-minute API token into Secret `coder-workspace-push-token`. Finally `coder-workspace-push-template` pushes
-`ubuntu-vnc-desktop` with that token. People sign in with Keycloak; the account with `global.firstUser.email` is the
-owner.
+none, with the password `global.firstUser.password` (`admin`). With password sign-in off it instead links that owner
+to Keycloak by email. Every run it mints a 30-minute API token into Secret `coder-workspace-push-token`. Finally
+`coder-workspace-push-template` pushes `ubuntu-vnc-desktop` with that token. The admin signs in with its password
+(change it after the first sign-in); everyone else signs in with Keycloak.
 
 ## Changes from the live deployment (deliberate)
 
 * **Bootstrap Job (new).** Coder does not read `CODER_BOOTSTRAP_INITIAL_USER_PASSWORD` (the env var is still set,
-  as live, but has no effect), so a fresh install had no first user. Also, with `CODER_DISABLE_PASSWORD_AUTH=true`
-  this Coder refuses **every** password login, owners included (`coderd/userauth.go`). A password owner could
-  therefore never sign in or push the template. The Job switches the first user to OIDC (Coder links a Keycloak
-  sign-in to an existing OIDC user by email), and writes a short-lived owner token for the push straight into Coder's
-  database (`files/bootstrap/bootstrap.py`). There is no break-glass password.
+  as live, but has no effect), so a fresh install had no first user. The Job creates it (`admin` /
+  `admin@admin.com`) and sets its password to `global.firstUser.password`; Coder's API rejects weak passwords, so it
+  creates the user with a random one and then writes the hash (Coder's own PBKDF2 format) into the database. Coder
+  checks strength only when a password is set, not at sign-in. It also writes a short-lived owner token for the
+  template push into Coder's database (`files/bootstrap/bootstrap.py`).
+* **Password sign-in on (live: off).** Live sets `CODER_DISABLE_PASSWORD_AUTH=true`, which makes this Coder refuse
+  **every** password login, owners included (`coderd/userauth.go`). Default here: `"false"`, so the admin can use
+  its password; OIDC users have no password, so they still sign in with Keycloak only. With `"true"` the Job switches
+  the admin to OIDC instead (Coder links a Keycloak sign-in to an existing OIDC user by email).
+* **The banner starts blank** (live: a published maintenance notice). An owner publishes one at `/__banner/admin`.
 * **`agent-audit.tf` is off by default** (`coder-workspace.agentAudit`). The live active template version (Sep 28)
   is `main.tf` + `certificates.tf`, byte-identical to the chart's. `agent-audit.tf` was added later and never went
   live: its `%{...}` snoopy format strings are Terraform template directives, so `terraform init` failed. The
@@ -141,7 +147,7 @@ owner.
   image (`latest` or `v2.37.3`) contains them. Live only worked because `install-workspace-chart` pre-created a token
   Secret. A python3 init container now does the sign-in. The push goes to the in-cluster Service
   (`coder-workspace.coder.internalUrl`).
-* **Platform patch on the vendored subcharts** (`coder` 2.37.3-platform.1, `coder-banner` 0.4.1-platform.1,
+* **Platform patch on the vendored subcharts** (`coder` 2.37.3-platform.1, `coder-banner` 0.4.3-platform.1,
   `coder-workspace` 0.1.1-platform.1, applied by `../development/tools/apply-platform-patch.py`). Templated string
   values, `global.imagePullSecrets`, and `coder.extraEnv`. The upstream templates are otherwise untouched. Do not run
   `helm dependency update` on this chart: there is nothing to fetch.
@@ -179,27 +185,31 @@ owner.
   default name in any reference. The chart was pushed to an OCI registry with `mirror-images.sh chart`, pulled back
   with `helm pull`, and rendered with the Application's values, identical to the local chart (49 objects).
 
-## End-to-end air-gap test (1.2.0)
+## End-to-end air-gap test (1.3.0)
 
-DEPLOY.md was followed step by step, from a fresh extraction of `coder-airgapped-1.2.0.tar.gz`. The target was a
+DEPLOY.md was followed step by step, from a fresh extraction of `coder-airgapped-1.3.0.tar.gz`. The target was a
 kind cluster (Kubernetes 1.37) whose node had **all non-private egress blocked** (both pulls from Docker Hub and pod
-traffic to github.com fail). The registry was empty and the node had no cached images. Step 3 ran in a docker
-with no images at all: all 8 images were loaded from `images/` (none pulled). Prerequisites in place beforehand: Gateway API v1.5.1 CRDs, Traefik 41.4.0
-(`prereqs/`) with the rewrite-body plugin, Argo CD 3.5.2, Keycloak 26.4 with client `coder`, and wildcard DNS.
+traffic to github.com fail). The registry was empty and the node had no cached images. Step 3 ran in a docker with
+no images at all: all 8 images were loaded from `images/` (none pulled). Prerequisites in place beforehand: Gateway
+API v1.5.1 CRDs, Traefik 41.4.0 (`prereqs/`) with the rewrite-body plugin, Argo CD 3.5.2, Keycloak 26.4 with client
+`coder`, and wildcard DNS.
 
 * Steps 1–7: every step succeeded. Argo CD reached **Synced / Healthy / Succeeded** in under 3 minutes. Every
   container (Coder, database, banner, add-ons, logs DB, icons, workspace) ran from the mirror registry, with no
-  pull errors. A second sync also succeeded.
-* Step 8, as a browser inside the network, **19/19 checks**. Coder answers over HTTPS through the Gateway. Password
-  login is refused. Keycloak sign-in works, and the `global.firstUser.email` account is the owner. The template was
-  pushed. `/__coder-ui/`, `/__banner/`, `/__icons/` and the dashboard load. A workspace builds and its agent
-  connects. The workspace's apps were unhealthy, as expected (first gap below).
+  pull errors.
+* Step 8, as a browser inside the network, **22/22 checks**. Coder answers over HTTPS through the Gateway.
+  `admin@admin.com` / `admin` signs in as owner `admin` (a wrong password is refused). A Keycloak user signs in and
+  gets a normal account. The banner starts blank (hidden, no message). The template was pushed. `/__coder-ui/`,
+  `/__banner/`, `/__icons/` and the dashboard load. A workspace builds and its agent connects. The workspace's apps
+  were unhealthy, as expected (first gap below).
+* Not re-run in 1.3.0: `global.disablePasswordAuth: "true"` (Keycloak only). 1.2.0 tested it; the bootstrap code
+  for it was reorganized since (same steps).
 
-Problems this test found, all fixed in 1.2.0: no owner could ever sign in and the template push failed (password
-login is fully disabled); `terraform init` needs `registry.terraform.io` (fixed with the `-airgap` image's provider
-mirror); `agent-audit.tf` broke `terraform init`; an all-digit checksum annotation was rejected; `install.sh` failed
-on the 1 MB logo ConfigMap; `images.txt` pointed at the private Harbor; the Gateway API CRDs were missing from
-`prereqs/`; three HTTPRoutes stayed OutOfSync. The harness to repeat the test is in
+Problems the 1.2.0 run found, all fixed in 1.2.0: no owner could ever sign in and the template push failed
+(password login was fully disabled); `terraform init` needs `registry.terraform.io` (fixed with the `-airgap`
+image's provider mirror); `agent-audit.tf` broke `terraform init`; an all-digit checksum annotation was rejected;
+`install.sh` failed on the 1 MB logo ConfigMap; `images.txt` pointed at the private Harbor; the Gateway API CRDs
+were missing from `prereqs/`; three HTTPRoutes stayed OutOfSync. The harness to repeat the test is in
 `../development/tools/airgap-e2e/`.
 
 ## Known gaps for a strict air gap

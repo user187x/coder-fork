@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 – 2026-10-10
+
+* Default admin `admin` / `admin@admin.com` / password `admin` (`global.firstUser`), created on a fresh database. The
+  bootstrap Job sets the password once (Coder's API rejects weak passwords, so it writes the hash directly); later
+  syncs never reset it. Change it after the first sign-in.
+* Password sign-in on by default (`global.disablePasswordAuth: "false"`): the admin uses its password, everyone else
+  Keycloak. `"true"` keeps 1.2.0's Keycloak-only behaviour (admin = the Keycloak account with `firstUser.email`).
+* The template-push token is minted on every sync, so pushes no longer depend on the admin's password.
+* Banner: the unreleased coder-banner 0.4.3 (optional `gateway.sectionName`, `nodeSelector`), starting blank
+  (hidden, no message) until an owner publishes one.
+* Development baseline in git: `development/tools/build-bundle.sh`; private material kept outside the repository.
+
 ## 1.2.0 – 2026-10-10
 
 Verified end to end in an air gap (DEPLOY.md on a kind cluster with egress blocked; 19/19 sign-in, add-on and

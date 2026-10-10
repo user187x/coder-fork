@@ -31,13 +31,16 @@ global:
     allowSignups: "true"
     signInText: Sign in with your certificate
     iconUrl: /icon/keycloak.svg
-  # "true": Keycloak sign-in only. Coder then refuses every password login (owners too).
-  disablePasswordAuth: "true"
-  # The first owner. The bootstrap Job creates it on a fresh database; with password sign-in off it is linked to the
-  # Keycloak account with this EMAIL, which is the owner from its first Keycloak sign-in. Use a real Keycloak user's email.
+  # "false": the admin below signs in with its password, everyone else with Keycloak (they have no password).
+  # "true": Keycloak sign-in only. Coder then refuses every password login (owners too), so the admin is linked to the
+  # Keycloak account with firstUser.email instead and signs in with Keycloak.
+  disablePasswordAuth: "false"
+  # The first owner (admin). On a fresh database the bootstrap Job creates it with this password; change the password
+  # after the first sign-in (Account > Security). Later syncs never reset it.
   firstUser:
     username: admin
-    email: ""                  # "" = <username>@<domain>
+    email: admin@admin.com     # "" = <username>@<domain>
+    password: admin
   database:
     name: coder-db             # CloudNativePG Cluster; Coder reads Secret <name>-app, the add-ons <name>-ca
   # Names of the Secrets the components read. The chart creates initAuth and logsDb; the others must exist
@@ -176,14 +179,15 @@ database:
 # when `create: true` (otherwise they must exist: ../install.sh --prepare-only makes them from files).
 # ---------------------------------------------------------------------------------------------------------------
 secrets:
-  # First owner (email, username, password). The bootstrap Job creates Coder's first user from it. The password is
-  # only usable while global.disablePasswordAuth is "false"; otherwise this owner signs in with Keycloak (by email).
+  # First owner (email, username, password) from global.firstUser. The bootstrap Job creates Coder's first user from it.
+  # The password is only usable while global.disablePasswordAuth is "false"; otherwise this owner signs in with
+  # Keycloak (by email).
   initAuth:
     name: '{{ .Values.global.secretNames.initAuth }}'
     create: true
     email: '{{ include "platform.firstUserEmail" . }}'
     username: '{{ .Values.global.firstUser.username }}'
-    password: ""            # empty = random on first install, then kept
+    password: '{{ .Values.global.firstUser.password }}'   # empty = random on first install, then kept
   # Password of the add-on service's log buffer database.
   logsDb:
     name: '{{ .Values.global.secretNames.logsDb }}'

@@ -36,7 +36,7 @@ After a change: bump `version` in `../helm-chart/coder-airgapped/Chart.yaml`, ad
 | `tools/extract_release_chart.py` | Recover a chart from a Helm release Secret |
 | `upstream-charts/` | Untouched upstream charts: `coder-2.37.3` (vendored as `charts/coder`), `coder-banner-0.4.1` (what minikube ran) |
 | `reference/` | Frozen capture (2026-10-09) of the original deployment on minikube profile `minikube`: every object, cleaned (`manifests/`), and the Helm/Argo CD values (`helm-values/`). Read-only |
-| `legacy/` | The earlier tools from `~/devbox` the chart replaced (installers, bundle builders, `coder-ui-updates`, banner tools, the unreleased banner chart source 0.4.3). Read-only, not maintained |
+| `legacy/` | The earlier tools from `~/devbox` the chart replaced (installers, bundle builders, `coder-ui-updates`, banner tools, and the banner chart source 0.4.3 the chart vendors since 1.3.0). Read-only, not maintained |
 
 Not in this repository: secrets, the database dump, the fork's git bundle and the original image are in
 `~/coder-airgapped-private/` (backup only; the deployment starts from a clean database). Built tarballs go to
