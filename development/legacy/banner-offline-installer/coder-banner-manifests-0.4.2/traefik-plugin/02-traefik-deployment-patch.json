@@ -1,9 +1,0 @@
-[
-  {"op": "test", "path": "/spec/template/spec/containers/0/name", "value": "traefik"},
-  {"op": "add", "path": "/spec/template/spec/containers/0/args/-",
-   "value": "--experimental.localPlugins.rewrite-body.moduleName=github.com/traefik/plugin-rewritebody"},
-  {"op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
-   "value": {"name": "rewrite-body", "mountPath": "/plugins-local/src/github.com/traefik/plugin-rewritebody", "readOnly": true}},
-  {"op": "add", "path": "/spec/template/spec/volumes/-",
-   "value": {"name": "rewrite-body", "configMap": {"name": "traefik-local-plugin-rewrite-body", "defaultMode": 420}}}
-]

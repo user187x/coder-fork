@@ -1,9 +1,0 @@
-#!/bin/bash
-cd "$(dirname "$0")" || exit 1
-
-# Delete the failing cluster and its corrupted storage claims
-kubectl delete cluster coder-db -n coder
-kubectl delete pvc -l cnpg.io/cluster=coder-db -n coder
-
-# Apply the updated ArgoCD manifest
-kubectl apply -f ../../argocd/argocd.yaml
