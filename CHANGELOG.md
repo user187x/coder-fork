@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.9.0 – 2026-10-10
+
+Coder image `2.0.0-platform.8-airgap` (fork `a68ffe61e`).
+
+* **Workspace page:** the agent card's solid green border is replaced by an animated border that shows the workspace's
+  state:
+  * **Initializing** (starting, agent connecting, startup scripts running): the electric border of
+    `update-todos/workspace-loadding.html`, in green.
+  * **Pending or a problem** (build queued, a startup script or module failed or timed out, the agent timed out
+    connecting, a dev container error): the same border in fiery orange.
+  * **Failed** (failed build, or the agent of a running workspace disconnected): the same border in red.
+  * **Ready**: the rotating green border of `update-todos/workspace-border.html`.
+
+  Stopped, stopping and deleted workspaces keep Coder's border. Nothing in the layout moves between states, the card
+  (its logs, its terminal) is never remounted, and with reduced motion nothing animates.
+
 ## 1.8.0 – 2026-10-10
 
 Coder image `2.0.0-platform.7-airgap` (fork `d7a068929`).

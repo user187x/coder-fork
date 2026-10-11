@@ -28,6 +28,11 @@ try {
 
 	// ---- terminal accordion
 	await page.goto(`${URL}/@admin/e2e`);
+	const fx = page.locator("#main-content section .agent-fx").first();
+	await fx.waitFor({ timeout: 30000 });
+	await page.waitForFunction(() => document.querySelector("#main-content section .agent-fx")?.dataset.fx === "ready", null, { timeout: 120000 }).catch(() => {});
+	check("a ready workspace's card has the rotating border", (await fx.getAttribute("data-fx")) === "ready", String(await fx.getAttribute("data-fx")));
+	await snap("00-workspace-border");
 	await page.getByRole("button", { name: "Terminal", exact: true }).click();
 	const group = page.getByRole("group", { name: "Terminal text size" }).first();
 	await group.waitFor({ timeout: 30000 });
