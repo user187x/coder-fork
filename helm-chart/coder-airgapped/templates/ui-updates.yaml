@@ -220,6 +220,16 @@ spec:
         - path: {type: PathPrefix, value: /__coder-ui/}
       backendRefs:
         - {group: "", kind: Service, name: coder-ui-updates, port: 80, weight: 1}
+    # The navbar's Workspaces button icon is the chart's (files/ui-updates/workspaces-icon.png), not the one built
+    # into the Coder image: replace that file and upgrade the chart to change it.
+    - matches:
+        - path: {type: Exact, value: /workspaces-icon.png}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: {type: ReplaceFullPath, replaceFullPath: /__coder-ui/workspaces-icon.png}
+      backendRefs:
+        - {group: "", kind: Service, name: coder-ui-updates, port: 80, weight: 1}
     - matches:
         - path: {type: RegularExpression, value: '^/assets/index-[A-Za-z0-9_-]{4,64}\.js$'}
       backendRefs:

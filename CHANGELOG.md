@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.1 – 2026-10-11
+
+* **Workspaces button icon:** green. The navbar's icon is now the chart's `files/ui-updates/workspaces-icon.png`, which
+  Traefik serves at `/workspaces-icon.png` from the platform service, so changing it takes a chart upgrade, not a new
+  Coder image. The fork's built-in copy is green too (fork `542e5e2b5`, in the next Coder image). The new icon was first
+  committed in `3a89b21` (with a FORK.md note).
+
 ## 1.10.0 – 2026-10-11
 
 Coder image `2.0.0-platform.9-airgap` (fork `019d9745b`) and workspace image `ghcr.io/user187x/coder-workspace:1.1.0`.
