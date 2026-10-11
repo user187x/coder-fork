@@ -37,7 +37,7 @@ try {
 	const group = page.getByRole("group", { name: "Terminal text size" }).first();
 	await group.waitFor({ timeout: 30000 });
 	check("text size controls at the far left of the row", await group.isVisible());
-	const dims = page.getByTitle(/Columns x rows/).first();
+	const dims = page.getByTestId("terminal-dimensions").first();
 	await dims.waitFor({ timeout: 30000 });
 	const [cols, rows] = (await dims.textContent()).split("x").map(Number);
 	check("starts at a size that fits btop (>= 80x24)", cols >= 80 && rows >= 24, `${cols}x${rows}`);

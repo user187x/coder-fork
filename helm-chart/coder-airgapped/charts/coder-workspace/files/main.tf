@@ -135,6 +135,15 @@ resource "coder_agent" "main" {
       fi
     fi
 
+    # btop refreshes every 100 ms instead of its default 2000: for users without a btop configuration, or whose
+    # configuration still has btop's default (a value someone chose is left alone).
+    BTOP_CONF=~/.config/btop/btop.conf
+    if [ ! -e "$BTOP_CONF" ]; then
+      mkdir -p ~/.config/btop && echo "update_ms = 100" > "$BTOP_CONF"
+    elif grep -qx 'update_ms = 2000' "$BTOP_CONF"; then
+      sed -i 's/^update_ms = 2000$/update_ms = 100/' "$BTOP_CONF"
+    fi
+
     # tmux (in the workspace image): the bundled configuration, for users who have none yet.
     if command -v tmux-mirror-setup > /dev/null && [ ! -e ~/.config/tmux ] && [ ! -e ~/.tmux.conf ]; then
       tmux-mirror-setup > /tmp/tmux-mirror-setup.log 2>&1 || true

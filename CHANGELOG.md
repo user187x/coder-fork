@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.12.0 – 2026-10-11
+
+Coder image `2.0.0-platform.11-airgap` (fork `92daaa856`).
+
+* **Agent terminal drop-down:**
+  * When the terminal terminates (its shell exits, the connection drops, or End session), the drop-down rolls back up
+    and starts over: the next open is a new session.
+  * "End session when closed" is a slider toggle.
+  * The custom command is on by default and runs btop.
+  * Controls in three groups: the text size buttons and size in a small oval on the left, the custom command centred,
+    the session controls on the right.
+  * The terminal's columns x rows show as a very faint overlay pinned to its top-right corner.
+  * The pop-out window has a button that opens the session in a separate browser window (Coder's terminal page, same
+    session).
+* **btop refreshes every 100 ms** instead of its default 2000. The workspace start sets it for users without a btop
+  configuration, or whose configuration still has btop's default; a value someone chose is left alone.
+
 ## 1.11.0 – 2026-10-11
 
 Workspace image `ghcr.io/user187x/coder-workspace:1.2.0` (Coder image unchanged: `2.0.0-platform.10-airgap`).
