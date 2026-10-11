@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Builds ghcr.io/user187x/coder-platform:<tag>-airgap (the fork's image + Terraform provider mirror) and saves it
 # into the delivery bundle (helm-chart/images/custom/), replacing the previous one. Update its digest in images.txt.
-#   ./build-airgap-image.sh [BASE_TAG]      default 2.0.0-platform.11 (from local docker, ghcr, or the private backup)
+#   ./build-airgap-image.sh [BASE_TAG]      default 2.0.0-platform.12 (from local docker, ghcr, or the private backup)
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-base_tag="${1:-2.0.0-platform.11}"; base="ghcr.io/user187x/coder-platform:${base_tag}"; img="${base}-airgap"
+base_tag="${1:-2.0.0-platform.12}"; base="ghcr.io/user187x/coder-platform:${base_tag}"; img="${base}-airgap"
 ctx="${dev}/airgap-image"
 # The base image: local docker, else ghcr (docker login ghcr.io), else the backup in ~/coder-airgapped-private/images/
 docker image inspect "$base" >/dev/null 2>&1 || docker pull "$base" 2>/dev/null ||

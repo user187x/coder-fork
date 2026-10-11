@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.15.0 – 2026-10-11
+
+Coder `2.0.0-platform.12` (fork `2bd982755`).
+
+* **A workspace's apps open only once the whole workspace is ready.** That means the agent is connected and its
+  startup scripts are done, including the terminal's tmux, code-server and the desktop.
+  * Until then, the workspace page shows none of the following, and the workspaces list shows no app buttons:
+    * the app buttons, VS Code, Terminal, SSH and port forwarding;
+    * the Terminal drop-down, which shows "Opens when the workspace is ready".
+  * A start that failed or timed out also opens them, so one broken module never locks the user out. The card's
+    border turns orange for that.
+* **"WORKSPACE INITIALIZING" panel.** While a workspace starts, it takes the place of the apps and of Coder's
+  "Workspace agent is connecting" message. The design is `development/coder-fork/design/workspace-initializing.html`,
+  which was `example.html`.
+  * Its look: warning stripes above and below, the brick animation tinted orange, and a title that slowly fades in
+    and out. The animation is the fork's `site/static/loading-brix.gif`.
+  * What it says:
+    * the current step (agent connecting, preparing, running the startup scripts);
+    * a progress bar with how many startup scripts have finished and which are still running;
+    * the elapsed time.
+* The workspace issue indicator no longer has **Troubleshooting** buttons (the template's docs link).
+
 ## 1.14.0 – 2026-10-11
 
 Workspace image `ghcr.io/user187x/coder-workspace:1.4.0`.
