@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.12.2 – 2026-10-11
+
+* **Desktop (noVNC) locked down;** the "you are exposing your VNC server to all users" warning is gone.
+  * TigerVNC's X server now starts directly (not through `vncserver`) and listens on no TCP port, only on a Unix socket
+    that only the workspace user can open (`/tmp/coder-vnc/rfb.sock`: directory 0700, socket 0600).
+  * websockify serves noVNC on `127.0.0.1:6901` only (it listened on every interface, so the password-less desktop was
+    reachable from the cluster network) and connects to that socket. The only way in is Coder's app proxy.
+  * The X display has an authorization cookie (`~/.Xauthority`).
+  * Takes effect when a workspace restarts.
+
 ## 1.12.1 – 2026-10-11
 
 * **No gap when Coder rolls out:** the old Coder pod keeps serving for 15 s after it is taken out of the Service

@@ -174,16 +174,27 @@ exec startxfce4
 VNC_SCRIPT
     chmod +x ~/.config/tigervnc/xstartup
 
-    # Start TigerVNC server on display :1. Bound to localhost only: websockify below
-    # runs in the same pod, and TigerVNC refuses unauthenticated non-local listeners.
+    # TigerVNC's X server on display :1, started directly (not through vncserver, which warns that a password-less
+    # server is open to every user of the machine). It listens on no TCP port, only on a Unix socket that only this
+    # user can open (directory 0700, socket 0600): no other user and no other pod can reach it, so it needs no
+    # password. The X display itself has a cookie (~/.Xauthority).
+    VNC_SOCK=/tmp/coder-vnc/rfb.sock
+    mkdir -p /tmp/coder-vnc && chmod 700 /tmp/coder-vnc
     if ! pgrep -x Xtigervnc > /dev/null; then
-      vncserver :1 -geometry 1280x800 -depth 24 -localhost yes -SecurityTypes None
+      rm -f "$VNC_SOCK" /tmp/.X1-lock /tmp/.X11-unix/X1
+      touch ~/.Xauthority && chmod 600 ~/.Xauthority
+      xauth -f ~/.Xauthority add :1 MIT-MAGIC-COOKIE-1 "$(mcookie)"
+      Xtigervnc :1 -auth ~/.Xauthority -geometry 1280x800 -depth 24 -rfbport -1 -rfbunixpath "$VNC_SOCK" \
+        -SecurityTypes None -AlwaysShared -desktop "$(hostname)" > /tmp/xvnc.log 2>&1 &
+      for i in $(seq 1 50); do [ -S "$VNC_SOCK" ] && break; sleep 0.2; done
+      DISPLAY=:1 XAUTHORITY=~/.Xauthority setsid ~/.config/tigervnc/xstartup > /tmp/xstartup.log 2>&1 < /dev/null &
     fi
 
-    # Start websockify proxy for noVNC. Coder strips the /@user/workspace.agent/apps/novnc
-    # prefix before proxying, so the stock web root works as-is.
+    # websockify serves noVNC on 127.0.0.1 only and connects to the VNC socket: the only way in is Coder's app proxy,
+    # which signs users in. Coder strips the /@user/workspace.agent/apps/novnc prefix before proxying, so the stock web
+    # root works as-is.
     if ! pgrep -x websockify > /dev/null; then
-      websockify --web=/usr/share/novnc/ 6901 localhost:5901 > /tmp/novnc.log 2>&1 &
+      websockify --web=/usr/share/novnc/ --unix-target="$VNC_SOCK" 127.0.0.1:6901 > /tmp/novnc.log 2>&1 &
     fi
 
     # 2. Install & Start code-server
