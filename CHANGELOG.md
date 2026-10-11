@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.10.2 – 2026-10-11
+
+Coder image `2.0.0-platform.10-airgap` (fork `f6ebdb50e`).
+
+* **Workspace card borders:** only just noticeable, and slower.
+  * Every layer is at 45% strength.
+  * The ready ring is 2 px wide and takes 9 s per turn (it was 4 px and 2 s).
+  * The electric border runs at a third of its pace (18 s per cycle) with less than half the displacement, and a fainter
+    sheen and glow.
+  * Strength and ring speed are the CSS variables `--fx-strength` and `--fx-ring-turn` in `agentBorder.css`.
+
 ## 1.10.1 – 2026-10-11
 
 * **Workspaces button icon:** green. The navbar's icon is now the chart's `files/ui-updates/workspaces-icon.png`, which

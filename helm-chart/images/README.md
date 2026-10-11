@@ -33,7 +33,7 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
-| `ghcr.io_user187x_coder-platform_2.0.0-platform.9-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.9-airgap` | 298 MB | coder (server); = the fork's platform.9 (019d9745b) + Terraform provider mirror |
+| `ghcr.io_user187x_coder-platform_2.0.0-platform.10-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.10-airgap` | 298 MB | coder (server); = the fork's platform.10 (f6ebdb50e) + Terraform provider mirror |
 | `ghcr.io_user187x_coder-workspace_1.1.0.tar.gz` | `ghcr.io/user187x/coder-workspace:1.1.0` | 739 MB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), JetBrains Mono Nerd Font, tmux, CLI tools (btop, bat, vim, eza, fzf, grc, jq, yq), default ~/.bashrc |
 
 ### `public/chart/`
