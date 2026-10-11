@@ -18,7 +18,7 @@ cliImage: "ghcr.io/coder/coder:latest"
 loginImage: "docker.io/library/python:3.13-alpine"
 
 # Container image of the workspace pods, substituted for "codercom/enterprise-base:ubuntu" in files/main.tf.
-workspaceImage: "ghcr.io/user187x/coder-workspace:1.2.0"
+workspaceImage: "ghcr.io/user187x/coder-workspace:1.3.0"
 
 imagePullSecrets: []    # e.g. [{name: registry-pull}], for the push Job and the icons Deployment
 

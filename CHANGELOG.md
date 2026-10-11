@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.13.0 – 2026-10-11
+
+Workspace image `ghcr.io/user187x/coder-workspace:1.3.0`.
+
+* **Desktop (noVNC) background by default:** XFCE's dark "cp-dark" wallpaper, zoomed to fill the screen. It's a system
+  default (`/etc/xdg/xfce4/xfconf/.../xfce4-desktop.xml`, for TigerVNC's monitor `VNC-0`), so a wallpaper a user
+  picks in Desktop settings still wins. It used to be XFCE's built-in plain default. Takes effect after a workspace
+  update.
+
 ## 1.12.2 – 2026-10-11
 
 * **Desktop (noVNC) locked down;** the "you are exposing your VNC server to all users" warning is gone.

@@ -44,7 +44,8 @@ COPY fonts/ /usr/share/fonts/truetype/jetbrains-mono-nerd/
 COPY fontconfig/60-jetbrains-mono-nerd.conf /etc/fonts/conf.d/60-jetbrains-mono-nerd.conf
 RUN fc-cache -f >/dev/null && fc-match monospace | grep -q 'JetBrainsMono'
 
-# XFCE defaults (users without their own settings): the desktop and terminal fonts.
+# XFCE defaults (users without their own settings): the desktop and terminal fonts, and the desktop background
+# (XFCE's dark cp-dark wallpaper).
 COPY xfce/ /etc/xdg/xfce4/
 
 # tmux 3.8 + configuration (self-contained package; Recommends are not needed).

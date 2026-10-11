@@ -3,10 +3,10 @@
 # JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl, default ~/.bashrc) and saves it into the delivery bundle (helm-chart/images/custom/), replacing the
 # previous one. Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.2.0
+#   ./build-workspace-image.sh [TAG]       default 1.3.0
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.2.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.3.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 docker build --platform linux/amd64 -t "$img" "${dev}/workspace-image"
 # What the image must provide (the template relies on it):
 docker run --rm --entrypoint sh "$img" -c '
@@ -20,6 +20,7 @@ docker run --rm --entrypoint sh "$img" -c '
 	HOME=$(mktemp -d) bash -ic "type ls; echo ok" 2>&1 | grep -q "^ok$"
 	HOME=$(mktemp -d) bash -ic "complete -p kubectl >/dev/null || _completion_loader kubectl; complete -p kubectl" 2>/dev/null | grep -q kubectl
 	HOME=$(mktemp -d) sh -c "k9s version -s >/dev/null && test -f \$HOME/.config/k9s/config.yaml"
+	grep -q xfce-cp-dark.svg /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml && test -f /usr/share/backgrounds/xfce/xfce-cp-dark.svg
 	echo "image checks passed"'
 out="${top}/helm-chart/images/custom"; mkdir -p "$out"; rm -f "$out"/ghcr.io_user187x_coder-workspace_*.tar.gz
 docker save --platform linux/amd64 "$img" | gzip -1 >"${out}/$(echo "$img" | tr '/:@' '___').tar.gz"
