@@ -15,7 +15,8 @@
 #     (enabled for every interactive shell in /etc/bash.bashrc);
 #   - marimo (Python notebooks) with everything it needs, so it works with no network at all: /opt/marimo, a Python
 #     environment with marimo and its extras (SQL, charts, formatting, language server, uv) and a data stack, pinned in
-#     marimo/requirements.lock; tkinter (python3-tk). The template gives each user a ~/.marimo-venv on top of it;
+#     marimo/requirements.lock; tkinter (python3-tk). The template gives each user a ~/.marimo-venv on top of it.
+#     marimo opens its own pages in the same window (marimo/same-window.js);
 #   - the default shell setup (shell/): ~/.bashrc (/etc/skel and /usr/share/coder-workspace/bashrc) and the vimrc it
 #     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc).
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
@@ -106,5 +107,12 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& { update-alternatives --set x-www-browser /usr/bin/firefox 2>/dev/null || true; }
 RUN firefox --version && test -f /usr/lib/x86_64-linux-gnu/pkcs11/p11-kit-trust.so
+
+# marimo opens its own pages in the same window (marimo/same-window.js), so embedded in the dashboard's app panel
+# it stays in the panel instead of opening new browser windows.
+COPY marimo/same-window.js /tmp/marimo-same-window.js
+RUN index="$(/opt/marimo/bin/python -c 'import marimo, os; print(os.path.join(os.path.dirname(marimo.__file__), "_static", "index.html"))')" \
+	&& /opt/marimo/bin/python -c 'import sys; p, js = sys.argv[1], open(sys.argv[2]).read(); s = open(p).read(); s = s.replace("<head>", "<head><script id=\"marimo-same-window\">" + js + "</script>", 1); open(p, "w").write(s)' "$index" /tmp/marimo-same-window.js \
+	&& grep -q marimo-same-window "$index" && rm -f /tmp/marimo-same-window.js
 
 USER coder

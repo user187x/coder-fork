@@ -6,7 +6,7 @@
   GET  /__icons/<file>                   the workspace template's app icons (TEMPLATE_ICONS_DIR), public, cacheable
 
   Announcement receipts
-  GET  /__coder-ui/api/me?id=X            signed in? and did they confirm announcement X
+  GET  /__coder-ui/api/me?id=X            signed in? when did they see and confirm announcement X
   POST /__coder-ui/api/view   {"id": X}   the signed-in user has seen announcement X
   POST /__coder-ui/api/ack    {"id": X}   ... and confirmed it
   GET  /__coder-ui/api/acks               admins: every announcement ("event") with who saw / confirmed it, who has not
@@ -978,12 +978,16 @@ class Store:
             return db.execute("DELETE FROM events WHERE id=?", (event_id,)).rowcount
 
     def acked(self, event_id, user_id):
+        return bool(self.receipt_times(event_id, user_id)[1])
+
+    def receipt_times(self, event_id, user_id):
+        """(viewed_at, acked_at) of this user's receipt for the announcement: when they first saw it and confirmed it."""
         with self.connect() as db:
             row = db.execute(
-                "SELECT acked_at FROM receipts WHERE event_id=? AND user_id=?",
+                "SELECT viewed_at, acked_at FROM receipts WHERE event_id=? AND user_id=?",
                 (event_id, user_id),
             ).fetchone()
-            return bool(row and row["acked_at"])
+            return (row["viewed_at"], row["acked_at"]) if row else (None, None)
 
     def report(self, banner, users):
         with self.lock, self.connect() as db:
@@ -6137,9 +6141,19 @@ class Handler(BaseHTTPRequestHandler):
                     503, {"error": "Coder could not be reached to check your session."}
                 )
             event_id = urllib.parse.parse_qs(url.query).get("id", [""])[0]
-            acked = bool(ID_RE.match(event_id)) and STORE.acked(event_id, user["id"])
+            viewed_at, acked_at = (
+                STORE.receipt_times(event_id, user["id"]) if ID_RE.match(event_id) else (None, None)
+            )
+            # viewedAt: when this user first saw it (what the admin's report shows), so they know it is on record.
             return self.send_json(
-                200, {"signedIn": True, "username": user["username"], "acked": acked}
+                200,
+                {
+                    "signedIn": True,
+                    "username": user["username"],
+                    "acked": bool(acked_at),
+                    "viewedAt": viewed_at,
+                    "ackedAt": acked_at,
+                },
             )
         if path == BASE + "/api/acks":
             return self.acks()

@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.18.0 – 2026-10-11
+
+Coder `2.0.0-platform.15` (fork `0a8293071`). Workspace image `ghcr.io/user187x/coder-workspace:1.6.0`.
+
+* **Announcement banner.**
+  * The text is centred; the Confirm button stays at the right.
+  * A **Viewed** box sits just left of the Confirm button, at the same size. It shows the date and time the user
+    first saw the announcement, as the admins' report records it, in small text: "Viewed" and the date spread
+    edge to edge, the time below at the right.
+    A user who doesn't confirm still sees that the view is on record, and the admins see it too.
+    * The platform service's `/api/me` now returns `viewedAt` and `ackedAt`.
+* **The typewriter effect no longer flickers with repeat.**
+  * Each letter's 1 ms CSS animation was repeated forever, so every letter blinked.
+  * With repeat, a timer now types the message, holds it for 3 s, clears it and types it again.
+  * Without repeat it still types once.
+* **Navbar.**
+  * The workspaces menu reads **Resources** next to its icon, and its "Workspace" item is now "Workspaces".
+  * The **Admin** menu has an icon before its label, like the other navbar items. The image holds both variants
+    side by side (the white gear on a black disc for the dark theme, the outlined gear for the light theme), and
+    each theme shows its half.
+  * The images are the fork's `site/static/admin-icon.svg` and `site/static/agent-outdated.png`.
+* **The workspace card shows the workspace's name** instead of its agent's ("main"). When a workspace has several
+  agents, each card adds its agent's name after it.
+* **"Unable to retrieve latest inbox notifications" no longer appears for a passing hiccup.**
+  * Before, one failed attempt of the inbox's live connection showed the message for good, even though the inbox
+    still loaded. A sign-in redirect or a Coder restart cutting connections was enough, often right after a fresh
+    sign-in.
+  * Now the connection reconnects by itself, with backoff, and fetches what it missed.
+  * The message appears only after three failures in a row, and goes away once the connection is back.
+* **An outdated workspace agent** shows the update badge image instead of the word "Outdated". Its popover, with
+  the versions and "Update workspace", is unchanged.
+* **marimo stays in its window.** "Create a new notebook", notebook links and "open file" no longer open a new
+  browser window.
+  * They navigate the same window. Embedded in the workspace's app panel, that means the panel itself.
+  * Ctrl/Cmd/Shift-click and middle-click still open a new tab.
+  * The image adds `marimo/same-window.js` to marimo's page.
+
 ## 1.17.0 – 2026-10-11
 
 Coder `2.0.0-platform.14` (fork `84b706a1f`). Workspace image `ghcr.io/user187x/coder-workspace:1.5.0`.
