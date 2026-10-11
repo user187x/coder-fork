@@ -5,12 +5,12 @@ The Coder server image is built from the fork, which lives in its own repository
 | | |
 |---|---|
 | Repository | `git@github.com:user187x/coder.git`, branch `main` (local clone: `~/workspace/coder`) |
-| Image | `ghcr.io/user187x/coder-platform:2.0.0-platform.12` (`coder version`: `v2.0.0-platform.12+2bd9827`) |
-| Built from | `2bd982755038a792cc89417d4719d471aa8eee65`, clean tree, 2026-10-11 |
-| Air-gap image | `…:2.0.0-platform.12-airgap` = the image above + Terraform provider mirror (`../airgap-image/`, `../tools/build-airgap-image.sh`); it is what the chart runs |
-| Previous | `2.0.0-platform.11` (`92daaa856`), `2.0.0-platform.10` (`f6ebdb50e`), `2.0.0-platform.9` (`019d9745b`), `2.0.0-platform.8` (`a68ffe61e`), `2.0.0-platform.7` (`d7a068929`), `2.0.0-platform.6` (`a65bc39b7`), `2.0.0-platform.5` (`ea80521c2`), `2.0.0-platform.4` (`v2.0.0-platform.4+d01b8f6`, built from `d01b8f6` plus uncommitted changes) |
+| Image | `ghcr.io/user187x/coder-platform:2.0.0-platform.13` (`coder version`: `v2.0.0-platform.13+237423e`) |
+| Built from | `237423e433d027a3154ba2b08ecd91be258bc3d6`, clean tree, 2026-10-11 |
+| Air-gap image | `…:2.0.0-platform.13-airgap` = the image above + Terraform provider mirror (`../airgap-image/`, `../tools/build-airgap-image.sh`); it is what the chart runs |
+| Previous | `2.0.0-platform.12` (`2bd982755`), `2.0.0-platform.11` (`92daaa856`), `2.0.0-platform.10` (`f6ebdb50e`), `2.0.0-platform.9` (`019d9745b`), `2.0.0-platform.8` (`a68ffe61e`), `2.0.0-platform.7` (`d7a068929`), `2.0.0-platform.6` (`a65bc39b7`), `2.0.0-platform.5` (`ea80521c2`), `2.0.0-platform.4` (`v2.0.0-platform.4+d01b8f6`, built from `d01b8f6` plus uncommitted changes) |
 
-`main` is 1 commit ahead of GitHub (`2bd982755`, workspace readiness) until pushed.
+`main` is 2 commits ahead of GitHub (`2bd982755` workspace readiness, `237423e43` panels) until pushed.
 
 **Build requirements:** Go (1.26), Docker, and Node.js **22–24** (the dashboard's `engines`; Node 26 fails `pnpm build`
 and its unit tests) with pnpm (`corepack pnpm`). E.g. `PATH=~/.config/nvm/versions/node/v24.21.0/bin:$PATH`, plus a
@@ -20,8 +20,8 @@ and its unit tests) with pnpm (`corepack pnpm`). E.g. `PATH=~/.config/nvm/versio
 
 ```bash
 cd ~/workspace/coder
-./scripts/build_platform_image.sh --image ghcr.io/user187x/coder-platform --tag 2.0.0-platform.13 --arch amd64   # [--push]
-cd -; ../tools/build-airgap-image.sh 2.0.0-platform.13
+./scripts/build_platform_image.sh --image ghcr.io/user187x/coder-platform --tag 2.0.0-platform.14 --arch amd64   # [--push]
+cd -; ../tools/build-airgap-image.sh 2.0.0-platform.14
 ```
 
 Then, in this repository: update the pinned commit above, the image tag in

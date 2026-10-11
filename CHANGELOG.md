@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.16.0 – 2026-10-11
+
+Coder `2.0.0-platform.13` (fork `237423e43`).
+
+* **The terminal opens in tmux with btop.** The Terminal panel's custom command now defaults to
+  `tmux new-session -A -s monitor "btop"`.
+  * Terminals open at the same time share one `monitor` session; the first one starts it.
+  * The bundled tmux configuration sets `destroy-unattached on`, so the session ends when its last terminal closes.
+    The next terminal starts btop fresh.
+  * Everyone gets the new default once, because it is stored under a new key. A user can change it afterwards.
+* **"Animations" switch in the user menu** (on by default, remembered per browser). Off:
+  * the agent cards go back to Coder's stock solid borders (green when ready);
+  * the initializing title stops fading;
+  * every animated GIF in the dashboard shows only its first frame (logo, avatars, the initializing animation).
+    Cross-origin pictures are the exception, because they can't be copied.
+* **The agent card's drop-down panels can be reordered.**
+  * Drag a panel by the grip at the left of its header. With the keyboard: focus the grip, press Space, use the arrow
+    keys, then Space again.
+  * The order is remembered per workspace and agent, in this browser.
+* **App panels.** A folder tab with a round **+** sits at the top right of the top panel, whichever panel that is. It
+  adds a panel with one of the workspace's apps embedded, as the Terminal is: File Browser, Desktop (noVNC), marimo
+  or code-server.
+  * The app loads when its panel first opens. Collapsing the panel keeps the app as it is.
+  * The bin removes the panel and closes the app.
+  * The app's box can be resized from its bottom-right corner.
+  * The + and the app panels wait until the workspace is ready.
+
 ## 1.15.0 – 2026-10-11
 
 Coder `2.0.0-platform.12` (fork `2bd982755`).
