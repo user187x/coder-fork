@@ -4,7 +4,7 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.15-airgap  sha256:3ab19908b8cb916dd93033e636f58b68a3f25eaf2f78f3423c5bd4f7d07463e3   coder (server); = the fork's platform.15 (0a8293071) + Terraform provider mirror
+ghcr.io/user187x/coder-platform:2.0.0-platform.16-airgap  sha256:9adf52d7d3dbbfaa131a30ef7e83114099bb4fdbb1e1a2428fb2369ef66c9633   coder (server); = the fork's platform.16 (6e0f2b39b) + Terraform provider mirror
 ghcr.io/user187x/coder-workspace:1.6.0                    sha256:aece763529bab3df5612cb35bd62a240f360840a8abf8095bd7945ae29314e6e   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
 
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry

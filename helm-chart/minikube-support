@@ -15,7 +15,8 @@
 #   ./minikube-support minikube-expose-services PROFILE   `minikube tunnel` in the background (asks for sudo once)
 #   ./minikube-support minikube-sync-hosts PROFILE DOMAIN /etc/hosts block for the cluster's hostnames (sudo)
 #   ./minikube-support expose PROFILE DOMAIN           both of the above - run it again after a reboot
-#   ./minikube-support trust-ca CA                     trust CA on this machine (system store + browsers' NSS db)
+#   ./minikube-support trust-ca CA                     trust CA on this machine (system store + browsers' NSS dbs,
+#                                                      snap/flatpak Chromium, Brave and Chrome included)
 #   ./minikube-support ca-trusted CA                   exit 0 when CA is trusted already (no sudo)
 #   ./minikube-support tunnel-pid PROFILE              PID of the profile's running tunnel, if any (no sudo)
 #   ./minikube-support status PROFILE
@@ -287,16 +288,43 @@ minikube_sync_hosts() {
 	for line in $names; do say "$ip  $line"; done
 }
 
-# Is CA trusted here already? System store, and every browser NSS database that exists.
+# The browsers' NSS certificate databases on this machine: Chrome/Chromium, Firefox profiles, and the sandboxed
+# snap and flatpak builds of Chromium, Brave and Chrome (each with databases of its own - ~/.pki/nssdb or
+# ~/.local/share/pki/nssdb under the sandbox's home - not the system store). With "create", an installed flatpak
+# browser without a database gets an empty one, so it trusts the CA from its first start. (Recent snap builds of
+# Chromium and Brave ignore trust set in their NSS database: see mk_trust_ca.)
+browser_nssdbs() {
+	local create="${1:-}" d app
+	for d in "$HOME/.pki/nssdb" "$HOME"/.mozilla/firefox/*.default* "$HOME"/snap/firefox/common/.mozilla/firefox/*.default*; do
+		[[ -d "$d" ]] && echo "$d"
+	done
+	for app in "$HOME"/snap/chromium/[0-9]* "$HOME"/snap/brave/[0-9]* "$HOME"/snap/google-chrome/[0-9]* \
+		"$HOME"/.var/app/org.chromium.Chromium "$HOME"/.var/app/com.brave.Browser "$HOME"/.var/app/com.google.Chrome; do
+		[[ -d "$app" ]] || continue
+		for d in "$app/.pki/nssdb" "$app/.local/share/pki/nssdb"; do
+			[[ -f "$d/cert9.db" ]] && echo "$d"
+		done
+		if [[ -n "$create" && "$app" == "$HOME/.var/app/"* && ! -d "$app/.pki/nssdb" && ! -d "$app/.local/share/pki/nssdb" ]]; then
+			mkdir -p "$app/.pki/nssdb" && certutil -d "sql:$app/.pki/nssdb" -N --empty-password </dev/null >/dev/null 2>&1 && echo "$app/.pki/nssdb"
+		fi
+	done
+}
+
+# Is CA trusted here already? System store, and every browser NSS database (sandboxed browsers' included).
 mk_ca_trusted() {
 	local ca="$1" name db
 	name="coder-airgapped-$(openssl x509 -in "$ca" -noout -hash)"
 	openssl verify -CApath /etc/ssl/certs "$ca" >/dev/null 2>&1 || return 1
 	command -v certutil >/dev/null || return 0
-	for db in "$HOME/.pki/nssdb" "$HOME"/.mozilla/firefox/*.default* "$HOME"/snap/firefox/common/.mozilla/firefox/*.default*; do
-		[[ -d "$db" ]] || continue
-		certutil -d "sql:$db" -L -n "$name" >/dev/null 2>&1 || return 1
+	while read -r db; do
+		certutil -d "sql:$db" -L -n "$name" </dev/null >/dev/null 2>&1 || return 1
+	done < <(browser_nssdbs)
+	# An installed flatpak browser without a database yet does not trust the CA either.
+	local app
+	for app in "$HOME"/.var/app/org.chromium.Chromium "$HOME"/.var/app/com.brave.Browser "$HOME"/.var/app/com.google.Chrome; do
+		[[ -d "$app" && ! -d "$app/.pki/nssdb" && ! -d "$app/.local/share/pki/nssdb" ]] && return 1
 	done
+	return 0
 }
 
 mk_trust_ca() {
@@ -307,10 +335,16 @@ mk_trust_ca() {
 	fi
 	if command -v certutil >/dev/null; then
 		local db
-		for db in "$HOME/.pki/nssdb" "$HOME"/.mozilla/firefox/*.default* "$HOME"/snap/firefox/common/.mozilla/firefox/*.default*; do
-			[[ -d "$db" ]] || continue
-			certutil -d "sql:$db" -A -t "C,," -n "$name" -i "$ca" 2>/dev/null && say "trusted by the browser profile $db"
-		done
+		while read -r db; do
+			certutil -d "sql:$db" -A -t "C,," -n "$name" -i "$ca" </dev/null 2>/dev/null && say "trusted by the browser profile $db"
+		done < <(browser_nssdbs create)
+		say "restart open browsers so they pick it up"
+		if compgen -G "$HOME/snap/chromium/[0-9]*" >/dev/null || compgen -G "$HOME/snap/brave/[0-9]*" >/dev/null; then
+			# Their certificate verifier finds the CA in NSS but does not take its trust from there.
+			say "snap Chromium/Brave: import $ca once in the browser's Settings > Privacy and security > Security >"
+			say "  Manage certificates > Local certificates > Custom > Import (trust it for websites); without it their"
+			say "  pages load only past a warning and the dashboard's live connections (notifications, workspace forms) fail"
+		fi
 	else
 		say "browsers: import $ca as a trusted authority (or install libnss3-tools and run trust-ca again)"
 	fi

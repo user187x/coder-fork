@@ -191,7 +191,7 @@ VNC_SCRIPT
     # password. The X display itself has a cookie (~/.Xauthority).
     VNC_SOCK=/tmp/coder-vnc/rfb.sock
     mkdir -p /tmp/coder-vnc && chmod 700 /tmp/coder-vnc
-    if ! pgrep -x Xtigervnc > /dev/null; then
+    if ! pgrep -f "^Xtigervnc :1 " > /dev/null; then
       rm -f "$VNC_SOCK" /tmp/.X1-lock /tmp/.X11-unix/X1
       touch ~/.Xauthority && chmod 600 ~/.Xauthority
       xauth -f ~/.Xauthority add :1 MIT-MAGIC-COOKIE-1 "$(mcookie)"
@@ -205,8 +205,55 @@ VNC_SCRIPT
     # websockify serves noVNC on 127.0.0.1 only and connects to the VNC socket: the only way in is Coder's app proxy,
     # which signs users in. Coder strips the /@user/workspace.agent/apps/novnc prefix before proxying, so the stock web
     # root works as-is.
-    if ! pgrep -x websockify > /dev/null; then
+    # (By its port: pgrep -f would match this script, whose text contains the pattern.)
+    if ! curl -s -o /dev/null http://127.0.0.1:6901/; then
       websockify --web=/usr/share/novnc/ --unix-target="$VNC_SOCK" 127.0.0.1:6901 > /tmp/novnc.log 2>&1 &
+    fi
+
+    # Windows of marimo notebooks (tkinter): a second, private X display (:2: no desktop, no window manager, on its
+    # own Unix socket), sized by the notebook to the window it shows. coder_marimo_tk (marimo, below) opens tkinter
+    # windows there and shows each one live in its cell's output: the minimal noVNC page below, through the hidden
+    # app "marimo-windows" (websockify on 127.0.0.1:6902).
+    APPS_SOCK=/tmp/coder-vnc/apps.sock
+    if ! pgrep -f "^Xtigervnc :2 " > /dev/null; then
+      rm -f "$APPS_SOCK" /tmp/.X2-lock /tmp/.X11-unix/X2
+      touch ~/.Xauthority && chmod 600 ~/.Xauthority
+      xauth -f ~/.Xauthority add :2 MIT-MAGIC-COOKIE-1 "$(mcookie)"
+      Xtigervnc :2 -auth ~/.Xauthority -geometry 640x480 -depth 24 -rfbport -1 -rfbunixpath "$APPS_SOCK" \
+        -SecurityTypes None -AlwaysShared -FrameRate 60 -desktop marimo-windows > /tmp/xvnc-apps.log 2>&1 &
+      for i in $(seq 1 50); do [ -S "$APPS_SOCK" ] && break; sleep 0.2; done
+    fi
+    APPS_WEB=/tmp/coder-vnc/apps-web
+    mkdir -p "$APPS_WEB" && ln -sfn /usr/share/novnc/core "$APPS_WEB/core" && ln -sfn /usr/share/novnc/vendor "$APPS_WEB/vendor"
+    cat << 'APPS_VIEW' > "$APPS_WEB/index.html"
+<!doctype html>
+<html><head><meta charset="utf-8"><title>marimo window</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#fff}#screen{width:100%;height:100%}
+#msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:12px sans-serif;color:#777}</style>
+</head><body><div id="msg">Connecting...</div><div id="screen"></div>
+<script type="module">
+import RFB from "./core/rfb.js";
+// The websocket next to this page (Coder's app path), so it works under any prefix.
+const url = new URL("websockify", location.href);
+url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+const msg = document.getElementById("msg");
+const connect = () => {
+  const rfb = new RFB(document.getElementById("screen"), url.href);
+  rfb.scaleViewport = false;
+  rfb.resizeSession = false;
+  rfb.addEventListener("connect", () => { msg.style.display = "none"; });
+  rfb.addEventListener("disconnect", () => {
+    msg.textContent = "Window closed";
+    msg.style.display = "flex";
+    setTimeout(connect, 2000);
+  });
+};
+connect();
+</script></body></html>
+APPS_VIEW
+    # (By its port: pgrep -f would match this script, whose text contains the pattern.)
+    if ! curl -s -o /dev/null http://127.0.0.1:6902/; then
+      websockify --web="$APPS_WEB" --unix-target="$APPS_SOCK" 127.0.0.1:6902 > /tmp/novnc-apps.log 2>&1 &
     fi
 
     # 2. Install & Start code-server
@@ -248,6 +295,149 @@ VNC_SCRIPT
           > "$("$MARIMO_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/coder-workspace-marimo.pth"
         echo "$MARIMO_STAMP" > "$MARIMO_VENV/.coder-workspace"
       fi
+      # tkinter windows show in the notebook and stop with marimo's Stop button: coder_marimo_tk, loaded through the .pth.
+      MARIMO_SITE="$("$MARIMO_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+      cat << 'CODER_MARIMO_TK' > "$MARIMO_SITE/coder_marimo_tk.py"
+"""Workspace template: tkinter windows in marimo notebooks show in the notebook, and stop with its Stop button.
+
+In a marimo kernel (marimo imported before tkinter) and with the template's settings in the environment:
+  - a Tk window opens on the workspace's private display for notebook windows (CODER_MARIMO_TK_DISPLAY, :2 - no
+    desktop, no window manager), at its top-left corner, and that display is sized to the window;
+  - while mainloop() runs, the cell's output is the window itself, live and interactive: a noVNC view of that
+    display (CODER_MARIMO_TK_VIEW, the hidden app "marimo-windows"), resized when the window is;
+  - mainloop() runs the window's events from Python, so marimo's Stop works at once (Tk's own loop waits in C,
+    where the interrupt is only noticed at the next window event). Stop is the window's close button: the window
+    closes and the cell ends normally ("Window closed"), not with an interrupt traceback; closing the window from
+    code (destroy) ends it the same way. A failed cell does not leave a dead window behind.
+Loaded lazily (when tkinter is imported) from coder-workspace-marimo.pth in ~/.marimo-venv.
+"""
+
+import importlib.abc
+import importlib.machinery
+import os
+import subprocess
+import sys
+
+DISPLAY = os.environ.get("CODER_MARIMO_TK_DISPLAY", "")
+VIEW = os.environ.get("CODER_MARIMO_TK_VIEW", "")
+
+
+def _size(root):
+    root.update_idletasks()
+    return max(root.winfo_width(), root.winfo_reqwidth(), 1), max(root.winfo_height(), root.winfo_reqheight(), 1)
+
+
+def _show(root, size):
+    """The cell's output: the window, live (the display is cut to the window's size)."""
+    width, height = size
+    if DISPLAY:
+        subprocess.run(["xrandr", "-d", DISPLAY, "--fb", "%dx%d" % (width, height)], capture_output=True, check=False)
+    if not VIEW:
+        return
+    try:
+        import marimo as mo
+
+        mo.output.replace(
+            mo.Html(
+                '<iframe src="%s" title="tkinter window" style="display:block;width:%dpx;height:%dpx;'
+                'border:1px solid rgba(127,127,127,.35);border-radius:6px;background:#fff" '
+                'allow="clipboard-read; clipboard-write"></iframe>' % (VIEW, width + 2, height + 2)
+            )
+        )
+    except Exception:
+        pass
+
+
+def _closed(how):
+    """The cell's output once its window is gone (the live view would only say "Window closed")."""
+    if not VIEW:
+        return
+    try:
+        import marimo as mo
+
+        mo.output.replace(
+            mo.Html('<span style="font-size:12px;opacity:.65">Window closed%s.</span>' % how)
+        )
+    except Exception:
+        pass
+
+
+def _patch(tkinter):
+    import time
+
+    if DISPLAY:
+        tk_init = tkinter.Tk.__init__
+
+        def __init__(self, screenName=None, *args, **kwargs):
+            tk_init(self, DISPLAY if screenName is None else screenName, *args, **kwargs)
+            try:
+                self.wm_geometry("+0+0")  # no window manager there: the window is all the view shows
+            except tkinter.TclError:
+                pass
+
+        tkinter.Tk.__init__ = __init__
+
+    def mainloop(widget=None, n=0):
+        root = tkinter._get_default_root("run the main loop") if widget is None else widget._root()
+        shown = None
+        try:
+            ticks = 0
+            while root.winfo_exists():
+                root.update()
+                if ticks % 25 == 0:  # twice a second: follow the window's size
+                    size = _size(root)
+                    if size != shown:
+                        _show(root, size)
+                        shown = size
+                ticks += 1
+                time.sleep(0.02)
+        except tkinter.TclError:
+            pass  # the window was closed (destroyed)
+        except KeyboardInterrupt:
+            # marimo's Stop (MarimoInterrupt is a KeyboardInterrupt): close the window, as its close button would.
+            try:
+                root.destroy()
+            except Exception:
+                pass
+            if shown is not None:
+                _closed(" (Stop)")
+            return
+        except BaseException:
+            try:
+                root.destroy()  # failed: do not leave a dead window behind
+            except Exception:
+                pass
+            raise
+        if shown is not None:
+            _closed("")
+
+    tkinter.Misc.mainloop = lambda self, n=0: mainloop(self, n)
+    tkinter.mainloop = lambda n=0: mainloop(None, n)
+
+
+class _Finder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname != "tkinter" or "marimo" not in sys.modules:
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path)
+        if spec is None or spec.loader is None:
+            return None
+        loader = spec.loader
+        exec_module = loader.exec_module
+
+        def exec_and_patch(module):
+            exec_module(module)
+            _patch(module)
+
+        loader.exec_module = exec_and_patch
+        return spec
+
+
+if not any(isinstance(f, _Finder) for f in sys.meta_path):
+    sys.meta_path.insert(0, _Finder())
+CODER_MARIMO_TK
+      grep -qx "import coder_marimo_tk" "$MARIMO_SITE/coder-workspace-marimo.pth" 2>/dev/null \
+        || echo "import coder_marimo_tk" >> "$MARIMO_SITE/coder-workspace-marimo.pth"
       # marimo installs missing packages with the manager in its settings: one that is not installed here (pixi, rye,
       # poetry) cannot work, so it falls back to uv (in /opt/marimo). An installed choice is kept.
       MARIMO_TOML=~/.config/marimo/marimo.toml
@@ -271,7 +461,12 @@ MARIMO_DARK
       # --no-token: no marimo login page. marimo listens on 127.0.0.1 only, so the Coder agent's
       # proxy is the only way in, and the app is share = "owner": Coder decides who gets in.
       # /opt/marimo/bin on PATH: uv and ruff for marimo; pip and uv give up quickly with no network.
+      # DISPLAY: GUI windows of other libraries show on the workspace's desktop (display :1, the Desktop app);
+      # without a display they fail with "no $DISPLAY". tkinter windows show in the notebook instead
+      # (CODER_MARIMO_TK_*: coder_marimo_tk, the private display :2 and the app "marimo-windows").
       if ! curl -fs "http://localhost:2718$MARIMO_BASE/health" > /dev/null; then
+        DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority CODER_MARIMO_TK_DISPLAY=:2 \
+        CODER_MARIMO_TK_VIEW="/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/marimo-windows/" \
         PATH="$MARIMO_VENV/bin:/opt/marimo/bin:$PATH" PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_RETRIES=0 PIP_TIMEOUT=10 \
           UV_HTTP_TIMEOUT=10 "$MARIMO_VENV/bin/python" -m marimo edit --headless --host 127.0.0.1 --port 2718 \
           --no-token --skip-update-check --base-url "$MARIMO_BASE" /home/coder/notebooks >/tmp/marimo.log 2>&1 &
@@ -350,11 +545,23 @@ resource "coder_app" "marimo" {
   }
 }
 
+# The windows of marimo notebooks (tkinter), shown in their cells' output (coder_marimo_tk): not a button of its own.
+resource "coder_app" "marimo_windows" {
+  agent_id     = coder_agent.main.id
+  slug         = "marimo-windows"
+  display_name = "marimo windows"
+  icon         = "/__icons/marimo.svg"
+  url          = "http://localhost:6902"
+  subdomain    = false
+  share        = "owner"
+  hidden       = true
+}
+
 resource "coder_app" "novnc" {
   agent_id     = coder_agent.main.id
   slug         = "novnc"
-  display_name = "Desktop (noVNC)"
-  icon         = "https://upload.wikimedia.org/wikipedia/commons/0/0f/NoVNC_logo.png"
+  display_name = "Desktop"
+  icon         = "/icon/desktop.svg" # Coder's own icon (served by the dashboard; the noVNC logo was on the internet)
   # Path-based (no wildcard DNS/route needed). noVNC opens its websocket relative to the host
   # root, so pass the prefixed path explicitly ("main" = agent name, as in filebrowser above).
   url          = "http://localhost:6901?autoconnect=true&resize=remote&compression=0&path=@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/novnc/websockify"

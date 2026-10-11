@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.18.1 – 2026-10-11
+
+Coder `2.0.0-platform.16` (fork `6e0f2b39b`).
+
+* **A workspace's apps also wait for their health checks.** marimo, code-server and File Browser start in the
+  background and come up after the startup script ends. Before, the apps unlocked when the script finished, so
+  marimo could still be starting.
+  * Now the initializing panel stays until every app has answered its health check: "Starting the apps", how many
+    are up, which are still starting.
+  * The card's border stays "initializing" too.
+  * An app that fails its checks (unhealthy) does not hold the others back.
+* **The initializing panel's progress bar shows real progress.** It follows the whole start, by milestones: the agent
+  connecting, each startup script finishing, each app answering its health check.
+  * Between milestones it creeps toward the next one but never past it. It shows a percentage, and its striped,
+    sheened fill moves smoothly; the sheen stops with Animations off or reduced motion.
+  * Before, it showed only the current step's share, for example stuck at 50% for the whole main startup script.
+* **The outdated-agent badge follows the theme.** The image holds both variants side by side, and each theme shows its
+  half.
+* **The Viewed box** in the announcement banner has a very faint background of thin diagonal zebra lines. It also
+  shows the "seen and accounted for" badge where "at" was: the fork's `static/announcement-viewed.png`, trimmed from
+  `development/coder-fork/design/acknowledge.png`.
+* **The desktop app is "Desktop"**, with Coder's own desktop icon. It was "Desktop (noVNC)", and its noVNC logo was
+  loaded from the internet, so it showed broken offline.
+
+* **tkinter windows in marimo show in the notebook.** A cell that opens a tkinter window shows it in its own
+  output, live and interactive (clicks and typing work there), not on the desktop. Before, it failed with
+  `no display name and no $DISPLAY environment variable`.
+  * How: each workspace has a second, private X display (`:2`: no desktop, no window manager) for notebook windows,
+    sized to the window it shows. The cell's output is a minimal noVNC view of it, through the hidden app
+    `marimo-windows` (websockify on 127.0.0.1:6902).
+  * **Stop works at once and closes the window, like its close button.** The cell ends normally with
+    "Window closed (Stop)." instead of an interrupt traceback.
+    * Before, `mainloop()` waited in Tk's C event loop, where Python only notices marimo's interrupt at the next
+      window event.
+    * Before, an interrupted or failed cell also left its window open but dead.
+    * Now, in a marimo kernel, `mainloop()` runs the window's events from Python. This is `coder_marimo_tk.py`,
+      which the template puts in each user's `~/.marimo-venv`.
+  * Other libraries' GUI windows (with `DISPLAY`) show on the workspace desktop (Desktop app).
+  * The desktop's websockify is now checked by its port, because `pgrep -f` matched the startup script itself.
+* `minikube-support trust-ca` also covers sandboxed browsers. The snap and flatpak builds of Chromium, Brave and
+  Chrome don't use the machine's certificate store, and neither did `trust-ca`.
+  * Why it matters: in a browser that doesn't trust the cluster's CA, pages load only past a warning, and the
+    dashboard's live connections fail. That gives "Websocket connection for dynamic parameters unexpectedly closed"
+    when creating a workspace, and "Unable to retrieve latest inbox notifications".
+  * Flatpak browsers now get the CA (verified with flatpak Chromium 155).
+  * Recent snap Chromium/Brave builds find the CA in their database but don't take its trust from there.
+    `trust-ca` now says so and explains how to import the CA once in the browser's certificate manager.
+
 ## 1.18.0 – 2026-10-11
 
 Coder `2.0.0-platform.15` (fork `0a8293071`). Workspace image `ghcr.io/user187x/coder-workspace:1.6.0`.
