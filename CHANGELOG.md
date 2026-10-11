@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.14.0 – 2026-10-11
+
+Workspace image `ghcr.io/user187x/coder-workspace:1.4.0`.
+
+* **marimo works with no network at all.** It used to be `pip install`ed from the internet at every workspace start
+  (offline: no marimo), with only its bare core, so its features asked to install packages and failed.
+  * The workspace image now has everything in `/opt/marimo`, pinned in
+    `development/workspace-image/marimo/requirements.lock`:
+    * marimo 0.24.2 with its extras: SQL cells (duckdb, polars, pyarrow, sqlglot), charts (altair, vegafusion,
+      vl-convert), formatting (ruff), Jupyter import (nbformat), sandbox/`uv`, the AI assistant's client, and the
+      language server (python-lsp-server, python-lsp-ruff);
+    * a data stack: numpy, pandas, scipy, scikit-learn, statsmodels, sympy, networkx, matplotlib, seaborn, plotly,
+      anywidget, openpyxl, xlsxwriter, pillow, lxml, beautifulsoup4, requests, httpx, sqlalchemy, tabulate, jinja2;
+    * `tkinter` (`python3-tk`).
+  * Each user gets `~/.marimo-venv`, which sees all of `/opt/marimo` and takes the packages they add. It replaces the
+    old internet-installed venv on the first start. With no network, pip and uv give up at once instead of hanging.
+  * A package manager marimo is set to that is not installed (pixi, rye, poetry) falls back to `uv`.
+  * The image build checks all of it with networking switched off: it runs every cell of
+    `marimo/smoke_test.py` and serves marimo. To add packages, list them in `marimo/requirements.in` and rebuild.
+  * The image grows from 3.6 to 6.0 GB (the Python packages are 1.8 GB).
+* Docs: the known air-gap gap is now only code-server and File Browser, which are still downloaded at workspace start.
+
 ## 1.13.1 – 2026-10-11
 
 * **Default logo: the Minecraft creeper** (`helm-chart/defaults/logo.gif`, a 200x200 animated GIF). A new installation

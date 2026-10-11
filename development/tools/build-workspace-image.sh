@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 # Builds the workspace image ghcr.io/user187x/coder-workspace:<TAG> (../workspace-image: enterprise-base + desktop,
-# JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl, default ~/.bashrc) and saves it into the delivery bundle (helm-chart/images/custom/), replacing the
-# previous one. Then update its [custom] line (tag, digest) in helm-chart/images.txt and
+# JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl, marimo with its packages, default ~/.bashrc) and saves it
+# into the delivery bundle (helm-chart/images/custom/), replacing the previous one. marimo/requirements.lock is re-pinned
+# first when marimo/requirements.in changed (needs internet, like the build itself). Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.3.0
+#   ./build-workspace-image.sh [TAG]       default 1.4.0
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.3.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.4.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+# Pin marimo's packages for the base image's Python, when the list changed.
+m="${dev}/workspace-image/marimo"
+if [[ "${m}/requirements.in" -nt "${m}/requirements.lock" ]]; then
+	base="$(sed -n 's/^ARG BASE=//p' "${dev}/workspace-image/Dockerfile")"
+	docker run --rm -v "${m}:/m" --entrypoint bash "$base" -c '
+		set -e; python3 -m venv /tmp/v >/dev/null; /tmp/v/bin/pip install -q uv
+		/tmp/v/bin/uv pip compile /m/requirements.in --python /tmp/v/bin/python --no-header -q -o /tmp/lock
+		{ echo "# Pinned by ../../tools/build-workspace-image.sh (uv pip compile requirements.in) for the image'"'"'s Python $(python3 -V | cut -d" " -f2). Do not edit."; cat /tmp/lock; } >/m/requirements.lock'
+	echo "re-pinned ${m}/requirements.lock"
+fi
 docker build --platform linux/amd64 -t "$img" "${dev}/workspace-image"
 # What the image must provide (the template relies on it):
 docker run --rm --entrypoint sh "$img" -c '
@@ -22,6 +33,16 @@ docker run --rm --entrypoint sh "$img" -c '
 	HOME=$(mktemp -d) sh -c "k9s version -s >/dev/null && test -f \$HOME/.config/k9s/config.yaml"
 	grep -q xfce-cp-dark.svg /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml && test -f /usr/share/backgrounds/xfce/xfce-cp-dark.svg
 	echo "image checks passed"'
+# marimo with no network at all: run every cell of the check notebook (as a script: the first error stops it), then
+# serve it.
+docker run --rm --network none -v "${m}/smoke_test.py:/tmp/smoke_test.py:ro" --entrypoint bash "$img" -c '
+	set -e; cd "$(mktemp -d)"; export HOME="$PWD"
+	/opt/marimo/bin/python /tmp/smoke_test.py 2>&1 | tee run.log | tail -3
+	grep -q "marimo offline check passed" run.log
+	/opt/marimo/bin/marimo edit --headless --host 127.0.0.1 --port 2718 --no-token --skip-update-check /tmp >m.log 2>&1 &
+	for i in $(seq 1 40); do curl -fs http://127.0.0.1:2718/health >/dev/null && break; sleep 0.5; done
+	curl -fs http://127.0.0.1:2718/health >/dev/null || { cat m.log; exit 1; }
+	echo "marimo offline checks passed"'
 out="${top}/helm-chart/images/custom"; mkdir -p "$out"; rm -f "$out"/ghcr.io_user187x_coder-workspace_*.tar.gz
 docker save --platform linux/amd64 "$img" | gzip -1 >"${out}/$(echo "$img" | tr '/:@' '___').tar.gz"
 (cd "$out" && sha256sum ./*.tar.gz | sed 's|  \./|  |' >SHA256SUMS)

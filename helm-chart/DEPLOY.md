@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.13.1.tar.gz && cd coder-airgapped-1.13.1
+tar -xzf coder-airgapped-1.14.0.tar.gz && cd coder-airgapped-1.14.0
 ./make --deploy
 ```
 
@@ -73,8 +73,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.13.1.tar.gz
-cd coder-airgapped-1.13.1
+tar -xzf coder-airgapped-1.14.0.tar.gz
+cd coder-airgapped-1.14.0
 ./mirror-images.sh list
 ```
 
@@ -85,14 +85,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.13.1` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.14.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.13.1
+cd coder-airgapped-1.14.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -162,9 +162,10 @@ admin can make others admins in **Admin settings › Users**. The banner starts 
 
 Done.
 
-> **Good to know – workspaces in a strict air gap:** workspaces start and connect, and the desktop, the JetBrains Mono
-> Nerd Font and tmux are in the workspace image. The template still installs code-server, File Browser and marimo from
-> the internet when a workspace starts; without internet those three show as unhealthy – see `README.md` › *Known gaps*.
+> **Good to know – workspaces in a strict air gap:** workspaces start and connect. The desktop, the JetBrains Mono Nerd
+> Font, tmux, k9s/kubectl and marimo (with all its packages) are in the workspace image. The template still installs
+> code-server and File Browser from the internet when a workspace starts; without internet those two show as unhealthy
+> – see `README.md` › *Known gaps*.
 
 ---
 

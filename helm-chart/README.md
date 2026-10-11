@@ -1,4 +1,4 @@
-# coder-airgapped 1.13.1: portable Helm chart of the live Coder fork
+# coder-airgapped 1.14.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -221,9 +221,9 @@ were missing from `prereqs/`; three HTTPRoutes stayed OutOfSync. The harness to 
 
 ## Known gaps for a strict air gap
 
-* **Workspace start-up installs three apps from the internet** (`main.tf`): code-server (`code-server.dev/install.sh`),
-  File Browser (`raw.githubusercontent.com`) and marimo (`pip install`). In a strict air gap the agent connects and the
-  desktop works (it is in the workspace image, `development/workspace-image`), but those three apps are missing. Add
-  them to the workspace image the same way, or point pip and the downloads at internal mirrors.
+* **Workspace start-up installs two apps from the internet** (`main.tf`): code-server (`code-server.dev/install.sh`)
+  and File Browser (`raw.githubusercontent.com`). In a strict air gap the agent connects and the desktop and marimo
+  work (they are in the workspace image, `development/workspace-image`), but those two apps are missing. Add them to
+  the workspace image the same way, or point the downloads at internal mirrors.
 * The noVNC app icon is a wikimedia.org URL (cosmetic).
 * `ghcr.io/coder/coder:latest` (the push Job's CLI) is a floating tag: mirror it once and keep that copy.

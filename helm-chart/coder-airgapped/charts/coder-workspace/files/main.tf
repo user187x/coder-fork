@@ -220,32 +220,41 @@ VNC_SCRIPT
         >/tmp/filebrowser.log 2>&1 &
     fi
 
-    # 4. Install & Start marimo (Python notebooks). The venv lives on the home PVC, so it is
-    # installed once per workspace and again only when MARIMO_VERSION changes.
-    MARIMO_VERSION=0.24.2
+    # 4. marimo (Python notebooks), with no network: the workspace image has it with everything it needs in /opt/marimo
+    # (marimo and its extras - SQL, charts, formatting, language server, uv - and a data stack; tkinter). Each user's
+    # notebooks run in ~/.marimo-venv, which sees all of /opt/marimo (a .pth file) and takes the packages they add
+    # (pip or uv; with no network, only what is already there). It is (re)made when missing, when an older one installed
+    # marimo itself from the internet, or when the image's Python changes.
     MARIMO_VENV=/home/coder/.marimo-venv
     MARIMO_BASE="/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/marimo"
-    if [ "$($MARIMO_VENV/bin/marimo --version 2>/dev/null)" != "$MARIMO_VERSION" ]; then
-      python3 -m venv $MARIMO_VENV
-      # Needs PyPI (or a mirror): without it marimo is skipped and the rest of the workspace still starts.
-      $MARIMO_VENV/bin/pip install --quiet --upgrade "marimo==$MARIMO_VERSION" || echo "marimo could not be installed (no package index?): skipped"
-    fi
-    if [ -x $MARIMO_VENV/bin/marimo ]; then
-      # marimo has no setting for its home page "Resources" section (external links): hide it
-      # with a CSS rule in marimo's own index.html (the column whose 3-column grid holds
-      # target=_blank cards; nothing else matches).
-      MARIMO_INDEX=$($MARIMO_VENV/bin/python -c 'import marimo, os; print(os.path.join(os.path.dirname(marimo.__file__), "_static", "index.html"))')
-      if ! grep -q marimo-hide-resources "$MARIMO_INDEX"; then
-        sed -i 's#</head>#<style id="marimo-hide-resources">div.flex.flex-col.gap-2:has(> div.grid.gap-3.lg\\:grid-cols-3 > a[target="_blank"]){display:none !important}</style></head>#' "$MARIMO_INDEX"
+    if [ -x /opt/marimo/bin/marimo ]; then
+      MARIMO_STAMP="$(python3 -V) /opt/marimo $(/opt/marimo/bin/marimo --version)"
+      if [ "$(cat "$MARIMO_VENV/.coder-workspace" 2>/dev/null)" != "$MARIMO_STAMP" ]; then
+        rm -rf "$MARIMO_VENV"
+        python3 -m venv "$MARIMO_VENV"
+        /opt/marimo/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' \
+          > "$("$MARIMO_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/coder-workspace-marimo.pth"
+        echo "$MARIMO_STAMP" > "$MARIMO_VENV/.coder-workspace"
       fi
+      # marimo installs missing packages with the manager in its settings: one that is not installed here (pixi, rye,
+      # poetry) cannot work, so it falls back to uv (in /opt/marimo). An installed choice is kept.
+      MARIMO_TOML=~/.config/marimo/marimo.toml
+      for m in pixi rye poetry; do
+        if grep -qx "manager = \"$m\"" "$MARIMO_TOML" 2>/dev/null && ! command -v "$m" > /dev/null; then
+          sed -i "s/^manager = \"$m\"$/manager = \"uv\"/" "$MARIMO_TOML"
+        fi
+      done
       mkdir -p /home/coder/notebooks
       # --no-token: no marimo login page. marimo listens on 127.0.0.1 only, so the Coder agent's
       # proxy is the only way in, and the app is share = "owner": Coder decides who gets in.
+      # /opt/marimo/bin on PATH: uv and ruff for marimo; pip and uv give up quickly with no network.
       if ! curl -fs "http://localhost:2718$MARIMO_BASE/health" > /dev/null; then
-        $MARIMO_VENV/bin/marimo edit --headless --host 127.0.0.1 --port 2718 --no-token \
-          --skip-update-check --base-url "$MARIMO_BASE" /home/coder/notebooks \
-          >/tmp/marimo.log 2>&1 &
+        PATH="$MARIMO_VENV/bin:/opt/marimo/bin:$PATH" PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_RETRIES=0 PIP_TIMEOUT=10 \
+          UV_HTTP_TIMEOUT=10 "$MARIMO_VENV/bin/python" -m marimo edit --headless --host 127.0.0.1 --port 2718 \
+          --no-token --skip-update-check --base-url "$MARIMO_BASE" /home/coder/notebooks >/tmp/marimo.log 2>&1 &
       fi
+    else
+      echo "marimo is not in this image (/opt/marimo): skipped"
     fi
   EOT
 

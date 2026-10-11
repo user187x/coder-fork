@@ -11,6 +11,9 @@
 #   - k9s (the developer's own build and configuration) and kubectl: packages/k8s-devtools_*.deb, made by
 #     ../tools/build-k8s-devtools.sh (pinned by packages/SHA256SUMS), with bash completion
 #     (enabled for every interactive shell in /etc/bash.bashrc);
+#   - marimo (Python notebooks) with everything it needs, so it works with no network at all: /opt/marimo, a Python
+#     environment with marimo and its extras (SQL, charts, formatting, language server, uv) and a data stack, pinned in
+#     marimo/requirements.lock; tkinter (python3-tk). The template gives each user a ~/.marimo-venv on top of it;
 #   - the default shell setup (shell/): ~/.bashrc (/etc/skel and /usr/share/coder-workspace/bashrc) and the vimrc it
 #     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc).
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
@@ -64,5 +67,19 @@ RUN apt-get update \
 		'if ! shopt -oq posix && [ -f /usr/share/bash-completion/bash_completion ]; then' \
 		'  . /usr/share/bash-completion/bash_completion' 'fi' >>/etc/bash.bashrc \
 	&& k9s version -s && kubectl version --client
+
+# marimo, offline: everything installed at build time (marimo/requirements.lock, pinned by build-workspace-image.sh).
+# Its home page's "Resources" section (external links, useless offline) is hidden with a CSS rule in its index.html.
+COPY marimo/requirements.lock /tmp/marimo-requirements.lock
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends python3-venv python3-tk \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& python3 -m venv /opt/marimo \
+	&& /opt/marimo/bin/pip install --no-cache-dir --disable-pip-version-check -r /tmp/marimo-requirements.lock \
+	&& rm -f /tmp/marimo-requirements.lock \
+	&& index="$(/opt/marimo/bin/python -c 'import marimo, os; print(os.path.join(os.path.dirname(marimo.__file__), "_static", "index.html"))')" \
+	&& sed -i 's#</head>#<style id="marimo-hide-resources">div.flex.flex-col.gap-2:has(> div.grid.gap-3.lg\\:grid-cols-3 > a[target="_blank"]){display:none !important}</style></head>#' "$index" \
+	&& grep -q marimo-hide-resources "$index" \
+	&& /opt/marimo/bin/marimo --version
 
 USER coder
