@@ -10,8 +10,7 @@ The Coder server image is built from the fork, which lives in its own repository
 | Air-gap image | `…:2.0.0-platform.7-airgap` = the image above + Terraform provider mirror (`../airgap-image/`, `../tools/build-airgap-image.sh`); it is what the chart runs |
 | Previous | `2.0.0-platform.6` (`a65bc39b7`), `2.0.0-platform.5` (`ea80521c2`), `2.0.0-platform.4` (`v2.0.0-platform.4+d01b8f6`, built from `d01b8f6` plus uncommitted changes) |
 
-`main` is 8 commits ahead of GitHub (terminal + font, scheduler, monitoring, HUD; breadcrumb + page room, HUD links,
-SSH key from the .p12, a story fix) until pushed.
+`main` is pushed (`d7a068929`).
 
 **Build requirements:** Go (1.26), Docker, and Node.js **22–24** (the dashboard's `engines`; Node 26 fails `pnpm build`
 and its unit tests) with pnpm (`corepack pnpm`). E.g. `PATH=~/.config/nvm/versions/node/v24.21.0/bin:$PATH`, plus a
