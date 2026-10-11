@@ -4,8 +4,8 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.8-airgap   sha256:677f094af8298e9e36b2fdff90e240428b4a87d6aff4b49319d3bc32cf62cf8f   coder (server); = the fork's platform.8 (a68ffe61e) + Terraform provider mirror
-ghcr.io/user187x/coder-workspace:1.0.0                    sha256:2c4d37b99fd38ec0c2e6dfe41d0bdf116fbef345ea665ec8de51f7c6c1e22e0a   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), JetBrains Mono Nerd Font, tmux (development/workspace-image)
+ghcr.io/user187x/coder-platform:2.0.0-platform.9-airgap   sha256:b0da0e609562f374f5a6e6ef78ec03bd5eec62ff6027e08c007b738cea253db7   coder (server); = the fork's platform.9 (019d9745b) + Terraform provider mirror
+ghcr.io/user187x/coder-workspace:1.1.0                    sha256:03e8f446792befa63870caa2e437242b8e4bad1252b8fd034ad20ee166774828   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), JetBrains Mono Nerd Font, tmux, CLI tools, default ~/.bashrc (development/workspace-image)
 
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage

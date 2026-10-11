@@ -122,6 +122,19 @@ resource "coder_agent" "main" {
       fi
     done
 
+    # The default shell setup (in the workspace image): its ~/.bashrc for users who have none, or still Ubuntu's stock
+    # one (an edited ~/.bashrc is left alone); ~/.profile, so login shells read ~/.bashrc; the vimrc that ~/.bashrc
+    # points Vim at (VIMINIT).
+    if [ -f /usr/share/coder-workspace/bashrc ]; then
+      if [ ! -e ~/.bashrc ] || cmp -s ~/.bashrc /usr/share/coder-workspace/ubuntu-bashrc; then
+        cp /usr/share/coder-workspace/bashrc ~/.bashrc
+      fi
+      [ -e ~/.profile ] || cp /etc/skel/.profile ~/.profile
+      if [ ! -e ~/.config/vim/vimrc ]; then
+        mkdir -p ~/.config/vim && cp /usr/share/coder-workspace/vimrc ~/.config/vim/vimrc
+      fi
+    fi
+
     # tmux (in the workspace image): the bundled configuration, for users who have none yet.
     if command -v tmux-mirror-setup > /dev/null && [ ! -e ~/.config/tmux ] && [ ! -e ~/.tmux.conf ]; then
       tmux-mirror-setup > /tmp/tmux-mirror-setup.log 2>&1 || true

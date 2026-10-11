@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Builds the workspace image ghcr.io/user187x/coder-workspace:<TAG> (../workspace-image: enterprise-base + desktop,
-# JetBrains Mono Nerd Font, tmux) and saves it into the delivery bundle (helm-chart/images/custom/), replacing the
+# JetBrains Mono Nerd Font, tmux, command-line tools, default ~/.bashrc) and saves it into the delivery bundle (helm-chart/images/custom/), replacing the
 # previous one. Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.0.0
+#   ./build-workspace-image.sh [TAG]       default 1.1.0
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.0.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.1.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 docker build --platform linux/amd64 -t "$img" "${dev}/workspace-image"
 # What the image must provide (the template relies on it):
 docker run --rm --entrypoint sh "$img" -c '
@@ -15,6 +15,9 @@ docker run --rm --entrypoint sh "$img" -c '
 	! dpkg -s light-locker >/dev/null 2>&1
 	fc-match monospace | grep -q JetBrainsMono
 	/usr/local/bin/tmux -V && command -v tmux-mirror-setup >/dev/null
+	for t in btop bat batcat vim eza fzf grc jq yq; do command -v $t >/dev/null || { echo "missing: $t"; exit 1; }; done
+	test -f /usr/share/coder-workspace/bashrc && test -f /usr/share/coder-workspace/vimrc && cmp -s /etc/skel/.bashrc /usr/share/coder-workspace/bashrc
+	HOME=$(mktemp -d) bash -ic "type ls; echo ok" 2>&1 | grep -q "^ok$"
 	echo "image checks passed"'
 out="${top}/helm-chart/images/custom"; mkdir -p "$out"; rm -f "$out"/ghcr.io_user187x_coder-workspace_*.tar.gz
 docker save --platform linux/amd64 "$img" | gzip -1 >"${out}/$(echo "$img" | tr '/:@' '___').tar.gz"

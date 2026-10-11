@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.10.0 – 2026-10-11
+
+Coder image `2.0.0-platform.9-airgap` (fork `019d9745b`) and workspace image `ghcr.io/user187x/coder-workspace:1.1.0`.
+
+* **Workspace image 1.1.0:** btop, bat (`bat` links to Ubuntu's `batcat`), vim, eza, fzf, grc, jq and yq installed (tmux
+  already was). yq is Ubuntu's package: the jq wrapper for YAML (kislyuk/yq, jq syntax), not the Go yq.
+* **Default `~/.bashrc`** (`development/workspace-image/shell/bashrc`): every workspace start installs it for users who
+  have no `~/.bashrc`, or still Ubuntu's stock one; an edited `~/.bashrc` is left alone. Also installed when missing:
+  `~/.profile` (so login shells read `~/.bashrc`) and `~/.config/vim/vimrc`, which the new `.bashrc` points Vim at
+  (`VIMINIT`): Vim's defaults, then `~/.vimrc` if there is one.
+* **Agent terminal:** a "Custom command" toggle. It's off by default; turned on, its command (btop until changed) is
+  editable, new sessions run it first and continue in the shell when it exits, and "Run" starts one at once. The text
+  size buttons are Font Awesome's plus-circle / minus-circle.
+
 ## 1.9.0 – 2026-10-10
 
 Coder image `2.0.0-platform.8-airgap` (fork `a68ffe61e`).

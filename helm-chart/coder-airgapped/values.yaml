@@ -62,9 +62,9 @@ coder:
   coder:
     image:
       repo: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-platform") }}'
-      # The fork's 2.0.0-platform.8 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
+      # The fork's 2.0.0-platform.9 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
       # (development/airgap-image), without which templates cannot be pushed or built offline.
-      tag: 2.0.0-platform.8-airgap
+      tag: 2.0.0-platform.9-airgap
       pullSecrets: []
     # Extra environment appended to `env` (platform patch), so overrides need not repeat the list below, e.g.
     #   [{name: CODER_TELEMETRY_ENABLE, value: "false"}, {name: CODER_UPDATE_CHECK, value: "false"}]
@@ -315,7 +315,7 @@ coder-workspace:
   cliImage: '{{ include "platform.image" (list . "ghcr.io/coder/coder:latest") }}'
   loginImage: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   # The workspace image (development/workspace-image): desktop, JetBrains Mono Nerd Font and tmux preinstalled.
-  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.0.0") }}'
+  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.1.0") }}'
   imagePullSecrets: []
   secrets:
     tlsCa: '{{ .Values.global.secretNames.tlsCa }}'

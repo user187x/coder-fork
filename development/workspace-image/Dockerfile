@@ -5,7 +5,11 @@
 #     The XFCE screensaver is not started either (it would lock the VNC desktop behind a password the user lacks);
 #   - JetBrains Mono Nerd Font (fonts/), the default monospace and desktop font (fontconfig, XFCE, its terminal);
 #   - tmux 3.8 with the bundled configuration (packages/tmux-installation.deb, package tmux-mirror); the template
-#     runs tmux-mirror-setup for users who have no tmux configuration yet.
+#     runs tmux-mirror-setup for users who have no tmux configuration yet;
+#   - command-line tools: btop, bat (Ubuntu's binary is batcat; bat links to it), vim, eza, fzf, grc, jq, yq (Ubuntu's:
+#     the jq wrapper for YAML, kislyuk/yq);
+#   - the default shell setup (shell/): ~/.bashrc (/etc/skel and /usr/share/coder-workspace/bashrc) and the vimrc it
+#     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc).
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
 ARG BASE=codercom/enterprise-base:ubuntu
 FROM ${BASE}
@@ -19,6 +23,18 @@ RUN apt-get update \
 	&& ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html \
 	&& rm -f /etc/xdg/autostart/light-locker.desktop /etc/xdg/autostart/xfce4-screensaver.desktop \
 	&& rm -rf /var/lib/apt/lists/*
+
+# Command-line tools.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends btop bat vim eza fzf grc jq yq \
+	&& ln -sf /usr/bin/batcat /usr/local/bin/bat \
+	&& rm -rf /var/lib/apt/lists/*
+
+# Default shell setup. Ubuntu's stock .bashrc is kept, so the template can tell an untouched one from the user's own.
+COPY shell/bashrc shell/vimrc /usr/share/coder-workspace/
+RUN cp /etc/skel/.bashrc /usr/share/coder-workspace/ubuntu-bashrc \
+	&& cp /usr/share/coder-workspace/bashrc /etc/skel/.bashrc \
+	&& chmod 0644 /usr/share/coder-workspace/* /etc/skel/.bashrc
 
 # JetBrains Mono Nerd Font: installed, and preferred for "monospace".
 COPY fonts/ /usr/share/fonts/truetype/jetbrains-mono-nerd/
