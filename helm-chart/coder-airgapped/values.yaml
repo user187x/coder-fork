@@ -315,7 +315,7 @@ coder-workspace:
   cliImage: '{{ include "platform.image" (list . "ghcr.io/coder/coder:latest") }}'
   loginImage: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   # The workspace image (development/workspace-image): desktop, JetBrains Mono Nerd Font and tmux preinstalled.
-  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.1.0") }}'
+  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.2.0") }}'
   imagePullSecrets: []
   secrets:
     tlsCa: '{{ .Values.global.secretNames.tlsCa }}'

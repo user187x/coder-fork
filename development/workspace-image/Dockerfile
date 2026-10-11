@@ -8,6 +8,9 @@
 #     runs tmux-mirror-setup for users who have no tmux configuration yet;
 #   - command-line tools: btop, bat (Ubuntu's binary is batcat; bat links to it), vim, eza, fzf, grc, jq, yq (Ubuntu's:
 #     the jq wrapper for YAML, kislyuk/yq);
+#   - k9s (the developer's own build and configuration) and kubectl: packages/k8s-devtools_*.deb, made by
+#     ../tools/build-k8s-devtools.sh (pinned by packages/SHA256SUMS), with bash completion
+#     (enabled for every interactive shell in /etc/bash.bashrc);
 #   - the default shell setup (shell/): ~/.bashrc (/etc/skel and /usr/share/coder-workspace/bashrc) and the vimrc it
 #     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc).
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
@@ -50,5 +53,15 @@ RUN apt-get update \
 	&& apt-get install -y --no-install-recommends /tmp/tmux-installation.deb \
 	&& rm -rf /tmp/tmux-installation.deb /var/lib/apt/lists/* \
 	&& /usr/local/bin/tmux -V
+
+# k9s, kubectl (k8s-devtools) and bash completion for every interactive shell.
+COPY packages/k8s-devtools_*.deb /tmp/
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends bash-completion /tmp/k8s-devtools_*.deb \
+	&& rm -rf /tmp/k8s-devtools_*.deb /var/lib/apt/lists/* \
+	&& printf '%s\n' '' '# Bash completion (workspace image).' \
+		'if ! shopt -oq posix && [ -f /usr/share/bash-completion/bash_completion ]; then' \
+		'  . /usr/share/bash-completion/bash_completion' 'fi' >>/etc/bash.bashrc \
+	&& k9s version -s && kubectl version --client
 
 USER coder

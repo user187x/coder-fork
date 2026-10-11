@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.11.0 – 2026-10-11
+
+Workspace image `ghcr.io/user187x/coder-workspace:1.2.0` (Coder image unchanged: `2.0.0-platform.10-airgap`).
+
+* **k9s and kubectl in every workspace:** a new self-contained package, `k8s-devtools` 1.0.0
+  (`development/workspace-image/packages/`, 48 MB), built by `development/tools/build-k8s-devtools.sh` from the
+  developer's own machine:
+  * the exact custom k9s binary (v0.50.18, commit `6dbf571c…-patched`) and its configuration: settings, aliases, the
+    copy-secret plugin (with `k9s-copy-secret` on PATH) and all skins. Per-machine state (`clusters/`,
+    `screen-dumps/`, `benchmarks/`, backups) is left out. `k9s` gives users without a k9s configuration the bundled
+    one on first run; an existing one is never touched;
+  * the exact kubectl binary (v1.36.0);
+  * bash completion for both, now enabled for every interactive shell (`/etc/bash.bashrc`; the default `~/.bashrc` is
+    unchanged).
+* kubectl and k9s need a cluster to talk to, via a kubeconfig in `~/.kube/config` or `KUBECONFIG`. Workspaces get no
+  cluster access of their own (no extra permissions). minikube is not included: running it inside a workspace needs a
+  privileged pod or Sysbox nodes.
+
 ## 1.10.2 – 2026-10-11
 
 Coder image `2.0.0-platform.10-airgap` (fork `f6ebdb50e`).
