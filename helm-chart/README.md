@@ -1,4 +1,4 @@
-# coder-airgapped 1.13.0: portable Helm chart of the live Coder fork
+# coder-airgapped 1.13.1: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it

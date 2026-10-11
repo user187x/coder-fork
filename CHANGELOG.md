@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.13.1 – 2026-10-11
+
+* **Default logo: the Minecraft creeper** (`helm-chart/defaults/logo.gif`, a 200x200 animated GIF). A new installation
+  starts with it; an existing one keeps the logo it has (an uploaded one, or the previous default) until an admin
+  changes it in Customize.
+
 ## 1.13.0 – 2026-10-11
 
 Workspace image `ghcr.io/user187x/coder-workspace:1.3.0`.
