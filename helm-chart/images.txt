@@ -4,8 +4,8 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.13-airgap  sha256:1150257a4306e66d5d1f6a2c20763b63dc302637b69d6261b6e5506e3863146f   coder (server); = the fork's platform.13 (237423e43) + Terraform provider mirror
-ghcr.io/user187x/coder-workspace:1.4.0                    sha256:3ba970474dd4b546723493988bab0daea194b493c7968d78fa0324b8e0d6bc37   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
+ghcr.io/user187x/coder-platform:2.0.0-platform.14-airgap  sha256:1d2641b0621edf5f33d051b6fc786994f7cf994d8f793a91ce0b1f9087820ef2   coder (server); = the fork's platform.14 (84b706a1f) + Terraform provider mirror
+ghcr.io/user187x/coder-workspace:1.5.0                    sha256:9edd0b6ee48096e80de5aeb723b4e350ff192daf0a611ad2a4799614776f7c73   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
 
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage

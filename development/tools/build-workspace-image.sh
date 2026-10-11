@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Builds the workspace image ghcr.io/user187x/coder-workspace:<TAG> (../workspace-image: enterprise-base + desktop,
-# JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl, marimo with its packages, default ~/.bashrc) and saves it
+# Firefox, JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl, marimo with its packages, default ~/.bashrc) and saves it
 # into the delivery bundle (helm-chart/images/custom/), replacing the previous one. marimo/requirements.lock is re-pinned
 # first when marimo/requirements.in changed (needs internet, like the build itself). Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.4.0
+#   ./build-workspace-image.sh [TAG]       default 1.5.0
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.4.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.5.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 # Pin marimo's packages for the base image's Python, when the list changed.
 m="${dev}/workspace-image/marimo"
 if [[ "${m}/requirements.in" -nt "${m}/requirements.lock" ]]; then
@@ -32,7 +32,14 @@ docker run --rm --entrypoint sh "$img" -c '
 	HOME=$(mktemp -d) bash -ic "complete -p kubectl >/dev/null || _completion_loader kubectl; complete -p kubectl" 2>/dev/null | grep -q kubectl
 	HOME=$(mktemp -d) sh -c "k9s version -s >/dev/null && test -f \$HOME/.config/k9s/config.yaml"
 	grep -q xfce-cp-dark.svg /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml && test -f /usr/share/backgrounds/xfce/xfce-cp-dark.svg
+	dpkg-query -W -f "\${Version}\n" firefox | grep -qv snap && firefox --version
+	grep -qx WebBrowser=firefox /etc/xdg/xfce4/helpers.rc && grep -q "use_compositing\" type=\"bool\" value=\"false" /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
 	echo "image checks passed"'
+# Firefox runs in a container with no network: it renders a local page headless.
+docker run --rm --network none --shm-size 256m --entrypoint bash "$img" -c '
+	set -e; export HOME="$(mktemp -d)"; echo "<h1>ok</h1>" >"$HOME/t.html"
+	timeout 120 firefox --headless --screenshot "$HOME/s.png" "file://$HOME/t.html" >"$HOME/ff.log" 2>&1 || { cat "$HOME/ff.log"; exit 1; }
+	test -s "$HOME/s.png" && echo "firefox offline check passed"'
 # marimo with no network at all: run every cell of the check notebook (as a script: the first error stops it), then
 # serve it.
 docker run --rm --network none -v "${m}/smoke_test.py:/tmp/smoke_test.py:ro" --entrypoint bash "$img" -c '

@@ -113,6 +113,24 @@ mk_load_image() { # group image
 	local had=0; on_every_node "$img" && had=1
 	say "image $img: loading into every node"
 	minikube -p "$PROFILE" image load --overwrite=true "$img" </dev/null >/dev/null
+	# minikube leaves a node alone whose running containers use the old build of the tag: stream the image into
+	# each node that still has another build (docker load re-tags it; the old build stays until unused).
+	local n id
+	for n in $(kc get nodes -o jsonpath='{.items[*].metadata.name}'); do
+		id=$(minikube -p "$PROFILE" ssh -n "$n" -- docker image inspect --format "'${BUILD_FORMAT}'" "$img" </dev/null 2>/dev/null | tr -d '\r') || true
+		[[ "$id" == "$want" ]] && continue
+		say "image $img: loading into node $n directly"
+		if docker inspect "$n" >/dev/null 2>&1; then
+			# docker driver: the node is a container of this docker.
+			docker save "$img" | docker exec -i "$n" docker load -q >/dev/null
+		else
+			local tar; tar="$(mktemp --suffix=.tar)"
+			docker save -o "$tar" "$img" && minikube -p "$PROFILE" cp "$tar" "$n:/tmp/coder-image.tar" </dev/null >/dev/null &&
+				minikube -p "$PROFILE" ssh -n "$n" -- "docker load -q -i /tmp/coder-image.tar; rm -f /tmp/coder-image.tar" </dev/null >/dev/null
+			rm -f "$tar"
+		fi
+	done
+	on_every_node "$img" "$want" || warn "image $img: not on every node after loading"
 	if ((had)) && [[ -n "${MK_RELOADED_FILE:-}" ]]; then echo "$img" >>"$MK_RELOADED_FILE"; fi
 }
 

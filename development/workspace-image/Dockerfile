@@ -3,6 +3,8 @@
 #     also works without internet. light-locker and LightDM are left out: the screen locker needs a display manager,
 #     crashes in a container at every session start and leaves core.<pid> files in the user's home directory.
 #     The XFCE screensaver is not started either (it would lock the VNC desktop behind a password the user lacks);
+#   - Firefox (Mozilla's .deb, desktop/firefox-policies.json), XFCE's default web browser (desktop/);
+#     XFCE's compositor is off by default (desktop/xfwm4.xml), which makes the desktop faster over VNC;
 #   - JetBrains Mono Nerd Font (fonts/), the default monospace and desktop font (fontconfig, XFCE, its terminal);
 #   - tmux 3.8 with the bundled configuration (packages/tmux-installation.deb, package tmux-mirror); the template
 #     runs tmux-mirror-setup for users who have no tmux configuration yet;
@@ -81,5 +83,28 @@ RUN apt-get update \
 	&& sed -i 's#</head>#<style id="marimo-hide-resources">div.flex.flex-col.gap-2:has(> div.grid.gap-3.lg\\:grid-cols-3 > a[target="_blank"]){display:none !important}</style></head>#' "$index" \
 	&& grep -q marimo-hide-resources "$index" \
 	&& /opt/marimo/bin/marimo --version
+
+# Firefox, the desktop's web browser (XFCE's "Web Browser" and the dock's launcher open it): Mozilla's own .deb
+# (Ubuntu's firefox package only installs the snap, which cannot run in a container), with policies for an offline
+# network (no updates, telemetry, studies, Pocket, first-run pages or online new-tab content: new tabs and the start
+# page are blank) that trust the system CA store (p11-kit) - the
+# template's bundle, which includes the cluster's own CA. Also XFCE's compositor off by default (desktop/xfwm4.xml):
+# over VNC every composited effect is extra drawing to encode and send.
+COPY desktop/firefox-policies.json /etc/firefox/policies/policies.json
+COPY desktop/mimeapps.list /etc/xdg/mimeapps.list
+COPY desktop/helpers.rc /etc/xdg/xfce4/helpers.rc
+COPY desktop/xfwm4.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
+RUN install -d -m 0755 /etc/apt/keyrings \
+	&& curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg -o /etc/apt/keyrings/packages.mozilla.org.asc \
+	&& GNUPGHOME="$(mktemp -d)" gpg -n -q --import --import-options import-show /etc/apt/keyrings/packages.mozilla.org.asc \
+		| grep -q 35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3 \
+	&& echo 'deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main' \
+		>/etc/apt/sources.list.d/mozilla.list \
+	&& printf '%s\n' 'Package: *' 'Pin: origin packages.mozilla.org' 'Pin-Priority: 1000' >/etc/apt/preferences.d/mozilla \
+	&& apt-get update \
+	&& apt-get install -y --no-install-recommends firefox p11-kit-modules \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& { update-alternatives --set x-www-browser /usr/bin/firefox 2>/dev/null || true; }
+RUN firefox --version && test -f /usr/lib/x86_64-linux-gnu/pkcs11/p11-kit-trust.so
 
 USER coder

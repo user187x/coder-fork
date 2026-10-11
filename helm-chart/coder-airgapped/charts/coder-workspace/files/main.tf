@@ -174,6 +174,17 @@ exec startxfce4
 VNC_SCRIPT
     chmod +x ~/.config/tigervnc/xstartup
 
+    # The desktop is faster over VNC without XFCE's compositor (every composited effect is extra drawing to encode
+    # and send). The workspace image turns it off by default; desktops set up before that get it off once (later
+    # changes in Settings > Window Manager Tweaks are kept).
+    XFWM4_XML=~/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
+    if [ ! -e ~/.config/coder-workspace/xfwm4-no-compositing ]; then
+      if [ -f "$XFWM4_XML" ]; then
+        sed -i 's|name="use_compositing" type="bool" value="true"|name="use_compositing" type="bool" value="false"|' "$XFWM4_XML"
+      fi
+      mkdir -p ~/.config/coder-workspace && touch ~/.config/coder-workspace/xfwm4-no-compositing
+    fi
+
     # TigerVNC's X server on display :1, started directly (not through vncserver, which warns that a password-less
     # server is open to every user of the machine). It listens on no TCP port, only on a Unix socket that only this
     # user can open (directory 0700, socket 0600): no other user and no other pod can reach it, so it needs no
@@ -184,8 +195,9 @@ VNC_SCRIPT
       rm -f "$VNC_SOCK" /tmp/.X1-lock /tmp/.X11-unix/X1
       touch ~/.Xauthority && chmod 600 ~/.Xauthority
       xauth -f ~/.Xauthority add :1 MIT-MAGIC-COOKIE-1 "$(mcookie)"
+      # -FrameRate 60: updates as often as noVNC can show them.
       Xtigervnc :1 -auth ~/.Xauthority -geometry 1280x800 -depth 24 -rfbport -1 -rfbunixpath "$VNC_SOCK" \
-        -SecurityTypes None -AlwaysShared -desktop "$(hostname)" > /tmp/xvnc.log 2>&1 &
+        -SecurityTypes None -AlwaysShared -FrameRate 60 -desktop "$(hostname)" > /tmp/xvnc.log 2>&1 &
       for i in $(seq 1 50); do [ -S "$VNC_SOCK" ] && break; sleep 0.2; done
       DISPLAY=:1 XAUTHORITY=~/.Xauthority setsid ~/.config/tigervnc/xstartup > /tmp/xstartup.log 2>&1 < /dev/null &
     fi
@@ -244,6 +256,17 @@ VNC_SCRIPT
           sed -i "s/^manager = \"$m\"$/manager = \"uv\"/" "$MARIMO_TOML"
         fi
       done
+      # marimo's dark theme by default: set once per user (a later change in marimo's settings is kept).
+      if [ ! -e ~/.config/marimo/.coder-workspace-dark ]; then
+        mkdir -p ~/.config/marimo
+        /opt/marimo/bin/python - "$MARIMO_TOML" << 'MARIMO_DARK' && touch ~/.config/marimo/.coder-workspace-dark
+import os, sys, tomlkit
+path = sys.argv[1]
+doc = tomlkit.parse(open(path).read()) if os.path.exists(path) else tomlkit.document()
+doc.setdefault("display", tomlkit.table())["theme"] = "dark"
+open(path, "w").write(tomlkit.dumps(doc))
+MARIMO_DARK
+      fi
       mkdir -p /home/coder/notebooks
       # --no-token: no marimo login page. marimo listens on 127.0.0.1 only, so the Coder agent's
       # proxy is the only way in, and the app is share = "owner": Coder decides who gets in.
@@ -334,7 +357,7 @@ resource "coder_app" "novnc" {
   icon         = "https://upload.wikimedia.org/wikipedia/commons/0/0f/NoVNC_logo.png"
   # Path-based (no wildcard DNS/route needed). noVNC opens its websocket relative to the host
   # root, so pass the prefixed path explicitly ("main" = agent name, as in filebrowser above).
-  url          = "http://localhost:6901?autoconnect=true&resize=remote&path=@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/novnc/websockify"
+  url          = "http://localhost:6901?autoconnect=true&resize=remote&compression=0&path=@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/novnc/websockify"
   subdomain    = false
   share        = "owner"
 
@@ -525,6 +548,19 @@ resource "kubernetes_deployment_v1" "main" {
             mount_path = "/home/coder"
             name       = "home"
             read_only  = false
+          }
+          # Firefox's tabs share memory through /dev/shm; a pod's default 64 MiB makes them crash.
+          volume_mount {
+            mount_path = "/dev/shm"
+            name       = "dshm"
+          }
+        }
+
+        volume {
+          name = "dshm"
+          empty_dir {
+            medium     = "Memory"
+            size_limit = "1Gi"
           }
         }
 

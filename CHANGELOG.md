@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.17.0 – 2026-10-11
+
+Coder `2.0.0-platform.14` (fork `84b706a1f`). Workspace image `ghcr.io/user187x/coder-workspace:1.5.0`.
+
+* **The desktop has a web browser: Firefox.** XFCE's "Web Browser" and the dock's globe launcher open it at once.
+  * It is Mozilla's own `.deb`; Ubuntu's `firefox` package only installs a snap, which cannot run in a container.
+  * Its policies suit an offline network (`desktop/firefox-policies.json` in the image): no updates, telemetry,
+    studies, Pocket, sponsored content, welcome or terms-of-use pages, and no online content on the new-tab page.
+    New tabs and the start page are blank, and a workspace restart does not bring up "Restore Session".
+  * It trusts the system CA store through p11-kit, so the cluster's own CA works.
+  * The pod gets a 1 GiB in-memory `/dev/shm`; with the default 64 MiB, Firefox tabs crash.
+* **A faster desktop over VNC.**
+  * XFCE's compositor is off. That is the image default; desktops set up earlier get it turned off once, and a
+    later change in Window Manager Tweaks is kept.
+  * The VNC server updates at 60 frames per second.
+  * noVNC uses the cheapest compression (`compression=0`), which costs less CPU at both ends.
+  * The pointer is drawn by your own browser, so its speed is your mouse's. What remains is the round trip through
+    Coder's proxy for what happens on the desktop.
+* **marimo starts in its dark theme.** It is set once per user; a later change in marimo's settings is kept.
+* **App panels fit and resize.**
+  * A File Browser panel first grows to fit its page, so it has no scroll bar.
+  * Every app panel has a handle at its bottom right. Drag it, or use the up and down arrow keys, to set the height;
+    the width always stays the card's.
+  * The height is remembered.
+* **The top bar can be rearranged.** Workspaces, the latency menu and HUD can sit on either side of the announcement
+  banner.
+  * Start it by right-clicking one of them, or with the user menu's "Rearrange top bar".
+  * The banner shows as a dashed placeholder, and the buttons swap places around it: drag them, or use the left and
+    right arrow keys.
+  * Done (or Escape) ends it, and Reset restores the default order.
+  * The order is remembered per browser.
+* `minikube-support`: a rebuilt image under the same tag now reaches every node. `minikube image load` skipped a
+  node that was running containers of the old build; such a node now gets the image loaded directly.
+* **No Favorite.** The workspace page has no Favorite button, and the workspaces list no longer shows the star.
+* **No links to Coder's online documentation.** The deployment is air-gapped, and Coder publishes no offline (PDF)
+  edition of its docs, so these links would be dead.
+  * Removed: docs links and "View docs" buttons, the filters' "Learn more" items, help-popover links, the agents'
+    "Troubleshoot" and "View docs to troubleshoot" links, and "Install Coder Desktop".
+  * Sentences that pointed to the docs are reworded.
+  * A "Documentation" support link is never shown.
+  * A CSS rule hides any docs link still produced elsewhere, such as in a template README.
+
 ## 1.16.0 – 2026-10-11
 
 Coder `2.0.0-platform.13` (fork `237423e43`).
