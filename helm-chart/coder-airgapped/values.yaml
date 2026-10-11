@@ -66,6 +66,14 @@ coder:
       # (development/airgap-image), without which templates cannot be pushed or built offline.
       tag: 2.0.0-platform.11-airgap
       pullSecrets: []
+    # No gap during rollouts. The new pod starts first and must be ready before the old one stops (the defaults with
+    # one replica: maxSurge 25% rounds up to 1, maxUnavailable 25% down to 0). The old pod then keeps serving for 15 s
+    # after it is taken out of the Service, so Traefik stops sending it requests before Coder closes its server
+    # (otherwise those requests get a 502). Well inside terminationGracePeriodSeconds (60).
+    lifecycle:
+      preStop:
+        exec:
+          command: ["/bin/sleep", "15"]
     # Extra environment appended to `env` (platform patch), so overrides need not repeat the list below, e.g.
     #   [{name: CODER_TELEMETRY_ENABLE, value: "false"}, {name: CODER_UPDATE_CHECK, value: "false"}]
     extraEnv: []

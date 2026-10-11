@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.12.1 – 2026-10-11
+
+* **No gap when Coder rolls out:** the old Coder pod keeps serving for 15 s after it is taken out of the Service
+  (`preStop` sleep), so Traefik stops sending it requests before Coder closes its server. Until now those requests got
+  a 502, which showed as the health warning `EWS01` during a deploy. The new pod already started first and had to be
+  ready before the old one stopped. Tested with a restart under a request every 0.2 s: all 766 returned 200.
+
 ## 1.12.0 – 2026-10-11
 
 Coder image `2.0.0-platform.11-airgap` (fork `92daaa856`).

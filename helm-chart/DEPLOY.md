@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.12.0.tar.gz && cd coder-airgapped-1.12.0
+tar -xzf coder-airgapped-1.12.1.tar.gz && cd coder-airgapped-1.12.1
 ./make --deploy
 ```
 
@@ -73,8 +73,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.12.0.tar.gz
-cd coder-airgapped-1.12.0
+tar -xzf coder-airgapped-1.12.1.tar.gz
+cd coder-airgapped-1.12.1
 ./mirror-images.sh list
 ```
 
@@ -85,14 +85,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.12.0` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.12.1` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.12.0
+cd coder-airgapped-1.12.1
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
