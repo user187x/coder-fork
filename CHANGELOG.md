@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.8.0 – 2026-10-10
+
+Coder image `2.0.0-platform.7-airgap` (fork `d7a068929`).
+
+* **Breadcrumb:** Admin Settings > *category* names the category open (Health, Authentication, Customize, ...) instead
+  of a fixed "General", which stays for pages outside the categories.
+* **Fixed: the end of long pages was hidden** behind the deployment stats bar and the Chats dock (e.g. "Source Code
+  Pro", the last terminal font in Customize). Every page that scrolls ends with room to spare; full-height pages (the
+  workspace page) are unchanged.
+* **HUD:**
+  * Fixed: Highest CPU / Highest memory showed "—" without metrics-server, even with workspaces running. They fall back
+    to what the running workspaces were built with, then to what their pods request (the hint says which).
+  * Fixed: a tie quietly showed one account. It now shows the first account and the number tied ("admin +1 tied").
+  * Every figure opens what is behind it:
+    * the top account's workspace (CPU, memory, GPUs, ping, time online)
+    * that account's workspaces (most workspaces, most failures)
+    * the failing workspace
+    * the running workspaces, User Quota, or Workspace Health
+  * Moving figures to the top is a **Sort** menu at the top right of the totals bar, with Reset order.
+* **SSH key from the .p12:**
+  * Settings > Certificates can make the certificate's private key your Git SSH key: at upload ("Also use its private
+    key as my SSH key"), or with "Use as SSH key..." (Settings > SSH keys > "Use P12..." leads there).
+  * The key is decrypted in the browser, both AES and the legacy 3DES of many CAs. The password is asked for only when
+    the file has one, is never sent, stored or logged, and is cleared once the key is out.
+  * Coder stores the key as it stores the keys it generates (new endpoint `PUT /api/v2/users/{user}/gitsshkey/import`:
+    RSA 2048+, ECDSA P-256/384/521, Ed25519).
+
 ## 1.7.0 – 2026-10-10
 
 Coder image `2.0.0-platform.6-airgap` (fork `a65bc39b7`) and a new workspace image `ghcr.io/user187x/coder-workspace:1.0.0`.

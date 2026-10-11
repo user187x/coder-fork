@@ -138,6 +138,13 @@ s_, post = ui("/__coder-ui/api/monitoring/posture", token=admin)
 cats = {c["category"] for c in (post or {}).get("checks", [])} if s_ == 200 else set()
 check("Monitoring: security posture (identity, exposure, runtime, signals)", cats >= {"Identity", "Exposure", "Runtime", "Signals"},
       "%s, %s" % (sorted(cats), (post or {}).get("summary")) if s_ == 200 else str(s_))
+# 1.8.0: with workspaces running, the top-CPU / top-memory accounts are known (no metrics-server here: what the
+# workspaces were built with) and link to the workspace behind them.
+by = {m["id"]: m for m in (hudr or {}).get("metrics", [])}
+lead = [by.get(k) or {} for k in ("top-cpu", "top-memory")]
+check("HUD: top CPU / memory name an account and link to its workspace",
+      all(m.get("value") and str(m.get("href", "")).startswith("/@") for m in lead),
+      "; ".join("%s=%s %s" % (m.get("id"), m.get("value"), m.get("href")) for m in lead))
 s_, _ = ui("/__coder-ui/api/hud", token=user)
 check("HUD is for admins only", s_ == 403, str(s_))
 

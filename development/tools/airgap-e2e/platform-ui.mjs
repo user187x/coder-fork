@@ -2,6 +2,8 @@
 //   node platform-ui.mjs OUT_DIR URL [HOST_RESOLVER_RULES]
 // e.g. node platform-ui.mjs shots https://coder.airgap.test "MAP coder.airgap.test:443 127.0.0.1:18443"
 // Needs @playwright/test (the fork's site/node_modules) and its headless Chromium.
+// The SSH-key-from-.p12 check runs with P12_FILE, P12_PASSWORD and P12_PUBLIC_KEY (the key's "ssh-..." line);
+// it replaces the admin's SSH key, so run it only against a test deployment.
 import { createRequire } from "node:module";
 const require = createRequire(`${process.env.CODER_SITE ?? `${process.env.HOME}/workspace/coder/site`}/package.json`);
 const { chromium } = require("@playwright/test");
@@ -15,6 +17,8 @@ const check = (name, ok, detail = "") => {
 const browser = await chromium.launch(RESOLVE ? { args: [`--host-resolver-rules=${RESOLVE}`] } : {});
 const page = await browser.newPage({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 } });
 const snap = (name) => page.screenshot({ path: `${OUT}/${name}.png` });
+const sent = []; // every request body, to prove the .p12 password never leaves the page
+page.on("request", (r) => sent.push(`${r.url()} ${r.postData() ?? ""}`));
 try {
 	await page.goto(`${URL}/login`);
 	await page.getByLabel("Email").fill("admin@admin.com");
@@ -59,17 +63,58 @@ try {
 
 	// ---- HUD
 	await page.goto(`${URL}/hud`);
-	const tiles = page.getByRole("list", { name: "Metrics" }).getByRole("button");
+	const tiles = page.getByRole("list", { name: "Metrics" }).getByRole("listitem");
 	await tiles.first().waitFor({ timeout: 30000 });
 	check("HUD shows its metrics", (await tiles.count()) >= 15, `${await tiles.count()} tiles`);
 	await snap("03-hud");
-	const target = tiles.filter({ hasText: "Highest ping" });
-	await target.click();
+	await page.getByRole("button", { name: "Sort" }).click();
+	await page.getByRole("menuitem", { name: /Highest ping/ }).click();
 	await page.waitForTimeout(300);
-	check("clicking a metric moves it to the top", /Highest ping/.test(await tiles.first().textContent()));
+	check("the Sort menu moves a metric to the top", /Highest ping/.test(await tiles.first().textContent()));
 	await page.reload();
 	await tiles.first().waitFor();
 	check("the order is remembered", /Highest ping/.test(await tiles.first().textContent()));
+	const cpu = tiles.filter({ hasText: "Highest CPU" });
+	const cpuText = await cpu.textContent();
+	check("Highest CPU names an account while workspaces run", !/—/.test(cpuText) && /admin|tester/.test(cpuText), cpuText.replace(/\s+/g, " ").slice(0, 80));
+	await cpu.getByRole("link").click();
+	await page.waitForURL((u) => u.pathname.startsWith("/@"), { timeout: 15000 });
+	check("clicking a leader opens that workspace", true, new globalThis.URL(page.url()).pathname);
+	await page.goto(`${URL}/hud`);
+	await page.getByRole("link", { name: /^Workspaces active/ }).first().click();
+	await page.waitForURL((u) => u.pathname === "/workspaces", { timeout: 15000 });
+	check("clicking a total opens its list", /status(:|%3A)running/.test(page.url()), new globalThis.URL(page.url()).search);
+	await page.goto(`${URL}/hud`);
+	await page.getByRole("button", { name: "Sort" }).click();
+	await page.getByRole("menuitem", { name: "Reset order" }).click();
+
+	// ---- breadcrumb and room at the end of pages
+	await page.goto(`${URL}/deployment/customize`);
+	const crumb = page.locator("#main-content nav ol > li:nth-child(3) > span");
+	await crumb.waitFor({ timeout: 30000 });
+	check("breadcrumb names the category (Customize)", (await crumb.textContent()) === "Customize", await crumb.textContent());
+	await page.getByText("Source Code Pro").waitFor({ timeout: 30000 });
+	// The page keeps growing while it loads (theme previews): scroll to the end once it has settled.
+	for (let i = 0; i < 3; i++) {
+		await page.waitForTimeout(1000);
+		await page.evaluate(() => {
+			const se = document.scrollingElement;
+			se.scrollTop = se.scrollHeight;
+		});
+	}
+	await page.waitForTimeout(500);
+	const room = await page.evaluate(() => {
+		const label = [...document.querySelectorAll("label, span")].filter((e) => e.textContent.trim() === "Source Code Pro").pop();
+		const bottom = label.getBoundingClientRect().bottom;
+		const covers = [...document.querySelectorAll("div.sticky.bottom-0, [data-chat-panel], #coder-classification-bottom")]
+			.map((e) => e.getBoundingClientRect().top).filter((t) => t > 0);
+		return Math.round(Math.min(innerHeight, ...covers) - bottom);
+	});
+	check("the last line of a long page clears the bottom bars", room >= 24, `${room}px free`);
+	await snap("06-customize-bottom");
+	await page.goto(`${URL}/health/user-quota`);
+	await crumb.waitFor({ timeout: 30000 });
+	check("breadcrumb names the category (Health)", (await crumb.textContent()) === "Health", await crumb.textContent());
 
 	// ---- Monitoring and User Quota
 	await page.goto(`${URL}/deployment/monitoring`);
@@ -81,6 +126,35 @@ try {
 	await page.getByRole("heading", { name: /Global Workspace Scheduler/ }).waitFor({ timeout: 30000 });
 	check("User Quota has the Global Workspace Scheduler", await page.getByText("Maximum active time").isVisible());
 	await snap("05-scheduler");
+
+	// ---- SSH key from the .p12 (test deployments only: it replaces the admin's SSH key)
+	if (process.env.P12_FILE) {
+		await page.goto(`${URL}/settings/ssh-keys`);
+		await page.getByRole("link", { name: /Use P12/ }).click();
+		await page.waitForURL((u) => u.pathname === "/settings/certificates", { timeout: 15000 });
+		const dialog = page.getByRole("dialog", { name: /SSH key/ });
+		await dialog.waitFor({ timeout: 15000 });
+		check("SSH keys > Use P12 opens the Certificates page's dialog", true);
+		await dialog.locator('input[type="file"]').setInputFiles(process.env.P12_FILE);
+		const pw = dialog.getByLabel("Certificate password");
+		await pw.waitFor({ timeout: 15000 });
+		check("a password-protected .p12 asks for its password", true);
+		await pw.fill(process.env.P12_PASSWORD);
+		await snap("07-p12-ssh");
+		await dialog.getByRole("button", { name: "Use as SSH key" }).click();
+		await dialog.waitFor({ state: "detached", timeout: 30000 });
+		await page.goto(`${URL}/settings/ssh-keys`);
+		const key = page.getByText(/^(ssh|ecdsa)-/).first();
+		await key.waitFor({ timeout: 15000 });
+		const shown = (await key.textContent()).trim();
+		const want = process.env.P12_PUBLIC_KEY.trim().split(" ").slice(0, 2).join(" ");
+		check("the SSH key is now the certificate's key", shown.startsWith(want), shown.slice(0, 40));
+		const pass = process.env.P12_PASSWORD;
+		const leaked = sent.filter((r) => r.includes(pass)).length;
+		const stored = await page.evaluate((p) => JSON.stringify({ ...localStorage, ...sessionStorage }).includes(p), pass);
+		check("the password was never sent or stored", leaked === 0 && !stored, `${sent.length} requests checked`);
+		await snap("08-ssh-key");
+	}
 } catch (err) {
 	check("no unexpected error", false, String(err).split("\n")[0]);
 	await snap("error");

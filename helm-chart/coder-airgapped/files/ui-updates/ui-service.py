@@ -5638,6 +5638,63 @@ def _workspace_failures(token, workspace_id):
     return n
 
 
+def _pod_usage_by_workspace():
+    """Live CPU (cores) / memory (GiB) of each workspace's pods, by workspace ID, from metrics-server; {} without it."""
+    status, pods = KUBE.call("GET", "/api/v1/namespaces/%s/pods" % WORKSPACE_NAMESPACE)
+    if status != 200:
+        return {}
+    ws_of = {(p.get("metadata") or {}).get("name"): ((p.get("metadata") or {}).get("labels") or {}).get("com.coder.workspace.id")
+             for p in pods.get("items") or []}
+    status, usage = KUBE.call("GET", "/apis/metrics.k8s.io/v1beta1/namespaces/%s/pods" % WORKSPACE_NAMESPACE)
+    if status != 200:
+        return {}
+    out = {}
+    for item in usage.get("items") or []:
+        wid = ws_of.get((item.get("metadata") or {}).get("name"))
+        if not wid:
+            continue
+        acc = out.setdefault(wid, {"cpu": 0.0, "memory": 0.0})
+        for c in item.get("containers") or []:
+            acc["cpu"] += quantity((c.get("usage") or {}).get("cpu")) or 0
+            acc["memory"] += (quantity((c.get("usage") or {}).get("memory")) or 0) / 1024 ** 3
+    return out
+
+
+def _requested(containers, name):
+    """What containers ask for of a resource (requests, else limits), in cores / GiB."""
+    total = 0.0
+    for c in containers or []:
+        res = c.get("resources") or {}
+        v = quantity((res.get("requests") or {}).get(name)) or quantity((res.get("limits") or {}).get(name)) or 0
+        total += v / 1024 ** 3 if name == "memory" else v
+    return total
+
+
+def _leader(rows):
+    """The top of [(value, owner, workspace)] rows: (value, owners tied at it, workspace of the first), or None.
+    Ties are broken by name, so the answer does not flip between updates."""
+    rows = [r for r in rows if r[0]]
+    if not rows:
+        return None
+    top = max(r[0] for r in rows)
+    tied = sorted((r for r in rows if abs(r[0] - top) < 1e-9), key=lambda r: (r[1], r[2] or ""))
+    return top, sorted({r[1] for r in tied}), tied[0][2]
+
+
+def _who(lead):
+    """'alice', or 'alice +2 tied'."""
+    owners = lead[1]
+    return owners[0] + (" +%d tied" % (len(owners) - 1) if len(owners) > 1 else "")
+
+
+def _ws_href(owner, name):
+    return "/@%s/%s" % (urllib.parse.quote(owner), urllib.parse.quote(name)) if owner and name else ""
+
+
+def _workspaces_href(query=""):
+    return "/workspaces?" + urllib.parse.urlencode({"filter": query})
+
+
 def hud_report(token):
     hit = CACHE.get("hud:" + token[:16])
     if hit is not None:
@@ -5646,34 +5703,46 @@ def hud_report(token):
     status, data = _coder_get(token, "/api/v2/workspaces?" + urllib.parse.urlencode({"limit": 1000}))
     workspaces = (data or {}).get("workspaces") or [] if status == 200 else []
     claimed = {w["id"]: w for w in quota_workspaces(token)}      # cores / GiB each workspace was built with
-    live = _pod_usage_by_owner()                                  # live usage per owner (metrics-server)
+    live = _pod_usage_by_workspace()                              # live usage per workspace (metrics-server)
     snapshot = cluster_snapshot()
     pods = [p for p in snapshot["pods"] if ((p.get("metadata") or {}).get("labels") or {}).get("com.coder.workspace.id")]
-    gpu_by_ws = {}
+    gpu_by_ws, requested = {}, {}
     for pod in pods:
         wid = ((pod.get("metadata") or {}).get("labels") or {}).get("com.coder.workspace.id")
-        gpu_by_ws[wid] = gpu_by_ws.get(wid, 0) + sum(_gpus(c.get("resources")) for c in (pod.get("spec") or {}).get("containers") or [])
+        containers = (pod.get("spec") or {}).get("containers") or []
+        gpu_by_ws[wid] = gpu_by_ws.get(wid, 0) + sum(_gpus(c.get("resources")) for c in containers)
+        r = requested.setdefault(wid, {"cpu": 0.0, "memory": 0.0})
+        r["cpu"] += _requested(containers, "cpu")
+        r["memory"] += _requested(containers, "memory")
     gpu_capacity = sum(sum(quantity(v) or 0 for k, v in ((n.get("status") or {}).get("capacity") or {}).items() if GPU_RESOURCE.search(k))
                        for n in snapshot["nodes"])
 
+    def usage(wid, key):
+        """A running workspace's CPU / memory: live, else what it was built with, else what its pod requests."""
+        if wid in live:
+            return live[wid][key]
+        built = (claimed.get(wid) or {}).get(key) or 0
+        return built or (requested.get(wid) or {}).get(key) or 0
+
     nowt = time.time()
     per_owner = {}
-    running, starting, longest_up, worst_failure, latencies, disconnected, unhealthy = 0, 0, None, None, [], 0, 0
+    cpu_rows, mem_rows, gpu_rows, ping_rows, up_rows = [], [], [], [], []
+    running, starting, worst_failure, latencies, disconnected, unhealthy = 0, 0, None, [], 0, 0
     for w in workspaces:
-        owner = w.get("owner_name") or "?"
-        o = per_owner.setdefault(owner, {"workspaces": 0, "gpus": 0.0, "failures": 0, "ping": None, "up": 0.0})
+        owner, name, wid = w.get("owner_name") or "?", w.get("name"), w.get("id")
+        o = per_owner.setdefault(owner, {"workspaces": 0, "failures": 0, "cpu": 0.0, "memory": 0.0, "gpus": 0.0,
+                                         "top": {}})
         o["workspaces"] += 1
         build = w.get("latest_build") or {}
-        is_running = build.get("status") == "running" and build.get("transition") == "start"
         if build.get("status") in ("pending", "starting", "stopping", "deleting"):
             starting += 1
-        if is_running:
+        if build.get("status") == "running" and build.get("transition") == "start":
             running += 1
-            o["gpus"] += gpu_by_ws.get(w.get("id"), 0)
-            up = nowt - (_ts(build.get("created_at")) or nowt)
-            o["up"] = max(o["up"], up)
-            if longest_up is None or up > longest_up[0]:
-                longest_up = (up, owner, w.get("name"))
+            for key, value in (("cpu", usage(wid, "cpu")), ("memory", usage(wid, "memory")), ("gpus", gpu_by_ws.get(wid, 0))):
+                o[key] += value
+                if value > o["top"].get(key, (0, None))[0]:
+                    o["top"][key] = (value, name)      # the owner's workspace that uses the most of it
+            up_rows.append((nowt - (_ts(build.get("created_at")) or nowt), owner, name))
             for res in build.get("resources") or []:
                 for a in res.get("agents") or []:
                     if a.get("status") != "connected":
@@ -5685,17 +5754,16 @@ def hud_report(token):
                     lat = [x for x in lat if isinstance(x, (int, float))]
                     if lat:
                         latencies.append(min(lat))
-                        o["ping"] = max(o["ping"] or 0, min(lat))
+                        ping_rows.append((min(lat), owner, name))
         if build.get("status") == "failed":
             since = nowt - (_ts((build.get("job") or {}).get("completed_at")) or _ts(build.get("updated_at")) or nowt)
             if worst_failure is None or since > worst_failure[0]:
-                worst_failure = (since, owner, w.get("name"), ((build.get("job") or {}).get("error") or "")[:120])
+                worst_failure = (since, owner, name, ((build.get("job") or {}).get("error") or "")[:120])
     for w in workspaces[:300]:
         per_owner[w.get("owner_name") or "?"]["failures"] += _workspace_failures(token, w.get("id"))
-
-    def leader(key, source=None):
-        rows = [(v[key], k) for k, v in (source or per_owner).items() if v.get(key)]
-        return max(rows) if rows else None
+    for owner, o in per_owner.items():
+        for key, rows in (("cpu", cpu_rows), ("memory", mem_rows), ("gpus", gpu_rows)):
+            rows.append((o[key], owner, (o["top"].get(key) or (0, None))[1]))
 
     def fmt_hours(sec):
         return "%dd %dh" % (sec // 86400, (sec % 86400) // 3600) if sec >= 86400 else "%dh %dm" % (sec // 3600, (sec % 3600) // 60)
@@ -5708,45 +5776,65 @@ def hud_report(token):
     except Exception:  # noqa: BLE001
         cluster = None
     online = sum(1 for u in users if (_days_since(u.get("last_seen_at")) or 10 ** 6) * 1440 <= 5)
-    top_cpu = max(((v.get("cpu") or 0, k) for k, v in live.items()), default=None)
-    top_mem = max(((v.get("memory") or 0, k) for k, v in live.items()), default=None)
-    top_gpu, top_ws, top_fail, top_ping = leader("gpus"), leader("workspaces"), leader("failures"), leader("ping")
-    top_up = max(((v["up"], k) for k, v in per_owner.items() if v["up"]), default=None)
+    top_cpu, top_mem, top_gpu = _leader(cpu_rows), _leader(mem_rows), _leader(gpu_rows)
+    top_ping, top_up = _leader(ping_rows), _leader(up_rows)
+    top_ws = _leader([(o["workspaces"], k, None) for k, o in per_owner.items()])
+    top_fail = _leader([(o["failures"], k, None) for k, o in per_owner.items()])
     latencies.sort()
+    source = "Live, from metrics-server" if live else "What running workspaces were built with (no metrics-server)"
 
-    def m(mid, label, group, value, unit="", detail="", hint=""):
-        return {"id": mid, "label": label, "group": group, "value": value, "unit": unit, "detail": detail, "hint": hint}
+    def m(mid, label, group, value, unit="", detail="", hint="", href=""):
+        return {"id": mid, "label": label, "group": group, "value": value, "unit": unit, "detail": detail, "hint": hint,
+                "href": href}
+
+    def leader_metric(mid, label, lead, unit, hint, digits=2, none=""):
+        """A per-account figure: the top account (and ties); its link opens that account's workspace behind it."""
+        if not lead:
+            return m(mid, label, "leaders", None, unit, none, hint)
+        owner, ws = lead[1][0], lead[2]
+        return m(mid, label, "leaders", round(lead[0], digits), unit, _who(lead) + (" · " + ws if ws else ""), hint,
+                 _ws_href(owner, ws) if ws else _workspaces_href("owner:" + owner))
 
     metrics = [
-        m("users", "Unique users", "totals", len(users), "", "%d online now" % online, "Active accounts"),
-        m("workspaces", "Workspaces created", "totals", len(workspaces), "", "%d starting or stopping" % starting if starting else "", "Existing workspaces"),
-        m("active", "Workspaces active", "totals", running, "", "of %d" % len(workspaces), "Running now"),
+        m("users", "Unique users", "totals", len(users), "", "%d online now" % online, "Active accounts", "/deployment/users"),
+        m("workspaces", "Workspaces created", "totals", len(workspaces), "", "%d starting or stopping" % starting if starting else "",
+          "Existing workspaces", _workspaces_href()),
+        m("active", "Workspaces active", "totals", running, "", "of %d" % len(workspaces), "Running now",
+          _workspaces_href("status:running")),
         m("cpu", "CPU claimed", "totals", round(cpu_claimed, 2), "cores",
-          "of %g allocatable" % round(cluster["cpu"]["total"], 1) if cluster else "", "Cores running workspaces were built with"),
+          "of %g allocatable" % round(cluster["cpu"]["total"], 1) if cluster else "", "Cores running workspaces were built with",
+          "/health/user-quota"),
         m("memory", "Memory claimed", "totals", round(mem_claimed, 2), "GiB",
-          "of %g allocatable" % round(cluster["memory"]["total"] / 1024 ** 3, 1) if cluster else "", "GiB running workspaces were built with"),
+          "of %g allocatable" % round(cluster["memory"]["total"] / 1024 ** 3, 1) if cluster else "", "GiB running workspaces were built with",
+          "/health/user-quota"),
         m("gpu", "GPU workspaces", "totals", gpu_ws, "",
           ("%g of %g GPUs claimed" % (sum(gpu_by_ws.values()), gpu_capacity)) if gpu_capacity else "no GPU nodes yet",
-          "Running workspaces with a GPU (nvidia.com/gpu, amd.com/gpu, ...)"),
-        m("top-cpu", "Highest CPU", "leaders", round(top_cpu[0], 2) if top_cpu else None, "cores", top_cpu[1] if top_cpu else "", "Live, from metrics-server"),
-        m("top-memory", "Highest memory", "leaders", round(top_mem[0], 2) if top_mem else None, "GiB", top_mem[1] if top_mem else "", "Live, from metrics-server"),
-        m("top-gpu", "Most GPUs", "leaders", top_gpu[0] if top_gpu else None, "GPUs", top_gpu[1] if top_gpu else "", "GPUs claimed by running workspaces"),
-        m("top-workspaces", "Most workspaces", "leaders", top_ws[0] if top_ws else None, "", top_ws[1] if top_ws else ""),
+          "Running workspaces with a GPU (nvidia.com/gpu, amd.com/gpu, ...)", _workspaces_href("status:running")),
+        leader_metric("top-cpu", "Highest CPU", top_cpu, "cores", source, none="no running workspace"),
+        leader_metric("top-memory", "Highest memory", top_mem, "GiB", source, none="no running workspace"),
+        leader_metric("top-gpu", "Most GPUs", top_gpu, "GPUs", "GPUs claimed by running workspaces", digits=1,
+                      none="no workspace has a GPU"),
+        leader_metric("top-workspaces", "Most workspaces", top_ws, "", "Workspaces per account", digits=0, none="no workspaces"),
         m("top-online", "Longest online", "leaders", round(top_up[0] / 3600, 2) if top_up else None, "h",
-          ("%s · %s" % (top_up[1], fmt_hours(top_up[0]))) if top_up else "", "Longest-running workspace"),
+          ("%s · %s · %s" % (_who(top_up), top_up[2], fmt_hours(top_up[0]))) if top_up else "no running workspace",
+          "Longest-running workspace", _ws_href(top_up[1][0], top_up[2]) if top_up else ""),
         m("top-failures", "Most failures", "leaders", top_fail[0] if top_fail else 0, "builds",
-          top_fail[1] if top_fail else "none in %d days" % HUD_FAILURE_DAYS, "Failed builds in the last %d days" % HUD_FAILURE_DAYS),
-        m("top-ping", "Highest ping", "leaders", round(top_ping[0], 1) if top_ping else None, "ms", top_ping[1] if top_ping else "", "Agent latency to Coder"),
+          _who(top_fail) if top_fail else "none in %d days" % HUD_FAILURE_DAYS, "Failed builds in the last %d days" % HUD_FAILURE_DAYS,
+          _workspaces_href("owner:" + top_fail[1][0]) if top_fail else ""),
+        leader_metric("top-ping", "Highest ping", top_ping, "ms", "Agent latency to Coder", digits=1, none="no connected agent"),
         m("long-failure", "Failing longest", "health", round(worst_failure[0] / 3600, 2) if worst_failure else None, "h",
           ("%s/%s · %s" % (worst_failure[1], worst_failure[2], fmt_hours(worst_failure[0]))) if worst_failure else "no failed workspace",
-          (worst_failure[3] if worst_failure else "") or "Workspace whose latest build failed longest ago"),
+          (worst_failure[3] if worst_failure else "") or "Workspace whose latest build failed longest ago",
+          _ws_href(worst_failure[1], worst_failure[2]) if worst_failure else ""),
         m("cluster-cpu", "Cluster CPU in use", "health", round(100 * cluster["cpu"]["used"] / cluster["cpu"]["total"], 1) if cluster and cluster["cpu"]["total"] else None, "%",
-          "%d nodes" % cluster["nodes"] if cluster else "", "Live" if cluster and cluster["live"] else "Requested (no metrics-server)"),
+          "%d nodes" % cluster["nodes"] if cluster else "", "Live" if cluster and cluster["live"] else "Requested (no metrics-server)",
+          "/health/workspace-health"),
         m("cluster-memory", "Cluster memory in use", "health", round(100 * cluster["memory"]["used"] / cluster["memory"]["total"], 1) if cluster and cluster["memory"]["total"] else None, "%",
-          "", "Live" if cluster and cluster["live"] else "Requested (no metrics-server)"),
-        m("median-ping", "Median ping", "health", round(latencies[len(latencies) // 2], 1) if latencies else None, "ms", "%d agents" % len(latencies) if latencies else ""),
-        m("disconnected", "Agents disconnected", "health", disconnected, "", "running workspaces"),
-        m("unhealthy-apps", "Unhealthy apps", "health", unhealthy, "", "in running workspaces"),
+          "", "Live" if cluster and cluster["live"] else "Requested (no metrics-server)", "/health/workspace-health"),
+        m("median-ping", "Median ping", "health", round(latencies[len(latencies) // 2], 1) if latencies else None, "ms",
+          "%d agents" % len(latencies) if latencies else "", "", _workspaces_href("status:running")),
+        m("disconnected", "Agents disconnected", "health", disconnected, "", "running workspaces", "", _workspaces_href("status:running")),
+        m("unhealthy-apps", "Unhealthy apps", "health", unhealthy, "", "in running workspaces", "", "/health/workspace-health"),
     ]
     out = {"metrics": metrics, "generatedAt": now(), "live": bool(live)}
     CACHE.put("hud:" + token[:16], out, 5)

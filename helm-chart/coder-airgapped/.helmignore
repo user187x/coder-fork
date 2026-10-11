@@ -4,3 +4,6 @@
 *.orig
 *~
 .DS_Store
+# Python bytecode (e.g. from importing ui-service.py in a test): never part of the chart
+__pycache__/
+*.pyc
