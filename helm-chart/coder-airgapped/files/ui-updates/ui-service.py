@@ -654,6 +654,108 @@ class Keycloak:
         return out
 
 
+# --------------------------------------------------------------------------- admins' kubectl: the Keycloak group
+CLUSTER_ACCESS_GROUP = os.environ.get("CLUSTER_ACCESS_GROUP", "")  # empty: no sync
+CLUSTER_ACCESS_ROLES = [
+    r.strip()
+    for r in os.environ.get("CLUSTER_ACCESS_ROLES", "owner").split(",")
+    if re.match(r"^[a-z0-9-]+$", r.strip())
+]
+CLUSTER_ACCESS_ISSUER = os.environ.get("CLUSTER_ACCESS_ISSUER", "")
+CLUSTER_ACCESS_EVERY = 60  # seconds
+
+
+def cluster_admin_targets(coder_admins, kc_users_by):
+    """Which Keycloak users should be in the group: for each Coder admin who signs in with Keycloak, the Keycloak
+    user with the same email, else the same username. kc_users_by(field, value) returns the matching Keycloak users."""
+    out = {}
+    for a in coder_admins:
+        found = None
+        for field in ("email", "username"):
+            value = (a.get(field) or "").strip()
+            if not value:
+                continue
+            hits = [
+                u
+                for u in kc_users_by(field, value)
+                if (u.get(field) or "").lower() == value.lower()
+            ]
+            if len(hits) == 1:
+                found = hits[0]
+                break
+        if found:
+            out[found["id"]] = found.get("username") or found["id"]
+    return out
+
+
+class ClusterAdminSync(threading.Thread):
+    """Keeps the Keycloak group of the admins' cluster sign-in (global.clusterAccess) equal to Coder's admins: the
+    Coder users with one of CLUSTER_ACCESS_ROLES who sign in with Keycloak (the built-in password admin has no
+    Keycloak account, so it is never added). Read from Coder's database every minute; the group is created when
+    missing. Members it does not list are removed: membership is managed here, not in Keycloak."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        m = re.match(r"^(https?://.+?)/realms/([^/]+)/?$", CLUSTER_ACCESS_ISSUER)
+        self.kc_url, self.realm = (m.group(1), m.group(2)) if m else (None, None)
+        self.last = None
+
+    def run(self):
+        if not self.kc_url:
+            log(event="cluster-admins", status="off", reason="no Keycloak issuer URL")
+            return
+        while True:
+            try:
+                self.sync_once()
+            except Exception as e:  # noqa: BLE001 - reported, retried next round
+                err = str(e)[:300]
+                if err != self.last:
+                    log(event="cluster-admins", status="failed", error=err)
+                self.last = err
+            time.sleep(CLUSTER_ACCESS_EVERY)
+
+    def coder_admins(self):
+        pool = LOGOS.pool if LOGOS else None
+        if not pool:
+            raise RuntimeError("Coder's database is not reachable yet")
+        rows = pool.query(
+            """SELECT username, email FROM users WHERE NOT deleted AND status <> 'suspended'
+            AND login_type = 'oidc' AND rbac_roles && $1::text[]""",
+            ["{" + ",".join(CLUSTER_ACCESS_ROLES) + "}"],
+        )
+        return [{"username": r[0], "email": r[1]} for r in rows]
+
+    def sync_once(self):
+        kc = Keycloak(self.kc_url)
+        r = "/" + urllib.parse.quote(self.realm)
+        q = urllib.parse.quote
+        groups = kc.api("GET", r + "/groups?exact=true&briefRepresentation=true&search=" + q(CLUSTER_ACCESS_GROUP))
+        gid = next((g["id"] for g in walk_groups(groups) if g.get("name") == CLUSTER_ACCESS_GROUP), None)
+        if not gid:
+            kc.api("POST", r + "/groups", {"name": CLUSTER_ACCESS_GROUP})
+            groups = kc.api("GET", r + "/groups?exact=true&briefRepresentation=true&search=" + q(CLUSTER_ACCESS_GROUP))
+            gid = next(g["id"] for g in walk_groups(groups) if g.get("name") == CLUSTER_ACCESS_GROUP)
+            log(event="cluster-admins", status="group-created", group=CLUSTER_ACCESS_GROUP, realm=self.realm)
+        want = cluster_admin_targets(
+            self.coder_admins(),
+            lambda field, value: kc.api("GET", r + "/users?exact=true&%s=%s" % (field, q(value))) or [],
+        )
+        have = {
+            u["id"]: u.get("username") or u["id"]
+            for u in kc.api("GET", r + "/groups/%s/members?briefRepresentation=true&max=1000" % gid) or []
+        }
+        for uid in sorted(set(want) - set(have)):
+            kc.api("PUT", r + "/users/%s/groups/%s" % (uid, gid))
+            log(event="cluster-admins", status="added", user=want[uid], group=CLUSTER_ACCESS_GROUP)
+        for uid in sorted(set(have) - set(want)):
+            kc.api("DELETE", r + "/users/%s/groups/%s" % (uid, gid))
+            log(event="cluster-admins", status="removed", user=have[uid], group=CLUSTER_ACCESS_GROUP)
+        state = "in sync: %s" % (", ".join(sorted(want.values())) or "no members")
+        if state != self.last:
+            log(event="cluster-admins", status="ok", group=CLUSTER_ACCESS_GROUP, members=sorted(want.values()))
+        self.last = state
+
+
 def keycloak_url_from_cluster():
     for version in ("v2beta1", "v2alpha1"):
         status, lst = KUBE.call(
@@ -7263,6 +7365,8 @@ def main():
     AVATARS = AvatarStore(LOGOS)
     ICONS = IconStore(LOGOS)
     MONITOR = Monitor()
+    if CLUSTER_ACCESS_GROUP:
+        ClusterAdminSync().start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     server.daemon_threads = True
     log(

@@ -98,6 +98,12 @@ spec:
             - {name: KEYCLOAK_ADMIN_SECRET, value: {{ ternary $ui.keycloak.adminSecret "" $ui.keycloak.enabled | quote }}}
             - {name: ARGOCD_NAMESPACE, value: {{ ternary $ui.argocd.namespace "" $ui.argocd.enabled | quote }}}
             - {name: ARGOCD_APP, value: {{ ternary $ui.argocd.app "" $ui.argocd.enabled | quote }}}
+            {{- with .Values.global.clusterAccess }}{{ if and .enabled .syncGroup }}
+            # Keeps the Keycloak group of the admins' cluster sign-in equal to Coder's admins (values.yaml).
+            - {name: CLUSTER_ACCESS_GROUP, value: {{ .group | quote }}}
+            - {name: CLUSTER_ACCESS_ROLES, value: {{ .adminRoles | quote }}}
+            - {name: CLUSTER_ACCESS_ISSUER, value: {{ include "platform.oidcIssuer" $ | trim | quote }}}
+            {{- end }}{{ end }}
             - {name: CA_SOURCE_SECRET, value: {{ .Values.secrets.tlsCa.name | quote }}}
             - {name: OIDC_SECRET, value: {{ .Values.secrets.oidcClient.name | quote }}}
             - {name: OIDC_CA_SECRET, value: {{ .Values.secrets.oidcCa.name | quote }}}

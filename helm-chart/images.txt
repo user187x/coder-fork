@@ -5,7 +5,7 @@
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
 ghcr.io/user187x/coder-platform:2.0.0-platform.18-airgap  sha256:060d0774cdd3b073caf0131c5158abd3165cdfba984dc47d658f3c8cf29f4847   coder (server); = the fork's platform.18 (25b73e9ed) + Terraform provider mirror
-ghcr.io/user187x/coder-workspace:1.6.0                    sha256:aece763529bab3df5612cb35bd62a240f360840a8abf8095bd7945ae29314e6e   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
+ghcr.io/user187x/coder-workspace:1.7.0                    sha256:e814705b7f91d1e9896e558d646668f944531aea348eb3d7d74cccaf674df189   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
 
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage

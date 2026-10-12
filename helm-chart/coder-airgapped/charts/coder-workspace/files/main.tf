@@ -27,6 +27,27 @@ variable "namespace" {
   }
 }
 
+# Admins' kubectl and k9s on this cluster (global.clusterAccess in the chart): each admin signs in as themselves with
+# Keycloak's device login (kubelogin), so the cluster sees the person (keycloak:<user>).
+# The workspace holds no long-lived credential; the sign-in lasts as long as the Keycloak session. "" = off.
+variable "cluster_oidc_issuer" {
+  type        = string
+  description = "Keycloak issuer URL the cluster trusts for admins' kubectl sign-in (\"\" = off)."
+  default     = ""
+}
+
+variable "cluster_oidc_client_id" {
+  type        = string
+  description = "Keycloak client of the kubectl sign-in (public, device login)."
+  default     = "kubernetes"
+}
+
+variable "cluster_admin_roles" {
+  type        = string
+  description = "Coder roles (comma-separated) whose workspaces get the cluster kubeconfig."
+  default     = "owner"
+}
+
 data "coder_parameter" "cpu" {
   name         = "cpu"
   display_name = "CPU"
@@ -98,6 +119,15 @@ provider "kubernetes" {
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
+locals {
+  # The owner is an admin (one of cluster_admin_roles) and the cluster sign-in is on.
+  cluster_admin = var.cluster_oidc_issuer != "" && length(setintersection(
+    toset([for r in data.coder_workspace_owner.me.rbac_roles : r.name]),
+    toset([for r in split(",", var.cluster_admin_roles) : trimspace(r) if trimspace(r) != ""]),
+  )) > 0
+  cluster_kubeconfig = "/home/coder/.kube/coder-cluster.yaml"
+}
+
 resource "coder_agent" "main" {
   os             = "linux"
   arch           = "amd64"
@@ -107,6 +137,9 @@ resource "coder_agent" "main" {
     vscode       = false
     ssh_helper   = false
   }
+
+  # Admins' terminals, k9s and apps find the cluster sign-in first, then their own ~/.kube/config.
+  env = local.cluster_admin ? { KUBECONFIG = "${local.cluster_kubeconfig}:/home/coder/.kube/config" } : {}
 
   startup_script = <<-EOT
     set -e
@@ -150,6 +183,51 @@ resource "coder_agent" "main" {
     fi
 
     # ~/.cert/<owner>.p12 is installed by the "Certificates" script (certificates.tf) from Settings > Certificates.
+
+    # Admins: kubectl and k9s on this cluster. ~/.kube/coder-cluster.yaml (this template's own file, rewritten at
+    # every start; KUBECONFIG lists it before ~/.kube/config, which is never touched) has the context
+    # <owner>@coder-cluster. The first kubectl command signs in: it prints a Keycloak link and code, which the admin
+    # opens in their own browser and signs in to as themselves. The tokens are kept in /tmp (gone when the workspace
+    # restarts) and last as long as that Keycloak session. Someone who is no longer an admin loses the file.
+    if [ "${local.cluster_admin}" = "true" ]; then
+      mkdir -p ~/.kube /tmp/coder-kube-signin && chmod 700 ~/.kube /tmp/coder-kube-signin
+      cat > ${local.cluster_kubeconfig}.tmp << 'KUBECONFIG_FILE'
+# Written by the workspace template at every start (cluster sign-in for admins); edits here are replaced.
+apiVersion: v1
+kind: Config
+clusters:
+- name: coder-cluster
+  cluster:
+    server: https://kubernetes.default.svc
+    certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+contexts:
+- name: ${data.coder_workspace_owner.me.name}@coder-cluster
+  context:
+    cluster: coder-cluster
+    user: ${data.coder_workspace_owner.me.name}@keycloak
+    namespace: ${var.namespace}
+current-context: ${data.coder_workspace_owner.me.name}@coder-cluster
+users:
+- name: ${data.coder_workspace_owner.me.name}@keycloak
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1
+      command: kubectl
+      args:
+      - oidc-login
+      - get-token
+      - --oidc-issuer-url=${var.cluster_oidc_issuer}
+      - --oidc-client-id=${var.cluster_oidc_client_id}
+      - --grant-type=device-code
+      - --skip-open-browser
+      - --token-cache-dir=/tmp/coder-kube-signin
+      interactiveMode: IfAvailable
+      provideClusterInfo: false
+KUBECONFIG_FILE
+      chmod 600 ${local.cluster_kubeconfig}.tmp && mv ${local.cluster_kubeconfig}.tmp ${local.cluster_kubeconfig}
+    else
+      rm -f ${local.cluster_kubeconfig}
+    fi
 
     # 1. Desktop Environment & noVNC, first: it needs no network. It is in the workspace image
     # (ghcr.io/user187x/coder-workspace, without light-locker); installed here only on an image without it.

@@ -23,7 +23,7 @@ source "${here}/x509-support"
 STATE_ROOT="${here}/.deploy"
 ANSWERS="${STATE_ROOT}/answers.env"
 VARS=(TARGET DOMAIN CERTS TLS_CRT TLS_KEY CA_BUNDLE PROFILE KEYCLOAK OIDC_ISSUER OIDC_CA OIDC_SECRET_FILE
-	REGISTRY PUSH_IMAGES STORAGE_CLASS METHOD SUDO_STEPS)
+	REGISTRY PUSH_IMAGES STORAGE_CLASS METHOD SUDO_STEPS CLUSTER_ACCESS)
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -260,6 +260,12 @@ prepare_minikube() {
 		OIDC_SECRET_FILE="${STATE}/oidc-client-secret.txt"
 		"${here}/minikube-support" keycloak "$PROFILE" "$DOMAIN" "$OIDC_SECRET_FILE"
 		OIDC_ISSUER="https://keycloak.${DOMAIN}/realms/master" OIDC_CA_PEM="$CA_PEM"
+
+		step "kubectl and k9s for admins (each signs in as themselves with Keycloak)"
+		yes_no CLUSTER_ACCESS "Let Coder's admins use kubectl and k9s on this cluster (cluster-admin) from their workspaces?" y
+		if [[ "$CLUSTER_ACCESS" == y ]]; then
+			"${here}/minikube-support" cluster-signin "$PROFILE" "$DOMAIN" "$CA_PEM"
+		fi
 	else
 		oidc_existing
 	fi
@@ -319,6 +325,7 @@ global:
   registry: "${REGISTRY}"
   oidc:
     issuerUrl: "${OIDC_ISSUER}"
+  clusterAccess: {enabled: $([[ "${CLUSTER_ACCESS:-n}" == y && "$KEYCLOAK" == dev ]] && echo true || echo false)}
 coder:
   coder:
     extraEnv:

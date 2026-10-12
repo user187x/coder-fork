@@ -10,7 +10,8 @@
 #     runs tmux-mirror-setup for users who have no tmux configuration yet;
 #   - command-line tools: btop, bat (Ubuntu's binary is batcat; bat links to it), vim, eza, fzf, grc, jq, yq (Ubuntu's:
 #     the jq wrapper for YAML, kislyuk/yq);
-#   - k9s (the developer's own build and configuration) and kubectl: packages/k8s-devtools_*.deb, made by
+#   - k9s (the developer's own build and configuration), kubectl and kubelogin (kubectl oidc-login, the admins'
+#     Keycloak sign-in to the cluster): packages/k8s-devtools_*.deb, made by
 #     ../tools/build-k8s-devtools.sh (pinned by packages/SHA256SUMS), with bash completion
 #     (enabled for every interactive shell in /etc/bash.bashrc);
 #   - marimo (Python notebooks) with everything it needs, so it works with no network at all: /opt/marimo, a Python
@@ -61,7 +62,7 @@ RUN apt-get update \
 	&& rm -rf /tmp/tmux-installation.deb /var/lib/apt/lists/* \
 	&& /usr/local/bin/tmux -V
 
-# k9s, kubectl (k8s-devtools) and bash completion for every interactive shell.
+# k9s, kubectl, kubelogin (k8s-devtools) and bash completion for every interactive shell.
 COPY packages/k8s-devtools_*.deb /tmp/
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends bash-completion /tmp/k8s-devtools_*.deb \
@@ -69,7 +70,7 @@ RUN apt-get update \
 	&& printf '%s\n' '' '# Bash completion (workspace image).' \
 		'if ! shopt -oq posix && [ -f /usr/share/bash-completion/bash_completion ]; then' \
 		'  . /usr/share/bash-completion/bash_completion' 'fi' >>/etc/bash.bashrc \
-	&& k9s version -s && kubectl version --client
+	&& k9s version -s && kubectl version --client && kubectl oidc-login --version
 
 # marimo, offline: everything installed at build time (marimo/requirements.lock, pinned by build-workspace-image.sh).
 # Its home page's "Resources" section (external links, useless offline) is hidden with a CSS rule in its index.html.

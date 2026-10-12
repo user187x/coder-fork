@@ -12,6 +12,9 @@
 #   ./minikube-support dns PROFILE DOMAIN              CoreDNS: *.DOMAIN -> Traefik, so pods reach coder./keycloak.
 #   ./minikube-support keycloak PROFILE DOMAIN OUT     dev Keycloak at https://keycloak.DOMAIN, client "coder";
 #                                                      writes the client secret to OUT
+#   ./minikube-support cluster-signin PROFILE DOMAIN CA  admins' kubectl sign-in: Keycloak client "kubernetes"
+#                                                      (device login, "groups" claim) and group coder-cluster-admins;
+#                                                      the API server trusts Keycloak's tokens (CA: its TLS CA)
 #   ./minikube-support minikube-expose-services PROFILE   `minikube tunnel` in the background (asks for sudo once)
 #   ./minikube-support minikube-sync-hosts PROFILE DOMAIN /etc/hosts block for the cluster's hostnames (sudo)
 #   ./minikube-support expose PROFILE DOMAIN           both of the above - run it again after a reboot
@@ -243,6 +246,132 @@ EOF
 	say "Keycloak: https://keycloak.${domain} (admin password: kubectl -n keycloak get secret keycloak-initial-admin -o jsonpath='{.data.password}' | base64 -d)"
 }
 
+# ---- admins' kubectl: Keycloak device login, trusted by the API server ------------------------------------
+# The chart's global.clusterAccess (values.yaml) gives the Keycloak group coder-cluster-admins cluster-admin and writes
+# admins' kubeconfigs; this makes the two ends meet on Minikube with the development Keycloak.
+#   - Keycloak (realm master): public client "kubernetes" with only the OAuth 2.0 device grant (kubelogin in a
+#     workspace prints a link; the admin signs in in their own browser, with the same login flow as Coder's client,
+#     and confirms the grant the first time - Keycloak remembers it),
+#     a "groups" claim with plain group names, short tokens (10 minutes; the sign-in lasts 30 minutes idle, 8 hours at most),
+#     and the group coder-cluster-admins (the platform service keeps its members equal to Coder's admins);
+#   - the API server: a structured authentication configuration (--authentication-config) trusting that issuer for
+#     audience "kubernetes": users "keycloak:<username>", groups "keycloak:<group>". The file is in
+#     /var/lib/minikube/certs (mounted into the API server, kept across restarts) and reloaded when it changes; the
+#     flag is added to the static pod once (the API server restarts, about half a minute) and recorded in the
+#     profile's extra options, so `minikube start` keeps it. If the API server does not come back, the flag is taken
+#     out again.
+SIGNIN_CONFIG=/var/lib/minikube/certs/coder-authentication.yaml
+APISERVER_MANIFEST=/etc/kubernetes/manifests/kube-apiserver.yaml
+
+# The API server's authentication configuration: Keycloak's tokens for audience "kubernetes" (ISSUER, CA file).
+signin_conf() {
+	local issuer="$1" ca="$2"
+	cat <<EOF
+# Written by ./minikube-support cluster-signin: Keycloak sign-in for kubectl (admins) (coder-airgapped).
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: ${issuer}
+    audiences: [kubernetes]
+    certificateAuthority: |
+$(sed 's/^/      /' "$ca")
+  claimMappings:
+    username: {claim: preferred_username, prefix: "keycloak:"}
+    groups: {claim: groups, prefix: "keycloak:"}
+EOF
+}
+
+mk_cluster_signin() {
+	local domain="$1" ca="$2" issuer conf have
+	[[ -r "$ca" ]] || die "cannot read the CA $ca"
+	issuer="https://keycloak.${domain}/realms/master"
+	kc -n keycloak exec -i deploy/keycloak -c keycloak -- env HOME=/tmp sh -s >/dev/null <<'EOF'
+set -e
+K=/opt/keycloak/bin/kcadm.sh
+$K config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" \
+  --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1
+settings='"name": "Kubernetes (kubectl sign-in)", "enabled": true, "publicClient": true,
+  "standardFlowEnabled": false, "directAccessGrantsEnabled": false, "implicitFlowEnabled": false,
+  "serviceAccountsEnabled": false, "consentRequired": true,
+  "attributes": {"oauth2.device.authorization.grant.enabled": "true", "access.token.lifespan": "600",
+    "client.session.idle.timeout": "1800", "client.session.max.lifespan": "28800"}'
+id=$($K get clients -r master -q clientId=kubernetes --fields id --format csv --noquotes)
+if [ -z "$id" ]; then
+  id=$(printf '{"clientId": "kubernetes", %s}' "$settings" | $K create clients -r master -i -f -)
+else
+  printf '{%s}' "$settings" | $K update "clients/$id" -r master -f -
+fi
+if ! $K get "clients/$id/protocol-mappers/models" -r master | grep -q '"name" : "groups"'; then
+  $K create "clients/$id/protocol-mappers/models" -r master -f - <<'JSON'
+{"name": "groups", "protocol": "openid-connect", "protocolMapper": "oidc-group-membership-mapper",
+ "config": {"claim.name": "groups", "full.path": "false", "id.token.claim": "true", "access.token.claim": "true",
+  "userinfo.token.claim": "true"}}
+JSON
+fi
+# The same login as Coder's client (e.g. the certificate flow), when it has its own.
+coder=$($K get clients -r master -q clientId=coder --fields id --format csv --noquotes)
+flow=$([ -n "$coder" ] && $K get "clients/$coder" -r master --fields authenticationFlowBindingOverrides |
+  sed -n 's/.*"browser" *: *"\([^"]*\)".*/\1/p')
+[ -n "$flow" ] && $K update "clients/$id" -r master -s "authenticationFlowBindingOverrides.browser=$flow"
+$K get groups -r master -q search=coder-cluster-admins -q exact=true --fields name --format csv --noquotes |
+  grep -qx coder-cluster-admins || $K create groups -r master -s name=coder-cluster-admins
+EOF
+	say "Keycloak: client \"kubernetes\" (device login) and group coder-cluster-admins"
+
+	conf=$(signin_conf "$issuer" "$ca")
+	# The control-plane node is the docker container named after the profile (docker driver).
+	have=$(docker exec "$PROFILE" cat "$SIGNIN_CONFIG" 2>/dev/null || true)
+	if [[ "$have" != "$conf" ]]; then
+		printf '%s\n' "$conf" | docker exec -i "$PROFILE" sh -c "umask 077 && cat > $SIGNIN_CONFIG.tmp && mv $SIGNIN_CONFIG.tmp $SIGNIN_CONFIG"
+		say "API server: authentication configuration written ($SIGNIN_CONFIG)"
+	fi
+	mk_signin_extra_option
+	if docker exec "$PROFILE" grep -q -- "--authentication-config=" "$APISERVER_MANIFEST"; then
+		say "API server: trusts Keycloak (${issuer}) for kubectl sign-in"
+		return 0
+	fi
+	say "API server: turning the Keycloak sign-in on (it restarts; about half a minute)"
+	docker exec "$PROFILE" sh -c "cp $APISERVER_MANIFEST /var/lib/minikube/kube-apiserver.yaml.before-signin && sed -i '/^    - --authorization-mode=/a\    - --authentication-config=$SIGNIN_CONFIG' $APISERVER_MANIFEST"
+	sleep 20
+	local i
+	for i in $(seq 60); do
+		if [[ "$(kc get --raw /readyz 2>/dev/null)" == ok ]] &&
+			kc -n kube-system get pod -l component=kube-apiserver -o jsonpath='{.items[0].spec.containers[0].command}' 2>/dev/null |
+			grep -q -- --authentication-config=; then
+			say "API server: back, trusting Keycloak (${issuer}) for kubectl sign-in"
+			return 0
+		fi
+		sleep 3
+	done
+	warn "the API server did not come back with the sign-in configuration: taking the flag out again"
+	docker exec "$PROFILE" cp /var/lib/minikube/kube-apiserver.yaml.before-signin "$APISERVER_MANIFEST"
+	mk_signin_extra_option remove
+	die "API server: the Keycloak sign-in could not be turned on (see: minikube -p $PROFILE ssh -- sudo crictl ps -a)"
+}
+
+# The flag in the profile's extra options (what `minikube start` passes to kubeadm), so a restart keeps it.
+mk_signin_extra_option() {
+	local cfg="${MINIKUBE_HOME:-$HOME/.minikube}/profiles/${PROFILE}/config.json"
+	[[ -f "$cfg" ]] || return 0
+	python3 - "$cfg" "$SIGNIN_CONFIG" "${1:-add}" <<'EOF'
+import json, os, sys
+path, value, mode = sys.argv[1:4]
+c = json.load(open(path))
+opts = c["KubernetesConfig"].get("ExtraOptions") or []
+keep = [o for o in opts if not (o.get("Component") == "apiserver" and o.get("Key") == "authentication-config")]
+if mode == "add":
+    keep.append({"Component": "apiserver", "Key": "authentication-config", "Value": value})
+if keep != opts:
+    c["KubernetesConfig"]["ExtraOptions"] = keep
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(c, f, indent="\t")
+    os.chmod(tmp, os.stat(path).st_mode & 0o777)
+    os.replace(tmp, path)
+EOF
+}
+
 # ---- exposing the cluster on this machine -------------------------------------------------------------------
 tunnel_pid() { { pgrep -f "minikube.* tunnel" -a 2>/dev/null || true; } | awk -v p="$1" '$0 ~ ("(-p|--profile)[ =]" p "( |$)") {print $1; exit}'; }
 
@@ -364,6 +493,7 @@ load-images) PROFILE="${1:?profile}"; mk_load_images ;;
 pin-ip) mk_pin_ip "${1:?domain}" ;;
 dns) PROFILE="${1:?profile}"; mk_dns "${2:?domain}" ;;
 keycloak) PROFILE="${1:?profile}"; mk_keycloak "${2:?domain}" "${3:?output file for the client secret}" ;;
+cluster-signin) PROFILE="${1:?profile}"; mk_cluster_signin "${2:?domain}" "${3:?CA file of the Keycloak TLS certificate}" ;;
 minikube-expose-services) PROFILE="${1:?profile}"; minikube_expose_services ;;
 minikube-sync-hosts) PROFILE="${1:?profile}"; minikube_sync_hosts "${2:?domain}" ;;
 expose) PROFILE="${1:?profile}"; minikube_expose_services; minikube_sync_hosts "${2:?domain}" ;;

@@ -95,6 +95,11 @@ spec:
                 --directory "${WORKSPACE}" \
                 --message "Deployed via Helm release {{ .Release.Name }}" \
                 --variable namespace="{{ .Values.namespace | default "coder" }}" \
+                {{- with .Values.global.clusterAccess }}{{ if .enabled }}
+                --variable cluster_oidc_issuer="{{ $.Values.global.oidc.issuerUrl | default (printf "https://keycloak.%s/realms/master" $.Values.global.domain) }}" \
+                --variable cluster_oidc_client_id="{{ .clientId }}" \
+                --variable cluster_admin_roles="{{ .adminRoles }}" \
+                {{- end }}{{ end }}
                 --yes
           volumeMounts:
             - name: shared

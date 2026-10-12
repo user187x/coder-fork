@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.21.0 – 2026-10-11
+
+Coder `2.0.0-platform.18` (unchanged), workspace image `coder-workspace:1.7.0`.
+
+* **Admins run kubectl and k9s on Coder's cluster from their workspaces, each signed in as themselves.**
+  * Coder's Owners get `~/.kube/coder-cluster.yaml` (context `<owner>@coder-cluster`, first in `KUBECONFIG`; their own
+    `~/.kube/config` is never touched). Other users' workspaces get nothing.
+  * The first `kubectl` command prints a Keycloak link and code (device login). The admin opens it in their own
+    browser and signs in as they do for Coder (e.g. with their certificate). The first time, they confirm the grant.
+    No browser opens by itself.
+  * The cluster sees the person: `keycloak:<username>`, in group `keycloak:coder-cluster-admins`, which the chart
+    binds to `cluster-admin`. An API server audit log, where one is turned on, records that name. No account or token
+    is shared.
+  * The workspace keeps no long-lived credential. The tokens live 10 minutes and are kept in `/tmp`, so they are
+    forgotten when the workspace restarts. The sign-in ends with the Keycloak session (development Keycloak: 30
+    minutes idle, 8 hours at most).
+  * The platform service keeps the Keycloak group equal to Coder's Owners who sign in with Keycloak. It checks every
+    minute, matching by email, else username. The built-in password `admin` has no Keycloak account and so cannot
+    sign in to the cluster.
+  * `./make --deploy` on Minikube sets up the development Keycloak's public client `kubernetes` (device grant only,
+    consent, a `groups` claim) and the group. It also makes the API server trust Keycloak's tokens with a structured
+    authentication configuration; the API server restarts once, and the flag is kept across `minikube start`. EKS
+    and other clusters: `DEPLOY.md` › *kubectl and k9s for admins*.
+  * Settings: `global.clusterAccess` (off by default in the chart).
+* **Workspace image 1.7.0:** adds kubelogin `v1.36.4` (`kubectl oidc-login`, pinned by its release checksum) to the
+  `k8s-devtools` package (1.1.0, the same k9s and kubectl).
+
 ## 1.20.0 – 2026-10-11
 
 Coder `2.0.0-platform.18` (fork `25b73e9ed`).

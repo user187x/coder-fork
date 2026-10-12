@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.20.0.tar.gz && cd coder-airgapped-1.20.0
+tar -xzf coder-airgapped-1.21.0.tar.gz && cd coder-airgapped-1.21.0
 ./make --deploy
 ```
 
@@ -73,8 +73,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.20.0.tar.gz
-cd coder-airgapped-1.20.0
+tar -xzf coder-airgapped-1.21.0.tar.gz
+cd coder-airgapped-1.21.0
 ./mirror-images.sh list
 ```
 
@@ -85,14 +85,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.20.0` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.21.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.20.0
+cd coder-airgapped-1.21.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -161,6 +161,60 @@ admin can make others admins in **Admin settings › Users**. The banner starts 
 `https://coder.<your-domain>/__banner/admin`.
 
 Done.
+
+## Optional – kubectl and k9s for admins
+
+Coder's admins (role Owner) can run `kubectl` and `k9s` on this cluster from their workspace terminals, each **signed
+in as themselves**. There is no shared account, and the workspace holds no long-lived credential. The cluster sees the
+person, e.g. `keycloak:alice` in group `keycloak:coder-cluster-admins` (an API server audit log, where one is turned
+on, records that name). The group gets `cluster-admin`.
+
+In the workspace, the first `kubectl` command prints a Keycloak link and code. The admin opens the link in their own
+browser and signs in, as they do for Coder. The first time, they confirm the grant. Then kubectl continues. The sign-in lasts as long
+as that Keycloak session (Minikube's development Keycloak: 30 minutes idle, 8 hours at most). It is forgotten when the
+workspace restarts. k9s cannot show the link, so run a `kubectl` command (e.g. `kubectl auth whoami`) first.
+
+Only Keycloak accounts can sign in. The built-in `admin@admin.com` has none: sign in to Coder with your own Keycloak
+account and make it an Owner. The platform service keeps the Keycloak group equal to Coder's Owners who sign in with
+Keycloak, checked every minute; anyone else added to the group in Keycloak is removed.
+
+**Minikube:** `./make --deploy` sets it all up with its development Keycloak (the question *Let Coder's admins use
+kubectl…*, default yes). The API server restarts once.
+
+**EKS or another cluster:** three pieces, then `global.clusterAccess.enabled: true` in your values:
+
+1. **Keycloak** (the realm of `global.oidc.issuerUrl`), as an admin with `kcadm.sh`:
+
+   ```bash
+   kcadm.sh create clients -r <realm> -f - <<'EOF'
+   {"clientId": "kubernetes", "name": "Kubernetes (kubectl sign-in)", "publicClient": true, "consentRequired": true,
+    "standardFlowEnabled": false, "directAccessGrantsEnabled": false,
+    "attributes": {"oauth2.device.authorization.grant.enabled": "true", "access.token.lifespan": "600"},
+    "protocolMappers": [{"name": "groups", "protocol": "openid-connect",
+      "protocolMapper": "oidc-group-membership-mapper",
+      "config": {"claim.name": "groups", "full.path": "false", "id.token.claim": "true", "access.token.claim": "true"}}]}
+   EOF
+   kcadm.sh create groups -r <realm> -s name=coder-cluster-admins
+   ```
+
+   If Coder's client signs in with certificates (its own browser flow), give this client the same flow:
+   **Clients › kubernetes › Advanced › Authentication flow overrides › Browser flow**.
+2. **The API server trusts Keycloak** for audience `kubernetes`: username claim `preferred_username`, groups claim
+   `groups`, both with the prefix `keycloak:`. On EKS:
+
+   ```bash
+   aws eks associate-identity-provider-config --cluster-name <cluster> --oidc \
+     identityProviderConfigName=keycloak,issuerUrl=<issuer URL>,clientId=kubernetes,usernameClaim=preferred_username,usernamePrefix=keycloak:,groupsClaim=groups,groupsPrefix=keycloak:
+   ```
+
+   EKS fetches the issuer's keys itself, so the issuer URL must be reachable from the EKS control plane, with a
+   certificate it trusts. A Keycloak that only the private network can reach cannot be used this way. On a cluster
+   you run yourself, use the API server's `--authentication-config` (see `minikube-support`, `signin_conf`).
+3. **The workspace image has kubelogin** (`kubectl oidc-login`): `coder-workspace:1.7.0` and later.
+
+The chart then adds the ClusterRoleBinding `coder-cluster-admins` and passes the issuer to the template. Admins'
+workspaces get the kubeconfig at their next start. Settings: `global.clusterAccess` in `values.yaml` (client, group,
+prefix, cluster role, which Coder roles count as admins, the group sync).
 
 > **Good to know – workspaces in a strict air gap:** workspaces start and connect. The desktop, the JetBrains Mono Nerd
 > Font, tmux, k9s/kubectl and marimo (with all its packages) are in the workspace image. The template still installs

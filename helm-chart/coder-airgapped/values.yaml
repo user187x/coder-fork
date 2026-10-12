@@ -32,6 +32,28 @@ global:
     allowSignups: "true"
     signInText: Sign in with your certificate
     iconUrl: /icon/keycloak.svg
+  # Admins' kubectl and k9s on this cluster, each signed in as themselves. Their workspaces get a kubeconfig whose first
+  # command prints a Keycloak device-login link; the admin signs in in their own browser (with their certificate) and
+  # the cluster sees the person: "<prefix><Keycloak username>", in group "<prefix><group>" (an API server audit log,
+  # where one is turned on, records it). The workspace holds no long-lived credential.
+  # Needs, besides enabled: true,
+  #   - in Keycloak (the realm of oidc.issuerUrl): a public client <clientId> with the OAuth 2.0 device authorization
+  #     grant, a "groups" claim (group membership mapper, plain names), and the group <group>;
+  #   - the cluster's API server trusting that issuer for audience <clientId>, with the username claim
+  #     preferred_username and the groups claim groups, both prefixed with <prefix>.
+  # ./make --deploy does both on Minikube with its development Keycloak; DEPLOY.md shows them for EKS and other
+  # clusters. The chart binds the group to <clusterRole> (ClusterRoleBinding coder-cluster-admins).
+  clusterAccess:
+    enabled: false
+    clientId: kubernetes
+    group: coder-cluster-admins
+    prefix: "keycloak:"
+    clusterRole: cluster-admin
+    # Coder roles that count as admins: their workspaces get the kubeconfig, and (syncGroup) the platform service
+    # keeps the Keycloak group's members equal to the Coder users with one of these roles who sign in with Keycloak
+    # (matched by email, else username; checked every minute). Members added in Keycloak by hand are removed then.
+    adminRoles: owner
+    syncGroup: true
   # "false": the admin below signs in with its password, everyone else with Keycloak (they have no password).
   # "true": Keycloak sign-in only. Coder then refuses every password login (owners too), so the admin is linked to the
   # Keycloak account with firstUser.email instead and signs in with Keycloak.
@@ -323,7 +345,7 @@ coder-workspace:
   cliImage: '{{ include "platform.image" (list . "ghcr.io/coder/coder:latest") }}'
   loginImage: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   # The workspace image (development/workspace-image): desktop, JetBrains Mono Nerd Font and tmux preinstalled.
-  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.6.0") }}'
+  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.7.0") }}'
   imagePullSecrets: []
   secrets:
     tlsCa: '{{ .Values.global.secretNames.tlsCa }}'
