@@ -38,6 +38,9 @@ Coder `2.0.0-platform.23`.
     are kept. Tested on Minikube: 1 → 3 GiB in 28 s, data intact.
   * The workspace template ignores the home volume's size after creation (`lifecycle { ignore_changes }`), so a
     later build never shrinks a grown disk.
+* **Agent outdated indicator** (workspace page, next to the agent's name): the glowing green **Update** pill of
+  `workspace-update.html` (rim, recessed refresh icon with a pulsing ring), built in HTML and CSS for both themes,
+  instead of the badge images. Clicking it still opens the details and "Update workspace".
 * **Images:** the New Image dialog fits without a horizontal scroll bar.
 * New bundled image: `registry.k8s.io/metrics-server/metrics-server:v0.8.1`. The platform service's builder Role may
   now manage PVCs in the workspace namespace; workspace backups use the image builder's volume.
