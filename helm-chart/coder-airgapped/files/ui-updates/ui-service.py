@@ -36,6 +36,9 @@
   POST /__coder-ui/api/avatar {"dataUrl"}     set mine               POST /__coder-ui/api/avatar/reset   remove mine
   GET  /__coder-ui/avatar/default?v=<sha>     the default avatar     GET  /__coder-ui/api/avatar/defaults   who gets it
   GET  /__coder-ui/api/gallery                the provided pictures to choose from as logo or avatar (signed in)
+  GET  /__coder-ui/background/<login|dashboard>?v=<sha>   a background image (public: the sign-in page shows it)
+  GET  /__coder-ui/api/backgrounds            admins: both background images, their opacity, fit and layer
+  POST /__coder-ui/api/backgrounds {slot, dataUrl?, opacity?, fit?, layer?}   POST /api/backgrounds/reset {slot}
   GET  /__coder-ui/gallery/<file>?v=<sha>     one of them (public, like the default avatar)
 
   Chat (every signed-in user; admins in ADMIN_ROLES write to anyone, others to admins or whoever wrote to them;
@@ -43,7 +46,8 @@
   GET  /__coder-ui/api/chat/state          me, my conversations (last message, unread), newest message id
   GET  /__coder-ui/api/chat/messages?peer=<user id>[&before=<id>]   one conversation (100 at a time)
   GET  /__coder-ui/api/chat/poll?after=<id>&typing=<ids>   long poll (25 s): new messages, who is typing to me
-  POST /__coder-ui/api/chat/send {"to", "text"}   POST /api/chat/typing {"to"}   POST /api/chat/read {"to", "last"}
+  POST /__coder-ui/api/chat/send {"to", "text", "clientId"?}   (the same clientId again: the first message, not a copy)
+  POST /__coder-ui/api/chat/typing {"to"}   POST /api/chat/read {"to", "last"}
   GET  /__coder-ui/api/chat/admins          the admins a user may write to (their line to support): those with chat on
   POST /__coder-ui/api/chat/availability {"enabled"}   admins: their chat on / off (off: developers can't write to them)
   GET  /__coder-ui/api/chat/file/<id>       a message's screenshot (the two people in the conversation only)
@@ -88,6 +92,7 @@ read in-cluster (Kubernetes API, RBAC limited to the named Secrets) and never se
 """
 
 import base64
+import collections
 import hashlib
 import json
 import mimetypes
@@ -2941,6 +2946,163 @@ def parse_logo(data_url):
 LOGOS = None
 
 
+# --------------------------------------------------------------------------- Background images (Coder's database)
+BG_SLOTS = ("login", "dashboard")
+BG_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"}
+BG_MAX_BYTES = 4 * 1024 * 1024  # the dashboard sends at most 1920 x 1200 (WebP); an animated GIF as it is
+BG_FITS = ("cover", "contain", "tile")
+BG_LAYERS = ("under", "over")  # behind the page's content, or a faint watermark over it
+BG_OPACITY = (0.02, 0.3, 0.06)  # min, max, default: hardly noticeable
+
+
+def clean_bg_settings(payload, current=None):
+    """{opacity, fit, layer} from a request, within bounds; missing ones keep `current` (else the defaults)."""
+    current = current or {}
+    out = {
+        "opacity": current.get("opacity", BG_OPACITY[2]),
+        "fit": current.get("fit", "cover"),
+        "layer": current.get("layer", "under"),
+    }
+    if payload.get("opacity") is not None:
+        try:
+            value = float(payload["opacity"])
+        except (TypeError, ValueError):
+            raise ValueError("opacity must be a number.") from None
+        out["opacity"] = round(min(BG_OPACITY[1], max(BG_OPACITY[0], value)), 3)
+    if payload.get("fit") is not None:
+        if payload["fit"] not in BG_FITS:
+            raise ValueError("fit must be one of %s." % ", ".join(BG_FITS))
+        out["fit"] = payload["fit"]
+    if payload.get("layer") is not None:
+        if payload["layer"] not in BG_LAYERS:
+            raise ValueError("layer must be one of %s." % ", ".join(BG_LAYERS))
+        out["layer"] = payload["layer"]
+    return out
+
+
+def parse_background(data_url):
+    m = re.match(r"^data:([a-z+/.-]+);base64,([A-Za-z0-9+/=\s]+)$", data_url or "")
+    if not m or m.group(1) not in BG_TYPES:
+        raise ValueError("Upload a PNG, JPEG, WebP, GIF or AVIF image.")
+    data = base64.b64decode(m.group(2))
+    if not data or len(data) > BG_MAX_BYTES:
+        raise ValueError("The image must be smaller than %d MB." % (BG_MAX_BYTES // 1048576))
+    if image_type(data) != m.group(1):
+        raise ValueError("The file is not a valid %s image." % m.group(1).split("/")[1].upper())
+    return m.group(1), data
+
+
+class BackgroundStore:
+    """The background images of the sign-in page and of the dashboard (Customize > Background image): one row per
+    slot in coder_ui_updates.background of Coder's own database, with how faint it is (opacity), how it fills the
+    window (fit) and whether it lies behind the page's content or over it (layer). boot.js hands them to every page.
+    Cached like the logo: boot.js never waits for the database."""
+
+    def __init__(self, logos):
+        self.logos = logos  # shares the logo store's connection to Coder's database
+        self.ready = False
+        self.lock = threading.Lock()
+        self.cache, self.loaded_at, self.refreshing = {}, 0, False
+
+    @property
+    def pool(self):
+        return self.logos.pool if self.logos else None
+
+    def _schema(self):
+        if self.ready:
+            return
+        self.pool.query("CREATE SCHEMA IF NOT EXISTS coder_ui_updates")
+        self.pool.query(
+            """CREATE TABLE IF NOT EXISTS coder_ui_updates.background (
+            slot text PRIMARY KEY, content_type text NOT NULL, data bytea NOT NULL, sha256 text NOT NULL,
+            opacity real NOT NULL, fit text NOT NULL, layer text NOT NULL, updated_by text,
+            updated_at timestamptz NOT NULL DEFAULT now())"""
+        )
+        self.ready = True
+
+    def all(self, fresh=False):
+        """{slot: {"type", "data", "sha", "opacity", "fit", "layer", "by", "at"}}. Raises when the database is down."""
+        if not self.pool:
+            return {}
+        with self.lock:
+            if not fresh and time.time() - self.loaded_at < 30:
+                return self.cache
+            self._schema()
+            rows = self.pool.query(
+                "SELECT slot, content_type, data, sha256, opacity, fit, layer, updated_by, updated_at::text "
+                "FROM coder_ui_updates.background"
+            )
+            self.cache = {
+                r[0]: {"type": r[1], "data": r[2], "sha": r[3], "opacity": float(r[4]), "fit": r[5], "layer": r[6],
+                       "by": r[7], "at": r[8]}
+                for r in rows if r[0] in BG_SLOTS
+            }
+            self.loaded_at = time.time()
+            return self.cache
+
+    def peek(self):
+        """The cached copy, refreshed in the background (at most every 30 seconds)."""
+        if time.time() - self.loaded_at >= 30 and not self.refreshing and self.pool:
+            self.refreshing = True
+
+            def refresh():
+                try:
+                    self.all(fresh=True)
+                except Exception as e:  # noqa: BLE001 - keep the last good copy
+                    log(event="background-read-failed", error=str(e)[:200])
+                    self.loaded_at = time.time()
+                finally:
+                    self.refreshing = False
+
+            threading.Thread(target=refresh, daemon=True).start()
+        return self.cache
+
+    def put(self, slot, ctype, data, settings, user):
+        sha = hashlib.sha256(data).hexdigest()[:16]
+        with self.lock:
+            self._schema()
+            self.pool.query(
+                """INSERT INTO coder_ui_updates.background (slot, content_type, data, sha256, opacity, fit, layer,
+                updated_by, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) ON CONFLICT (slot) DO UPDATE SET
+                content_type = excluded.content_type, data = excluded.data, sha256 = excluded.sha256,
+                opacity = excluded.opacity, fit = excluded.fit, layer = excluded.layer,
+                updated_by = excluded.updated_by, updated_at = now()""",
+                [slot, ctype, data, sha, settings["opacity"], settings["fit"], settings["layer"], user],
+            )
+            self.loaded_at = 0
+        self.all(fresh=True)
+
+    def set_settings(self, slot, settings, user):
+        with self.lock:
+            self._schema()
+            hit = self.pool.query(
+                "UPDATE coder_ui_updates.background SET opacity = $2, fit = $3, layer = $4, updated_by = $5, "
+                "updated_at = now() WHERE slot = $1 RETURNING slot",
+                [slot, settings["opacity"], settings["fit"], settings["layer"], user],
+            )
+            self.loaded_at = 0
+        self.all(fresh=True)
+        return bool(hit)
+
+    def reset(self, slot):
+        with self.lock:
+            self._schema()
+            self.pool.query("DELETE FROM coder_ui_updates.background WHERE slot = $1", [slot])
+            self.loaded_at = 0
+        self.all(fresh=True)
+
+
+def background_public(slot, bg):
+    """What a page needs to draw it (boot.js, the settings page)."""
+    if not bg:
+        return None
+    return {"url": "%s/background/%s?v=%s" % (BASE, slot, bg["sha"]), "opacity": bg["opacity"], "fit": bg["fit"],
+            "layer": bg["layer"]}
+
+
+BACKGROUNDS = None
+
+
 # --------------------------------------------------------------------------- Template icons (Coder's database)
 ICON_MAX_BYTES = (
     1024 * 1024
@@ -4850,6 +5012,9 @@ CHAT_KEEP_DAYS = 30
 CHAT_TYPING_SECONDS = 6  # a "typing" signal lasts this long unless renewed (chat.js renews it every 2.5 s)
 CHAT_POLL_SECONDS = 25  # a long poll answers at the latest after this, with nothing new
 CHAT_RATE = (30, 60)  # at most 30 messages per 60 seconds per sender
+CHAT_ADMIN_RATE = (120, 60)  # admins answering many conversations at once
+CHAT_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+CHAT_CLIENT_IDS = 20000  # sends remembered by their client id (a retried send is not stored twice), for 10 minutes
 CHAT_MAX_IMAGE = (
     4 * 1024 * 1024
 )  # a screenshot attached to a message (PNG / JPEG / WebP)
@@ -4873,6 +5038,9 @@ class ChatStore:
         )  # user id -> newest message id they sent or received (filled lazily)
         self.typing = {}  # (from id, to id) -> expiry time
         self.sent = {}  # user id -> recent send times (rate limit)
+        # (user id, client id) -> (time, message): a send retried with the same client id (a lost answer, a double
+        # Enter) returns the message stored the first time instead of storing it again
+        self.by_client = collections.OrderedDict()
         # deleted conversations, told to both sides through the poll: user id -> [(version, peer id)]. Versions start at
         # this boot's time in ms, so they only grow, across restarts too.
         self.clear_ver = int(time.time() * 1000)
@@ -5010,19 +5178,31 @@ class ChatStore:
             }
         return {"id": peer_id, "username": r["to_name"], "name": r["to_display"] or ""}
 
-    def rate_ok(self, user_id):
-        times = [
-            t for t in self.sent.get(user_id, []) if time.time() - t < CHAT_RATE[1]
-        ]
-        self.sent[user_id] = times
-        if len(times) >= CHAT_RATE[0]:
-            return False
-        times.append(time.time())
-        return True
+    def rate_ok(self, user_id, admin=False):
+        limit, window = CHAT_ADMIN_RATE if admin else CHAT_RATE
+        with self.lock:
+            times = [t for t in self.sent.get(user_id, []) if time.time() - t < window]
+            self.sent[user_id] = times
+            if len(times) >= limit:
+                return False
+            times.append(time.time())
+            return True
 
-    def send(self, user, admin, peer, text, image=None, page=""):
-        """image: (content type, bytes) or None; page: where it was taken (path on Coder's host)."""
+    def sent_before(self, user_id, client_id):
+        """The message this user already sent with this client id (in the last 10 minutes), else None."""
+        if not client_id:
+            return None
+        with self.lock:
+            hit = self.by_client.get((user_id, client_id))
+            return hit[1] if hit and time.time() - hit[0] < 600 else None
+
+    def send(self, user, admin, peer, text, image=None, page="", client_id=""):
+        """image: (content type, bytes) or None; page: where it was taken (path on Coder's host). client_id: the
+        sender's id for this message; sending it again returns the first message."""
         with self.lock, self.connect() as db:
+            hit = self.by_client.get((user["id"], client_id)) if client_id else None
+            if hit and time.time() - hit[0] < 600:
+                return hit[1]
             cur = db.execute(
                 """INSERT INTO chat_messages (from_id, from_name, from_display, to_id, to_name, to_display, text, sent_at,
                                 from_admin, to_admin, image_type, page) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -5049,13 +5229,18 @@ class ChatStore:
             row = db.execute(
                 "SELECT * FROM chat_messages WHERE id = ?", (cur.lastrowid,)
             ).fetchone()
+            message = self._message(row)
+            if client_id:
+                self.by_client[(user["id"], client_id)] = (time.time(), message)
+                while len(self.by_client) > CHAT_CLIENT_IDS:
+                    self.by_client.popitem(last=False)
         with self.changed:
             self.latest[user["id"]] = self.latest[peer["id"]] = row["id"]
             self.typing.pop(
                 (user["id"], peer["id"]), None
             )  # a sent message ends "typing"
             self.changed.notify_all()
-        return self._message(row)
+        return message
 
     def set_typing(self, user_id, peer_id):
         with self.changed:
@@ -6256,6 +6441,7 @@ def boot_js():
     cls = STORE.get_setting("classification", CLASSIFICATION_DEFAULT)
     avatars = AVATARS.urls() if AVATARS else {}  # never waits for the database either
     default_avatar = AvatarStore.default_url()
+    backgrounds = BACKGROUNDS.peek() if BACKGROUNDS else {}
     js = (
         "window.__cuiLogo=%s;window.__cuiClassification=%s;window.__cuiAvatars=%s;window.__cuiAvatarDefault=%s;\n"
         % (
@@ -6265,6 +6451,8 @@ def boot_js():
             json.dumps(default_avatar),
         )
     )
+    js += "window.__cuiBackgrounds=%s;\n" % json.dumps(
+        {slot: background_public(slot, backgrounds.get(slot)) for slot in BG_SLOTS})
     if default_avatar:
         # Who gets the default avatar is not public: this browser's last answer (dashboard.js refreshes it once signed in).
         js += (
@@ -6275,6 +6463,18 @@ def boot_js():
 
 
 # --------------------------------------------------------------------------- HTTP
+
+
+class Server(ThreadingHTTPServer):
+    """One thread per request. Its accept queue holds a burst (everyone's chat at once; socketserver's default of 5
+    made the proxy answer 502), and a client that went away mid-answer (a closed tab's long poll) is not an error."""
+
+    request_queue_size = 1024
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -6291,10 +6491,14 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(body, str):
             body = body.encode()
         self.send_response(status)
+        # A connection this handler will close is said to close: the proxy then never reuses it for the next
+        # request (which would come back 502 under load).
+        closing = {"Connection": "close"} if self.close_connection else {}
         for k, v in {
             **self.SECURITY,
             "Content-Type": content_type,
             "Content-Length": str(len(body)),
+            **closing,
             **(headers or {}),
         }.items():
             self.send_header(k, v)
@@ -6366,6 +6570,8 @@ class Handler(BaseHTTPRequestHandler):
             limit = LOGO_MAX_BYTES * 2  # base64 of the largest logo
         if urllib.parse.urlsplit(self.path).path == BASE + "/api/avatar":
             limit = AVATAR_MAX_BYTES * 2
+        if urllib.parse.urlsplit(self.path).path == BASE + "/api/backgrounds":
+            limit = BG_MAX_BYTES * 2
         if urllib.parse.urlsplit(self.path).path == BASE + "/api/icons":
             limit = (
                 ICON_MAX_BYTES * 2 + 1024
@@ -6515,6 +6721,32 @@ class Handler(BaseHTTPRequestHandler):
                 )
         if path.startswith(BASE + "/favicon/"):
             return self.favicon(path[len(BASE) + 9 :])
+        if path.startswith(BASE + "/background/"):
+            slot = path[len(BASE) + 12 :]
+            try:
+                bg = (BACKGROUNDS.all() if BACKGROUNDS else {}).get(slot)
+            except Exception as e:  # noqa: BLE001
+                return self.send(503, "Coder's database is not reachable: %s\n" % str(e)[:200])
+            if not bg:
+                return self.send(404, "no background\n", headers={"Cache-Control": "no-cache"})
+            return self.send(200, bg["data"], bg["type"], {
+                "Cache-Control": "public, max-age=31536000, immutable" if "v=" in url.query else "no-cache"})
+        if path == BASE + "/api/backgrounds":
+            user, err = self.user(admin=True)
+            if err:
+                return
+            try:
+                found = BACKGROUNDS.all(fresh=True) if BACKGROUNDS else {}
+            except Exception as e:  # noqa: BLE001
+                return self.send_json(503, {"error": "Coder's database is not reachable: %s" % str(e)[:200]})
+            out = {"available": bool(BACKGROUNDS and BACKGROUNDS.pool), "limits": {
+                "opacity": {"min": BG_OPACITY[0], "max": BG_OPACITY[1], "default": BG_OPACITY[2]},
+                "fits": list(BG_FITS), "layers": list(BG_LAYERS), "maxBytes": BG_MAX_BYTES}}
+            for slot in BG_SLOTS:
+                bg = found.get(slot)
+                out[slot] = dict(background_public(slot, bg), type=bg["type"], bytes=len(bg["data"]),
+                                 updatedBy=bg["by"], updatedAt=bg["at"]) if bg else None
+            return self.send_json(200, out)
         if path == BASE + "/api/logo":
             try:
                 logo = LOGOS.get(fresh=True) if LOGOS else None
@@ -7055,6 +7287,11 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 )
             image = (m.group(1), data)
+        client_id = str(payload.get("clientId") or "")
+        client_id = client_id if CHAT_CLIENT_ID_RE.match(client_id) else ""
+        again = CHAT.sent_before(user["id"], client_id)
+        if again:
+            return self.send_json(200, {"message": again})
         if not text and not image:
             return self.send_json(400, {"error": "The message is empty."})
         if len(text) > CHAT_MAX_TEXT:
@@ -7076,13 +7313,13 @@ class Handler(BaseHTTPRequestHandler):
                 )
         if not peer:
             return self.send_json(404, {"error": "That user doesn't exist (any more)."})
-        if not CHAT.rate_ok(user["id"]):
+        if not CHAT.rate_ok(user["id"], admin):
             return self.send_json(
                 429, {"error": "Too many messages at once; wait a moment."}
             )
         page = str(payload.get("page") or "")[:300] if image else ""
         page = page if page.startswith("/") else ""
-        message = CHAT.send(user, admin, peer, text, image, page)
+        message = CHAT.send(user, admin, peer, text, image, page, client_id)
         log(
             event="chat",
             sender=user["username"],
@@ -7128,6 +7365,8 @@ class Handler(BaseHTTPRequestHandler):
             BASE + "/api/icons/delete",
             BASE + "/api/logo",
             BASE + "/api/logo/reset",
+            BASE + "/api/backgrounds",
+            BASE + "/api/backgrounds/reset",
             BASE + "/api/avatar",
             BASE + "/api/avatar/reset",
             BASE + "/api/quota",
@@ -7215,6 +7454,35 @@ class Handler(BaseHTTPRequestHandler):
             STORE.put_setting("user_quota", value)
             log(event="quota-saved", user=user["username"], default=value["default"], overrides=len(value["users"]))
             return self.send_json(200, {"ok": True, "settings": quota_settings()})
+        if path in (BASE + "/api/backgrounds", BASE + "/api/backgrounds/reset"):
+            slot = payload.get("slot")
+            if slot not in BG_SLOTS:
+                return self.send_json(400, {"error": "slot must be one of %s." % ", ".join(BG_SLOTS)})
+            if not BACKGROUNDS or not BACKGROUNDS.pool:
+                return self.send_json(503, {"error": "Coder's database is not configured for this service."})
+            try:
+                if path.endswith("/reset"):
+                    BACKGROUNDS.reset(slot)
+                    log(event="background-reset", user=user["username"], slot=slot)
+                    return self.send_json(200, {"ok": True, "set": False})
+                current = BACKGROUNDS.all(fresh=True).get(slot)
+                settings = clean_bg_settings(payload, current)
+                if payload.get("dataUrl"):
+                    ctype, data = parse_background(payload["dataUrl"])
+                    BACKGROUNDS.put(slot, ctype, data, settings, user["username"])
+                    log(event="background-saved", user=user["username"], slot=slot, type=ctype, bytes=len(data),
+                        **settings)
+                elif current:
+                    BACKGROUNDS.set_settings(slot, settings, user["username"])
+                    log(event="background-settings", user=user["username"], slot=slot, **settings)
+                else:
+                    return self.send_json(400, {"error": "Choose an image first."})
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except Exception as e:  # noqa: BLE001
+                return self.send_json(503, {"error": "Coder's database: %s" % str(e)[:200]})
+            return self.send_json(200, {"ok": True, "set": True, slot: background_public(
+                slot, BACKGROUNDS.all().get(slot))})
         if path in (BASE + "/api/logo", BASE + "/api/logo/reset"):
             if not LOGOS or not LOGOS.pool:
                 return self.send_json(
@@ -7460,7 +7728,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY
+    global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY, BACKGROUNDS
     STORE = Store(DB_PATH)
     CHAT = ChatStore(DB_PATH)
     DEFAULTS = Defaults(
@@ -7469,11 +7737,12 @@ def main():
     GALLERY = Gallery(os.path.join(DEFAULTS_DIR, "gallery"))
     LOGOS = LogoStore()
     AVATARS = AvatarStore(LOGOS)
+    BACKGROUNDS = BackgroundStore(LOGOS)
     ICONS = IconStore(LOGOS)
     MONITOR = Monitor()
     if CLUSTER_ACCESS_GROUP:
         ClusterAdminSync().start()
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    server = Server(("0.0.0.0", PORT), Handler)
     server.daemon_threads = True
     log(
         event="listening",

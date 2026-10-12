@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.23.0 – 2026-10-12
+
+Coder `2.0.0-platform.20`.
+
+* **Chat: screenshots work again.** "No screenshot: Attempting to parse an unsupported color function "oklab"": html2canvas
+  1.4.1 cannot read the `oklab()` / `oklch()` colours Tailwind 4 uses. The dashboard now uses html2canvas-pro 2.4.5 (a
+  maintained fork that reads them). It is bundled into the dashboard, so nothing is fetched at run time and it works
+  air-gapped.
+* **Chat: no more double messages.** When a message opened a window, it was queued while the conversation's history
+  loaded, and the history held it too: it showed twice (stored once). Every message is now shown once per id.
+  * Each send also carries an id of its own (`clientId`), and the platform service stores a retried send once. The
+    dashboard retries a send that got no answer or a proxy error (502 / 503 / 504), up to twice. A second Enter in
+    the same instant no longer sends twice.
+* **Chat: built for volume.**
+  * The platform service's HTTP server now queues up to 1024 waiting connections, up from Python's default of 5, at
+    which a burst of sends got 502 from the proxy. It closes the connections it says it will close
+    (`Connection: close`). A tab's long poll ending mid-answer is no longer logged as an error. Sending is thread-safe.
+  * Admins may send 120 messages a minute (others 30).
+  * Measured on Minikube: 40 developers sending 120 messages at once were all accepted in about 0.6 s, each stored
+    once.
+  * Long conversations load 100 messages at a time: scroll to the top, or "Earlier messages".
+* **Chat: the console, for admins.** The admin's Chats bar opens one command center instead of a pile of windows.
+  * **Left, the card index ("Rolodex").** Every conversation in one list, in three views:
+    * **Waiting:** the last message is theirs, longest wait first (triage order);
+    * **Unread;**
+    * **All.**
+
+    Search by person or text. Each row shows how long they have waited, the unread count and "typing…". Only the
+    rows on screen are drawn, so hundreds of conversations stay quick.
+  * **Right, the card.** One conversation, with previous / next, "Next waiting", screenshot, pop out (into its own
+    window) and delete. Moving through the index flips the card in, unless animations are off.
+  * **Next after reply.** When on, sending an answer flips straight to the next conversation waiting.
+  * **Keys:** Alt+↓ / Alt+↑ next / previous, Alt+N next waiting, / or Ctrl+K search, ↑ ↓ Enter in the list, Escape
+    back to the list (from the message box) or closed.
+  * **No more pop-up storms.** For admins, a new message opens a window only while the console is closed and the
+    dock has room (up to three). Otherwise it waits, counted, in the console. Developers' chat is as before.
+* **Customize: background images** for the sign-in page and the dashboard, each with its own image, strength (2–30 %,
+  default 6 %: barely noticeable), fit (fill, fit inside, tile) and layer.
+  * **Behind the page (default).** The picture lies beneath everything, mixed into the page's own background colour
+    (under a veil of that colour). It shows only where the page has no background of its own, follows the theme, and
+    leaves every other style as it is.
+  * **Over the page.** A faint watermark the mouse passes through.
+  * Upload any picture (made at most 1920 × 1200, WebP; an animated GIF is kept as it is) or pick one of the
+    provided pictures. A preview shows the result.
+  * The platform service keeps them in Coder's database (`coder_ui_updates.background`). `boot.js` hands them to
+    every page, so they are there from the first paint, the sign-in page included.
+
 ## 1.22.1 – 2026-10-11
 
 Coder `2.0.0-platform.19` (unchanged).
