@@ -54,8 +54,14 @@ BASE = "/__banner"
 SESSION_COOKIE = "coder_session_token"
 LEVELS = ("info", "success", "warning", "critical")
 # Text effects. The names are the contract with banner.js (which implements them) and admin.html (the drop-down).
-EFFECTS = ("none", "typewriter", "fade", "rise", "wave", "bounce", "flip", "shake", "pulse", "rainbow")
-LIMITS = {"message": 400, "title": 80, "linkText": 60, "linkUrl": 500}
+EFFECTS = ("none", "typewriter", "fade", "rise", "wave", "bounce", "flip", "shake", "pulse", "rainbow", "starwars")
+# The crawl's pace (effect "starwars") and the banner's font (the dashboard's bundled fonts and generic stacks:
+# nothing is fetched, the network may be air-gapped). Keep in sync with the dashboard's bannerFonts.ts.
+SPEEDS = ("slow", "normal", "fast")
+FONTS = ("default", "sans", "serif", "condensed", "geist-mono", "ibm-plex-mono", "jetbrains-mono", "fira-code",
+         "source-code-pro")
+# 4000: long broadcasts are what the crawl and the dashboard's scroll-down view are for.
+LIMITS = {"message": 4000, "title": 80, "linkText": 60, "linkUrl": 500}
 CSRF_HEADER = ("X-Requested-With", "coder-banner-admin")
 LIVE_ENABLED = os.environ.get("LIVE_ENABLED", "1") not in ("0", "false", "no", "")
 LIVE_PORT = int(os.environ.get("LIVE_PORT", "8081"))
@@ -78,6 +84,8 @@ FIELDS = {
     "refreshSeconds": 60,
     "effect": "none",
     "repeat": False,
+    "speed": "normal",
+    "font": "default",
 }
 # Files the admin page loads, served only to admins: path -> (file, content type, directory; None = APP_DIR)
 ADMIN_FILES = {
@@ -243,6 +251,12 @@ class Banner:
         out["effect"] = payload.get("effect", "none")
         if out["effect"] not in EFFECTS:
             raise BannerError("Text effect must be one of: %s." % ", ".join(EFFECTS))
+        out["speed"] = payload.get("speed", "normal")
+        if out["speed"] not in SPEEDS:
+            raise BannerError("Speed must be one of: %s." % ", ".join(SPEEDS))
+        out["font"] = payload.get("font", "default")
+        if out["font"] not in FONTS:
+            raise BannerError("Font must be one of: %s." % ", ".join(FONTS))
         seconds = payload.get("refreshSeconds", FIELDS["refreshSeconds"])
         if isinstance(seconds, bool) or not isinstance(seconds, int) or not 15 <= seconds <= 3600:
             raise BannerError("Check interval must be between 15 and 3600 seconds.")

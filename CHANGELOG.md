@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.19.0 – 2026-10-11
+
+Coder `2.0.0-platform.17` (fork `73d2c8a54`).
+
+* **App panels pop out into their own browser window, and come back.** This works like the Terminal panel.
+  * **Pop out** moves the app (File Browser, Desktop, marimo, code-server) into a browser window of its own. The
+    panel lets go of it: one copy of the app, not two (the desktop has a single screen).
+  * **Bring back**, or closing that window, shows it in the panel again. The bin closes the window too.
+* **Announcements: the Star Wars opening crawl.** The new effect "Star Wars crawl" makes the message rise through the
+  banner, tilted away, and recede into the distance, fading at the top.
+  * Its pace is steady: the duration follows the text's height and a **speed** setting (slow, normal, fast), so a
+    long broadcast takes as long as it needs.
+  * Without repeat it plays once and then the message stays.
+* **Announcements: a font selector.** It applies to the banner and its scroll-down view. The options are the
+  dashboard's bundled fonts (Geist, Geist Mono, IBM Plex Mono, JetBrains Mono, Fira Code, Source Code Pro) and
+  generic system serif, sans and condensed stacks. Nothing is downloaded, as the network may be air-gapped.
+* **Announcements: scroll mode.** A bordered down arrow at the banner's left rolls a terminal-like view of the whole
+  message down over the page, so nobody has to wait for an effect.
+  * It sits above everything, about a quarter of the page tall, and scrolls when the message is longer.
+  * It renders headings, lists, links, code, emoji and images in the banner's font, on a dark, monospaced,
+    faintly scan-lined screen with a prompt and a blinking cursor.
+  * A click outside, Escape or the arrow rolls it back up.
+* **Announcements can be longer and richer.**
+  * Up to 4000 characters (was 400), in the dashboard and in the banner service, including its own admin page.
+  * Markdown images: `![alt](https://… or /path)`, small inline in the banner and full width in the scroll-down view.
+  * For the scroll-down view: `#` headings, `-` / `1.` lists, and blank lines between paragraphs.
+  * The banner service stores `speed` and `font`. Announcements saved before keep their look (normal, the dashboard
+    font).
+
 ## 1.18.1 – 2026-10-11
 
 Coder `2.0.0-platform.16` (fork `6e0f2b39b`).

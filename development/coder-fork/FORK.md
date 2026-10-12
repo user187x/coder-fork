@@ -5,12 +5,12 @@ The Coder server image is built from the fork, which lives in its own repository
 | | |
 |---|---|
 | Repository | `git@github.com:user187x/coder.git`, branch `main` (local clone: `~/workspace/coder`) |
-| Image | `ghcr.io/user187x/coder-platform:2.0.0-platform.16` (`coder version`: `v2.0.0-platform.16+6e0f2b3`) |
-| Built from | `6e0f2b39b1405e5430ccd95076cbb23a8136758f`, clean tree, 2026-10-11 |
-| Air-gap image | `…:2.0.0-platform.16-airgap` = the image above + Terraform provider mirror (`../airgap-image/`, `../tools/build-airgap-image.sh`); it is what the chart runs |
-| Previous | `2.0.0-platform.15` (`0a8293071`), `2.0.0-platform.14` (`84b706a1f`), `2.0.0-platform.13` (`237423e43`), `2.0.0-platform.12` (`2bd982755`), `2.0.0-platform.11` (`92daaa856`), `2.0.0-platform.10` (`f6ebdb50e`), `2.0.0-platform.9` (`019d9745b`), `2.0.0-platform.8` (`a68ffe61e`), `2.0.0-platform.7` (`d7a068929`), `2.0.0-platform.6` (`a65bc39b7`), `2.0.0-platform.5` (`ea80521c2`), `2.0.0-platform.4` (`v2.0.0-platform.4+d01b8f6`, built from `d01b8f6` plus uncommitted changes) |
+| Image | `ghcr.io/user187x/coder-platform:2.0.0-platform.17` (`coder version`: `v2.0.0-platform.17+73d2c8a`) |
+| Built from | `73d2c8a5424679895cd9294dcca9b62e2c8cb6d2`, clean tree, 2026-10-11 |
+| Air-gap image | `…:2.0.0-platform.17-airgap` = the image above + Terraform provider mirror (`../airgap-image/`, `../tools/build-airgap-image.sh`); it is what the chart runs |
+| Previous | `2.0.0-platform.16` (`6e0f2b39b`), `2.0.0-platform.15` (`0a8293071`), `2.0.0-platform.14` (`84b706a1f`), `2.0.0-platform.13` (`237423e43`), `2.0.0-platform.12` (`2bd982755`), `2.0.0-platform.11` (`92daaa856`), `2.0.0-platform.10` (`f6ebdb50e`), `2.0.0-platform.9` (`019d9745b`), `2.0.0-platform.8` (`a68ffe61e`), `2.0.0-platform.7` (`d7a068929`), `2.0.0-platform.6` (`a65bc39b7`), `2.0.0-platform.5` (`ea80521c2`), `2.0.0-platform.4` (`v2.0.0-platform.4+d01b8f6`, built from `d01b8f6` plus uncommitted changes) |
 
-`main` is pushed (`6e0f2b39b`).
+`main` is pushed (`73d2c8a54`).
 
 **Build requirements:** Go (1.26), Docker, and Node.js **22–24** (the dashboard's `engines`; Node 26 fails `pnpm build`
 and its unit tests) with pnpm (`corepack pnpm`). E.g. `PATH=~/.config/nvm/versions/node/v24.21.0/bin:$PATH`, plus a
@@ -20,8 +20,8 @@ and its unit tests) with pnpm (`corepack pnpm`). E.g. `PATH=~/.config/nvm/versio
 
 ```bash
 cd ~/workspace/coder
-./scripts/build_platform_image.sh --image ghcr.io/user187x/coder-platform --tag 2.0.0-platform.17 --arch amd64   # [--push]
-cd -; ../tools/build-airgap-image.sh 2.0.0-platform.17
+./scripts/build_platform_image.sh --image ghcr.io/user187x/coder-platform --tag 2.0.0-platform.18 --arch amd64   # [--push]
+cd -; ../tools/build-airgap-image.sh 2.0.0-platform.18
 ```
 
 Then, in this repository: update the pinned commit above, the image tag in

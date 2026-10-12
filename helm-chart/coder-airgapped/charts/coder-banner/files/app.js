@@ -134,7 +134,7 @@
   function renderState() {
     var form = readForm();
     var dirty = !sameAsServer(form);
-    $('count').textContent = $('message').value.length + ' / 400';
+    $('count').textContent = $('message').value.length + ' / 4000';
     $('publish').disabled = busy || !dirty || !form.message;
     $('revert').disabled = busy || !dirty;
     $('toggle').disabled = busy;
