@@ -2,7 +2,7 @@
 
 ## 1.26.1 – 2026-10-12
 
-Coder `2.0.0-platform.23` (rebuilt: `03b8450f2`).
+Coder `2.0.0-platform.23` (rebuilt: `7e0e03860`).
 
 * **Workspace metric graphs, coloured by magnitude.** Each bar shows how much of what there is its reading uses:
   * green under 50 %;
@@ -12,13 +12,15 @@ Coder `2.0.0-platform.23` (rebuilt: `03b8450f2`).
   * red from 90 % (critical).
 
   Load average counts per core (1.0 = every core busy). A metric without a scale stays green.
-* **Graphs control**, the last item of the metrics row: "live · 10 s" or "every 30 s" shows how the graphs advance.
-  Its panel gives:
-  * how often the agent reports each metric (set in the template; Home Disk and Load Average every 60 s);
-  * the choice of Live (a bar per reading), 30 s, 1 min or 5 min (a bar per period, its highest reading, so spikes
-    stay visible), remembered in the browser;
-  * how long a span the graphs cover (40 bars: 7 min live, up to 3.3 h at 5 min);
-  * the colour legend.
+* **Refresh Interval menu**, in the agent card's header, directly left of Open ports and built like it: the interval
+  in the circle (10s, 30s, 1m, 5m or off), then "Refresh Interval". Its menu offers:
+  * Live (a bar per reading, as the agent sends it);
+  * 30 s, 1 min or 5 min (a bar per period, its highest reading, so spikes stay visible; 40 bars cover 20 min to
+    3.3 h);
+  * Off (no graphs and nothing recorded, for a browser short on processing power).
+
+  It also says how often the agent reports each metric (set in the template; Home Disk and Load Average every 60 s)
+  and shows the colour legend. The choice is remembered in the browser.
 
 ## 1.26.0 – 2026-10-12
 
