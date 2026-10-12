@@ -4,13 +4,16 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.21-airgap  sha256:56181d7476e0ef0ab380faab9aa640bdbb554fa07f7d7c0e0e277e7ce7e5c5ff   coder (server); = the fork's platform.21 (fb996a288) + Terraform provider mirror
+ghcr.io/user187x/coder-platform:2.0.0-platform.22-airgap  sha256:3cc65c6d8ae5686a785b3cda4c335e9dc7694a0230905698a13b5e1e756e7379   coder (server); = the fork's platform.22 (73fed2459) + Terraform provider mirror
 ghcr.io/user187x/coder-workspace:1.7.0                    sha256:e814705b7f91d1e9896e558d646668f944531aea348eb3d7d74cccaf674df189   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
+ghcr.io/user187x/coder-image-tools:1.0.0                  sha256:b173c95de907b184a0219d40ac1dedb6c07a929a10406c96856eb9cda092f8af   coder-ui-updates and the Images builder's scans: the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
 
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage
 docker.io/library/python:3.13-alpine                      sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a   coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor)
 ghcr.io/coder/coder:latest                                sha256:38a4cfc548b096484d6d1743e5f1a5af18301ed9a7ffde5150663822f9887026   coder-workspace push-template Job (floating tag, pinned here)
+docker.io/moby/buildkit:v0.33.0-rootless                  sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef   Images view: the build Jobs (BuildKit rootless)
+docker.io/library/registry:3.1.2                          sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8   Images view: coder-image-registry, where built images are kept
 
 [prereqs]   images/public/prereqs/     public; only if you install these from prereqs/
 ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0              sha256:a2701eb97cdd2a34b1fdb2cb51987f544b706e40bec72ae7146cd8580efefebb   CloudNativePG operator (prereqs/cloudnative-pg-0.29.0.tgz, install.sh --cnpg)

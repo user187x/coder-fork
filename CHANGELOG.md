@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.25.0 – 2026-10-12
+
+Coder `2.0.0-platform.22`.
+
+* **Templates › Images: an image builder in the cluster.** Workspace images for templates to run, built from the
+  dashboard. The tab sits next to Templates (also in the Resources menu). The page shows a filtered table of images:
+  status, contents, size, a security grade, FIPS readiness, when and by whom each was built, a download button and S3
+  backup. Admins and template admins create, edit, build and delete images; everyone else can see them.
+  * **The builder, step by step,** saved as you go:
+    * **Basics:** the image starts from the workspace image or from another built image.
+    * **Packages:** apt packages with suggestions as you type. Each is checked in the apt sources, about 150,000
+      packages for Ubuntu 26.04, or your mirror. A package that isn't there is marked and stops the build until it is
+      dealt with: upload its `.deb`, turn it into a manual installation, or remove it.
+    * **Installations:** named, each a row that opens to its files (uploads up to 2 GB) and its bash script. The
+      script editor highlights, lints with shellcheck as you type (squiggles plus a list), and formats with
+      `shfmt -i 1`. A script with shellcheck errors stops the build.
+    * **Remove & harden:** packages to purge (one the image doesn't have is skipped), plus 8 hardening switches:
+      documentation, sudo, root password, setuid bits, compilers, umask, core dumps, SSH. Also FIPS-aligned crypto
+      and your own hardening script.
+    * **Desktop:** as the base has it, XFCE, GNOME (Flashback, made for VNC) or none.
+    * **Configuration:** environment, aliases, functions and dotfiles (typed or imported).
+    * **Review & build:** a summary, what stops the build, the build's steps, and the generated Dockerfile.
+  * **Builds run as Kubernetes Jobs with BuildKit rootless.** They are pushed to a registry in the cluster
+    (`coder-image-registry`). Every node pulls from `localhost:5000` through a small proxy DaemonSet, so no node
+    needs configuring.
+  * **The build view is the workspace start's panel:**
+    * the stripes and bricks, "IMAGE BUILDING";
+    * a bar that moves on the build's real steps;
+    * the current and next step, the time taken, and a checklist;
+    * the live log;
+    * on failure, the step that failed and why (apt's own message).
+  * **When an image is ready,** the build view shows its reference (`localhost:5000/coder-images/<name>:<version>`)
+    and the Terraform for a template.
+  * **A security health report for every build:**
+    * vulnerabilities by severity (trivy, against the vulnerability database in the bundle), with the worst listed;
+    * secrets found in files;
+    * checks on users, passwords, root, sudo, setuid programs, world-writable files, SSH host keys, leftovers,
+      packages and compilers;
+    * a FIPS 140 check: the OpenSSL FIPS module and default, TLS, SSH, other crypto libraries, the kernel.
+  * **Download** gives a `docker load` tarball. **S3 backup**, per image after every build or on demand, goes to AWS
+    S3 or an S3-compatible store such as MinIO. The settings are in Images › Settings, and the secret key is never
+    shown again.
+  * Finished builds remove their Jobs (and BuildKit's scratch space) at once. A slow Kubernetes API is retried
+    instead of failing the build. The registry garbage-collects deleted images' layers each time it starts.
+  * **The workspace template follows the image:** its desktop session (GNOME), no desktop when it has none, and its
+    dotfiles copied into home directories that lack them.
+* **New images in the bundle:**
+  * `ghcr.io/user187x/coder-image-tools:1.0.0` (`development/image-tools/`): Python with shellcheck, shfmt, trivy and
+    its database, and regctl. It is now the platform service's image.
+  * `moby/buildkit:v0.33.0-rootless`.
+  * `registry:3.1.2`.
+* **Platform service:**
+  * memory limit 192 Mi → 512 Mi;
+  * volume `coder-image-builder` (20 Gi);
+  * registry volume (50 Gi).
+  * Settings: `imageBuilder` in `values.yaml`. EKS notes: `DEPLOY.md` › *the image builder*.
+
 ## 1.24.1 – 2026-10-12
 
 Coder `2.0.0-platform.21` (unchanged).

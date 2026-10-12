@@ -168,6 +168,11 @@ resource "coder_agent" "main" {
       fi
     fi
 
+    # Dotfiles of an image built in Templates > Images: copied into the home directory where it has none of its own.
+    if [ -d /usr/share/coder-image/home ]; then
+      cp -an /usr/share/coder-image/home/. ~/ 2>/dev/null || true
+    fi
+
     # btop refreshes every 100 ms instead of its default 2000: for users without a btop configuration, or whose
     # configuration still has btop's default (a value someone chose is left alone).
     BTOP_CONF=~/.config/btop/btop.conf
@@ -232,7 +237,10 @@ KUBECONFIG_FILE
     # 1. Desktop Environment & noVNC, first: it needs no network. It is in the workspace image
     # (ghcr.io/user187x/coder-workspace, without light-locker); installed here only on an image without it.
     # code-server, File Browser and marimo below are downloaded; offline they are skipped, the rest still starts.
-    if [ ! -f /usr/bin/vncserver ]; then
+    # An image built in Templates > Images names its desktop in /etc/coder-image/desktop: xfce, gnome or none (no
+    # desktop: the Desktop app stays down).
+    IMAGE_DESKTOP=$(cat /etc/coder-image/desktop 2>/dev/null || echo xfce)
+    if [ ! -f /usr/bin/vncserver ] && [ "$IMAGE_DESKTOP" != none ]; then
       sudo apt-get update
       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies dbus-x11 tigervnc-standalone-server novnc websockify light-locker- lightdm- lightdm-gtk-greeter-
       sudo rm -f /etc/xdg/autostart/light-locker.desktop /etc/xdg/autostart/xfce4-screensaver.desktop
@@ -241,13 +249,14 @@ KUBECONFIG_FILE
     # Serve the noVNC client as the directory index so the bare app URL loads it.
     sudo ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
-    # Configure XFCE to start on VNC launch
+    # Configure XFCE (or the image's own desktop session, such as GNOME) to start on VNC launch
     # TigerVNC >= 1.14 reads ~/.config/tigervnc (the legacy ~/.vnc fails to migrate),
-    # and the session ends when xstartup returns, so xfce must be exec'd in the foreground.
+    # and the session ends when xstartup returns, so the desktop must be exec'd in the foreground.
     mkdir -p ~/.config/tigervnc
     cat << 'VNC_SCRIPT' > ~/.config/tigervnc/xstartup
 #!/bin/sh
 xrdb $HOME/.Xresources 2>/dev/null
+[ -x /usr/local/bin/coder-desktop-session ] && exec /usr/local/bin/coder-desktop-session
 exec startxfce4
 VNC_SCRIPT
     chmod +x ~/.config/tigervnc/xstartup
@@ -269,7 +278,7 @@ VNC_SCRIPT
     # password. The X display itself has a cookie (~/.Xauthority).
     VNC_SOCK=/tmp/coder-vnc/rfb.sock
     mkdir -p /tmp/coder-vnc && chmod 700 /tmp/coder-vnc
-    if ! pgrep -f "^Xtigervnc :1 " > /dev/null; then
+    if [ "$IMAGE_DESKTOP" != none ] && ! pgrep -f "^Xtigervnc :1 " > /dev/null; then
       rm -f "$VNC_SOCK" /tmp/.X1-lock /tmp/.X11-unix/X1
       touch ~/.Xauthority && chmod 600 ~/.Xauthority
       xauth -f ~/.Xauthority add :1 MIT-MAGIC-COOKIE-1 "$(mcookie)"
@@ -284,7 +293,7 @@ VNC_SCRIPT
     # which signs users in. Coder strips the /@user/workspace.agent/apps/novnc prefix before proxying, so the stock web
     # root works as-is.
     # (By its port: pgrep -f would match this script, whose text contains the pattern.)
-    if ! curl -s -o /dev/null http://127.0.0.1:6901/; then
+    if [ "$IMAGE_DESKTOP" != none ] && ! curl -s -o /dev/null http://127.0.0.1:6901/; then
       websockify --web=/usr/share/novnc/ --unix-target="$VNC_SOCK" 127.0.0.1:6901 > /tmp/novnc.log 2>&1 &
     fi
 

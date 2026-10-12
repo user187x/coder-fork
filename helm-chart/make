@@ -466,6 +466,10 @@ deploy() {
 	secret_args
 	if [[ "$METHOD" == argocd ]]; then install_argocd; else install_helm; fi
 	restart_reloaded
+	if [[ "$TARGET" == minikube ]]; then
+		step "Images view: the workspace image as a build base"
+		"${here}/minikube-support" seed-registry "$PROFILE" "$(awk '/^ghcr.io\/user187x\/coder-workspace:/ {print $1; exit}' "${here}/images.txt")"
+	fi
 
 	[[ "$TARGET" != minikube ]] || run_sudo_steps
 	summary

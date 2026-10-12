@@ -2,7 +2,7 @@
 {{- if .Values.uiUpdates.enabled }}
 {{- $ui := .Values.uiUpdates }}
 {{- $ns := .Release.Namespace }}
-{{- $code := list "ui-service.py" "pgwire.py" "certinfo.py" }}
+{{- $code := list "ui-service.py" "pgwire.py" "certinfo.py" "imagebuilder.py" }}
 {{- $files := .Files.Glob "files/ui-updates/*" }}
 apiVersion: v1
 kind: ConfigMap
@@ -97,6 +97,28 @@ spec:
             - {name: KEYCLOAK_ADMIN_SECRET, value: {{ ternary $ui.keycloak.adminSecret "" $ui.keycloak.enabled | quote }}}
             - {name: ARGOCD_NAMESPACE, value: {{ ternary $ui.argocd.namespace "" $ui.argocd.enabled | quote }}}
             - {name: ARGOCD_APP, value: {{ ternary $ui.argocd.app "" $ui.argocd.enabled | quote }}}
+            {{- with .Values.imageBuilder }}{{ if .enabled }}
+            # Images view (templates/image-builder.yaml)
+            - {name: IMAGE_BUILDER, value: "true"}
+            - {name: BUILDER_NAMESPACE, value: {{ $ns | quote }}}
+            - {name: BUILDER_FILES, value: /builder}
+            - {name: BUILDER_REGISTRY, value: {{ printf "coder-image-registry.%s.svc:5000" $ns | quote }}}
+            - {name: BUILDER_PULL_PREFIX, value: {{ printf "localhost:%v" .registry.localPort | quote }}}
+            - {name: BUILDER_BUILDKIT_IMAGE, value: {{ .buildkitImage | quote }}}
+            - {name: BUILDER_TOOLS_IMAGE, value: {{ $ui.image | quote }}}
+            {{- $ws := tpl (index $.Values "coder-workspace" "workspaceImage") $ }}
+            {{- /* The base of "Workspace image" builds: from your registry when there is one, else the copy that
+              ./make --deploy pushes into the in-cluster registry (Minikube). */}}
+            - {name: BUILDER_BASE_IMAGE, value: {{ ternary $ws (printf "coder-image-registry.%s.svc:5000/coder-images/base/%s" $ns ($ws | splitList "/" | last)) (ne $.Values.global.registry "") | quote }}}
+            - {name: BUILDER_SERVICE_URL, value: {{ printf "http://coder-ui-updates.%s.svc" $ns | quote }}}
+            - {name: BUILDER_CPU, value: {{ .build.cpu | quote }}}
+            - {name: BUILDER_MEMORY, value: {{ .build.memory | quote }}}
+            - {name: BUILDER_TIMEOUT_MINUTES, value: {{ .build.timeoutMinutes | quote }}}
+            - {name: BUILDER_APT_SOURCES, value: {{ .aptSources | quote }}}
+            {{- with $ui.imagePullSecrets }}
+            - {name: BUILDER_PULL_SECRETS, value: {{ toJson . | quote }}}
+            {{- end }}
+            {{- end }}{{ end }}
             {{- with .Values.global.clusterAccess }}{{ if and .enabled .syncGroup }}
             # Keeps the Keycloak group of the admins' cluster sign-in equal to Coder's admins (values.yaml).
             - {name: CLUSTER_ACCESS_GROUP, value: {{ .group | quote }}}
@@ -151,6 +173,10 @@ spec:
             - {name: default-avatar, mountPath: /app/defaults/avatar, readOnly: true}
             - {name: gallery, mountPath: /app/defaults/gallery, readOnly: true}
             - {name: template-icons, mountPath: /app/template-icons, readOnly: true}
+            {{- if .Values.imageBuilder.enabled }}
+            - {name: builder, mountPath: /builder}
+            - {name: tmp, mountPath: /tmp}
+            {{- end }}
       volumes:
         - name: code
           configMap:
@@ -184,6 +210,12 @@ spec:
               {{- range $i := until (int $ui.defaults.gallerySlots) }}
               - configMap: {name: {{ printf "%s-%d" $ui.defaults.galleryConfigMapPrefix (add1 $i) }}, optional: true}
               {{- end }}
+        {{- if .Values.imageBuilder.enabled }}
+        - name: builder
+          persistentVolumeClaim: {claimName: coder-image-builder}
+        - name: tmp
+          emptyDir: {sizeLimit: 2Gi}
+        {{- end }}
         # The workspace template's icons (charts/coder-workspace/files/icons/), served at /__icons/.
         - name: template-icons
           configMap: {name: {{ $ui.templateIconsConfigMap }}, optional: true}

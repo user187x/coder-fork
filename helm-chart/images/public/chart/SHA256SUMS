@@ -1,3 +1,5 @@
 9953c043d2a7b235772332a5e1ac223c140bb8fbb8e8a565a296cb09977d9d49  docker.io_library_python_3.13-alpine.tar.gz
+48501cd6b7c8920e255ac16edd8bac0b1cab82c648ba70d6ae2c91fba217fa0c  docker.io_library_registry_3.1.2.tar.gz
+d4e243c5a4fdabfef6c2465aae668e4545d9aba39f2e2ed8b9e4cd2ce67c9d63  docker.io_moby_buildkit_v0.33.0-rootless.tar.gz
 83855e017e7aafbecf488fd8e335abe9e3af3729294ad5d3c3eb011f0320ad74  ghcr.io_cloudnative-pg_postgresql_18.4-system-trixie.tar.gz
 107070501e991805c9f5654e805d640238b1c83f149fd5bda6c47647fde58994  ghcr.io_coder_coder_latest.tar.gz

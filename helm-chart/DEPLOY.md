@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.24.1.tar.gz && cd coder-airgapped-1.24.1
+tar -xzf coder-airgapped-1.25.0.tar.gz && cd coder-airgapped-1.25.0
 ./make --deploy
 ```
 
@@ -73,8 +73,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.24.1.tar.gz
-cd coder-airgapped-1.24.1
+tar -xzf coder-airgapped-1.25.0.tar.gz
+cd coder-airgapped-1.25.0
 ./mirror-images.sh list
 ```
 
@@ -85,14 +85,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.24.1` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.25.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.24.1
+cd coder-airgapped-1.25.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -215,6 +215,45 @@ kubectl…*, default yes). The API server restarts once.
 The chart then adds the ClusterRoleBinding `coder-cluster-admins` and passes the issuer to the template. Admins'
 workspaces get the kubeconfig at their next start. Settings: `global.clusterAccess` in `values.yaml` (client, group,
 prefix, cluster role, which Coder roles count as admins, the group sync).
+
+## Optional – the image builder (Templates › Images)
+
+**Templates › Images** builds workspace images in the cluster for templates to run. Admins and template admins create
+them; everyone can see them. Each image is a base image plus:
+
+* apt packages, each checked in the apt sources as you type;
+* uploaded `.deb` files;
+* named installations, each with its own files and a bash script;
+* removed packages and hardening;
+* a desktop (XFCE, GNOME or none);
+* shell configuration and dotfiles.
+
+Each build is scanned: trivy for vulnerabilities and secrets, plus checks on users, sudo, setuid files and FIPS
+readiness. A template uses the image as `localhost:5000/coder-images/<name>:<version>`. Images can be downloaded
+(`docker load`) and backed up to S3.
+
+It is on by default (`imageBuilder.enabled`). It adds:
+
+* **`coder-image-registry`:** a registry for the built images, on a 50 Gi volume (`imageBuilder.registry.size`).
+  The space of deleted images comes back the next time it starts (it garbage-collects first):
+  `kubectl -n coder rollout restart deploy/coder-image-registry`.
+* **A small DaemonSet, `coder-image-registry-proxy`**, on the host network of every node. It listens on
+  `127.0.0.1:5000`, so each node's container runtime pulls the images from `localhost:5000`; runtimes treat localhost
+  as a trusted registry without TLS. No node configuration is needed.
+* **Build Jobs with BuildKit rootless** (`moby/buildkit:v0.33.0-rootless`). They run as uid 1000 with no privileges,
+  but with **seccomp and AppArmor unconfined**: rootless BuildKit needs user namespaces. A cluster whose policy forbids
+  unconfined pods (Pod Security `restricted`, or Kyverno/Gatekeeper rules) needs an exception for the `coder`
+  namespace's `coder-image-*` pods. Each Job takes up to 4 CPUs and 8 Gi (`imageBuilder.build`).
+* **Two volumes:** a 20 Gi one for uploads and build contexts (`imageBuilder.files`), and the platform service's
+  limit raised to 512 Mi.
+
+**In an air gap, set `imageBuilder.aptSources` to your apt mirror** (deb822, as in `values.yaml`), or set it later in
+Images › Settings. The package check and the builds both use it. The vulnerability database is in the bundle (in
+`coder-image-tools`, dated when the bundle was made); Java archives are not scanned, because their database is not
+bundled. Set S3 backups (bucket, region, keys, or an S3-compatible endpoint such as MinIO) in Images › Settings.
+
+On EKS with your own registry (`global.registry`), images start from the workspace image in that registry. On
+Minikube, `./make --deploy` seeds the built-in registry with it.
 
 > **Good to know – workspaces in a strict air gap:** workspaces start and connect. The desktop, the JetBrains Mono Nerd
 > Font, tmux, k9s/kubectl and marimo (with all its packages) are in the workspace image. The template still installs

@@ -112,6 +112,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pgwire  # noqa: E402  (next to this file)
+import imagebuilder  # noqa: E402  (next to this file: the Images view)
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -6690,6 +6691,10 @@ class Handler(BaseHTTPRequestHandler):
         path = url.path
         if path == BASE + "/healthz":
             return self.send(200, "ok\n")
+        if path.startswith(BASE + "/internal/") and imagebuilder.handle_internal(self, "GET", path):
+            return
+        if imagebuilder.handle(self, "GET", path, url.query, ADMIN_ROLES):
+            return
         if path.startswith(TEMPLATE_ICONS_PATH):
             return self.template_icon(path[len(TEMPLATE_ICONS_PATH):])
         if path == BASE + "/refresh":
@@ -7397,9 +7402,21 @@ class Handler(BaseHTTPRequestHandler):
             },
         )
 
+    def do_PUT(self):
+        """Uploads to the Images view (files of an image being built)."""
+        self.close_connection = True
+        url = urllib.parse.urlsplit(self.path)
+        if not imagebuilder.handle(self, "PUT", url.path, url.query, ADMIN_ROLES):
+            self.send(404, "not found\n")
+
     def do_POST(self):
         self.close_connection = True
-        path = urllib.parse.urlsplit(self.path).path
+        url = urllib.parse.urlsplit(self.path)
+        path = url.path
+        if path.startswith(BASE + "/internal/") and imagebuilder.handle_internal(self, "POST", path):
+            return
+        if imagebuilder.handle(self, "POST", path, url.query, ADMIN_ROLES):
+            return
         routes = {
             BASE + "/api/view",
             BASE + "/api/ack",
@@ -7792,6 +7809,11 @@ def main():
     BACKGROUNDS = BackgroundStore(LOGOS)
     ICONS = IconStore(LOGOS)
     MONITOR = Monitor()
+    imagebuilder.setup(log, http_json, KUBE)
+    imagebuilder.start()
+    if imagebuilder.ENABLED:
+        # the apt indices for the package check, ready before anyone opens the builder
+        threading.Thread(target=lambda: imagebuilder.APT.load(), daemon=True).start()
     if CLUSTER_ACCESS_GROUP:
         ClusterAdminSync().start()
     server = Server(("0.0.0.0", PORT), Handler)

@@ -1,0 +1,1918 @@
+"""Images view (Templates > Images): workspace images built in the cluster, for workspace templates.
+
+Imported by ui-service.py (the API below), and run on its own by the build and scan Jobs:
+    python3 imagebuilder.py fetch-context URL DIR     the build Job's first step: the build context into DIR
+    python3 imagebuilder.py scan REF REPORT_URL       the scan Job: trivy + image checks + FIPS checks, posted back
+
+An image is a definition (spec, below) that admins (and template admins) edit in a builder; a build turns it into
+<registry>/coder-images/<name>:<version> with BuildKit rootless in a Job, then a scan Job reports on its security.
+Workspace templates use it as localhost:5000/coder-images/<name>:<version> (BUILDER_PULL_PREFIX).
+
+    GET  /__coder-ui/api/images                         every image (anyone signed in; editing needs EDIT_ROLES)
+    POST /__coder-ui/api/images {name, description, base}        a new image (a draft)
+    GET  /__coder-ui/api/images/<id>                    one image, its spec, builds and last report
+    POST /__coder-ui/api/images/<id> {spec?, description?}       save the builder's changes
+    POST /__coder-ui/api/images/<id>/delete             the image, its files and its tags in the registry
+    POST /__coder-ui/api/images/<id>/build              build the saved spec (a new version)
+    GET  /__coder-ui/api/images/<id>/builds/<n>         a build's progress, steps and log tail
+    POST /__coder-ui/api/images/<id>/builds/<n>/cancel
+    PUT  /__coder-ui/api/images/<id>/files/<kind>/<name>[?install=<id>]   upload a file (kind: deb | install | dotfile)
+    POST /__coder-ui/api/images/<id>/files/delete {kind, name, install?}
+    GET  /__coder-ui/api/images/<id>/download           the built image as a `docker load` tarball
+    POST /__coder-ui/api/images/<id>/s3 {enabled}       automatic S3 backup on / off;  /s3/backup: now
+    POST /__coder-ui/api/images/apt-check {packages}    which apt packages exist in the configured sources
+    GET  /__coder-ui/api/images/apt-search?q=           package names for the builder's suggestions
+    POST /__coder-ui/api/images/lint {script}           shellcheck;   /format {script}: shfmt -i 1
+    POST /__coder-ui/api/images/dockerfile {spec}       the Dockerfile a spec makes (the builder's review step)
+    GET/POST /__coder-ui/api/images/settings            apt sources and S3 (admins)
+    GET  /__coder-ui/internal/builds/<token>/context.tar    (build Job)   POST .../report (scan Job)
+"""
+
+import base64
+import datetime
+import gzip
+import hashlib
+import hmac
+import http.client
+import io
+import json
+import lzma
+import os
+import re
+import secrets
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tarfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+ENABLED = os.environ.get("IMAGE_BUILDER", "") == "true"
+NAMESPACE = os.environ.get("BUILDER_NAMESPACE", "coder")
+FILES = os.environ.get("BUILDER_FILES", "/builder")
+REGISTRY = os.environ.get("BUILDER_REGISTRY", "coder-image-registry.coder.svc:5000")
+PULL_PREFIX = os.environ.get("BUILDER_PULL_PREFIX", "localhost:5000")
+BUILDKIT_IMAGE = os.environ.get("BUILDER_BUILDKIT_IMAGE", "docker.io/moby/buildkit:v0.33.0-rootless")
+TOOLS_IMAGE = os.environ.get("BUILDER_TOOLS_IMAGE", "ghcr.io/user187x/coder-image-tools:1.0.0")
+BASE_IMAGE = os.environ.get("BUILDER_BASE_IMAGE", "")
+SERVICE_URL = os.environ.get("BUILDER_SERVICE_URL", "http://coder-ui-updates.coder.svc").rstrip("/")
+BUILD_CPU = os.environ.get("BUILDER_CPU", "4")
+BUILD_MEMORY = os.environ.get("BUILDER_MEMORY", "8Gi")
+BUILD_TIMEOUT = int(os.environ.get("BUILDER_TIMEOUT_MINUTES", "60") or 60)
+DEFAULT_APT_SOURCES = os.environ.get("BUILDER_APT_SOURCES", "")
+try:
+    PULL_SECRETS = json.loads(os.environ.get("BUILDER_PULL_SECRETS", "") or "[]")
+except ValueError:
+    PULL_SECRETS = []
+BASE = "/__coder-ui"
+REPO = "coder-images"
+EDIT_EXTRA_ROLES = {"template-admin"}  # besides ADMIN_ROLES: who may create, edit, build and delete images
+
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+INSTALL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+(?::[a-z0-9-]+)?(?:=[A-Za-z0-9.+:~-]+)?$")
+FILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,120}$")
+DOTFILE_RE = re.compile(r"^(?!.*\.\.)[A-Za-z0-9._-][A-Za-z0-9._/-]{0,199}$")
+MAX_UPLOAD = 2 * 1024 * 1024 * 1024
+DESKTOPS = ("keep", "xfce", "gnome", "none")
+HARDENING = {
+    "purgeDocs": "Remove documentation, man pages and caches (smaller image, less to scan)",
+    "noSudo": "No sudo for the workspace user (coder)",
+    "lockRoot": "Lock the root account's password",
+    "noSetuid": "Remove the setuid / setgid bit from every program",
+    "noCompilers": "Remove compilers (gcc, g++, make): nothing can be built in the workspace",
+    "strictUmask": "Default file permissions 027 (new files not readable by others)",
+    "noCoreDumps": "No core dumps (they can hold secrets from memory)",
+    "sshHardening": "SSH: no root login, no passwords (keys only), modern ciphers",
+}
+
+LOG = None  # set by setup(): ui-service's log()
+HTTP_JSON = None
+KUBE = None
+
+
+def setup(log, http_json, kube):
+    global LOG, HTTP_JSON, KUBE
+    LOG, HTTP_JSON, KUBE = log, http_json, kube
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# --------------------------------------------------------------------------- storage
+class DB:
+    def __init__(self, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self.path = path
+        self.lock = threading.Lock()
+        with self.connect() as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS images (
+                  id TEXT PRIMARY KEY, description TEXT NOT NULL DEFAULT '', spec TEXT NOT NULL,
+                  created_by TEXT, created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL,
+                  version INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'draft', ref TEXT, digest TEXT,
+                  size INTEGER, built_at TEXT, built_by TEXT, report TEXT, s3 TEXT NOT NULL DEFAULT '{}');
+                CREATE TABLE IF NOT EXISTS builds (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT, image_id TEXT NOT NULL, version INTEGER NOT NULL,
+                  status TEXT NOT NULL, stage TEXT, progress REAL NOT NULL DEFAULT 0, message TEXT,
+                  steps TEXT NOT NULL DEFAULT '[]', started_at TEXT NOT NULL, finished_at TEXT, by TEXT,
+                  token TEXT NOT NULL, job TEXT, error TEXT, spec TEXT NOT NULL, log TEXT NOT NULL DEFAULT '');
+                CREATE INDEX IF NOT EXISTS builds_image ON builds(image_id, id);
+                CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                """
+            )
+            # a restart ends the builds it was following: they show as interrupted
+            db.execute(
+                "UPDATE builds SET status='failed', error='The platform service restarted during the build.', "
+                "finished_at=? WHERE status IN ('queued','building','pushing','scanning')", (now(),))
+            db.execute("UPDATE images SET status=CASE WHEN ref IS NULL THEN 'draft' ELSE 'ready' END "
+                       "WHERE status='building'")
+
+    def connect(self):
+        db = sqlite3.connect(self.path, timeout=10)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def setting(self, key, default=None):
+        with self.connect() as db:
+            r = db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return json.loads(r[0]) if r else default
+
+    def put_setting(self, key, value):
+        with self.lock, self.connect() as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET "
+                       "value=excluded.value", (key, json.dumps(value)))
+
+    @staticmethod
+    def _image(r, full=False):
+        out = {
+            "id": r["id"], "name": r["id"], "description": r["description"], "createdBy": r["created_by"],
+            "createdAt": r["created_at"], "updatedBy": r["updated_by"], "updatedAt": r["updated_at"],
+            "version": r["version"], "status": r["status"], "ref": r["ref"], "digest": r["digest"],
+            "size": r["size"], "builtAt": r["built_at"], "builtBy": r["built_by"],
+            "pullRef": "%s/%s/%s:%d" % (PULL_PREFIX, REPO, r["id"], r["version"]) if r["ref"] else None,
+            "s3": json.loads(r["s3"] or "{}"),
+        }
+        spec = json.loads(r["spec"])
+        report = json.loads(r["report"]) if r["report"] else None
+        out["base"] = spec.get("base") or {"kind": "workspace"}
+        out["counts"] = {"packages": len(spec.get("packages") or []), "debs": len(spec.get("debs") or []),
+                         "installations": len(spec.get("installations") or []),
+                         "remove": len(spec.get("remove") or [])}
+        out["desktop"] = spec.get("desktop") or "keep"
+        out["summary"] = report_summary(report)
+        if full:
+            out["spec"] = spec
+            out["report"] = report
+        return out
+
+    def images(self):
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM images ORDER BY updated_at DESC").fetchall()
+        return [self._image(r) for r in rows]
+
+    def image(self, image_id, full=True):
+        with self.connect() as db:
+            r = db.execute("SELECT * FROM images WHERE id=?", (image_id,)).fetchone()
+        return self._image(r, full) if r else None
+
+    def create(self, image_id, description, spec, user):
+        t = now()
+        with self.lock, self.connect() as db:
+            db.execute("INSERT INTO images (id, description, spec, created_by, created_at, updated_by, updated_at) "
+                       "VALUES (?,?,?,?,?,?,?)", (image_id, description, json.dumps(spec), user, t, user, t))
+
+    def save(self, image_id, user, spec=None, description=None):
+        sets, args = ["updated_by=?", "updated_at=?"], [user, now()]
+        if spec is not None:
+            sets.append("spec=?")
+            args.append(json.dumps(spec))
+        if description is not None:
+            sets.append("description=?")
+            args.append(description)
+        with self.lock, self.connect() as db:
+            db.execute("UPDATE images SET %s WHERE id=?" % ", ".join(sets), (*args, image_id))
+
+    def set(self, image_id, **fields):
+        cols = {"status": "status", "ref": "ref", "digest": "digest", "size": "size", "builtAt": "built_at",
+                "builtBy": "built_by", "version": "version"}
+        sets, args = [], []
+        for k, v in fields.items():
+            if k == "report":
+                sets.append("report=?")
+                args.append(json.dumps(v) if v is not None else None)
+            elif k == "s3":
+                sets.append("s3=?")
+                args.append(json.dumps(v))
+            else:
+                sets.append("%s=?" % cols[k])
+                args.append(v)
+        with self.lock, self.connect() as db:
+            db.execute("UPDATE images SET %s WHERE id=?" % ", ".join(sets), (*args, image_id))
+
+    def delete(self, image_id):
+        with self.lock, self.connect() as db:
+            db.execute("DELETE FROM builds WHERE image_id=?", (image_id,))
+            db.execute("DELETE FROM images WHERE id=?", (image_id,))
+
+    # builds
+    def new_build(self, image_id, version, spec, user):
+        token = secrets.token_urlsafe(32)
+        with self.lock, self.connect() as db:
+            cur = db.execute("INSERT INTO builds (image_id, version, status, stage, started_at, by, token, spec) "
+                             "VALUES (?,?,?,?,?,?,?,?)",
+                             (image_id, version, "queued", "prepare", now(), user, token, json.dumps(spec)))
+            return cur.lastrowid, token
+
+    def build(self, build_id=None, token=None):
+        with self.connect() as db:
+            r = (db.execute("SELECT * FROM builds WHERE id=?", (build_id,)) if build_id is not None
+                 else db.execute("SELECT * FROM builds WHERE token=?", (token,))).fetchone()
+        return dict(r) if r else None
+
+    def update_build(self, build_id, **fields):
+        if "steps" in fields:
+            fields["steps"] = json.dumps(fields["steps"])
+        sets = ", ".join("%s=?" % k for k in fields)
+        with self.lock, self.connect() as db:
+            db.execute("UPDATE builds SET %s WHERE id=?" % sets, (*fields.values(), build_id))
+
+    def append_log(self, build_id, text, limit=1024 * 1024):
+        with self.lock, self.connect() as db:
+            r = db.execute("SELECT log FROM builds WHERE id=?", (build_id,)).fetchone()
+            log = ((r[0] if r else "") + text)[-limit:]
+            db.execute("UPDATE builds SET log=? WHERE id=?", (log, build_id))
+
+    def builds(self, image_id, limit=20):
+        with self.connect() as db:
+            rows = db.execute("SELECT id, version, status, stage, progress, message, started_at, finished_at, by, "
+                              "error FROM builds WHERE image_id=? ORDER BY id DESC LIMIT ?",
+                              (image_id, limit)).fetchall()
+        return [{"id": r["id"], "version": r["version"], "status": r["status"], "stage": r["stage"],
+                 "progress": r["progress"], "message": r["message"], "startedAt": r["started_at"],
+                 "finishedAt": r["finished_at"], "by": r["by"], "error": r["error"]} for r in rows]
+
+    def active_build(self, image_id):
+        with self.connect() as db:
+            r = db.execute("SELECT id FROM builds WHERE image_id=? AND status IN "
+                           "('queued','building','pushing','scanning') ORDER BY id DESC LIMIT 1",
+                           (image_id,)).fetchone()
+        return r[0] if r else None
+
+
+STORE = None
+
+
+def image_dir(image_id):
+    return os.path.join(FILES, "images", image_id)
+
+
+def file_path(image_id, kind, name, install=None):
+    if kind == "deb":
+        return os.path.join(image_dir(image_id), "debs", name)
+    if kind == "install":
+        return os.path.join(image_dir(image_id), "installs", install, name)
+    if kind == "dotfile":
+        return os.path.join(image_dir(image_id), "dotfiles", name)
+    raise ValueError("unknown kind")
+
+
+# --------------------------------------------------------------------------- the spec
+def empty_spec(base=None):
+    return {"base": base or {"kind": "workspace"}, "packages": [], "debs": [], "installations": [], "remove": [],
+            "hardening": {"script": ""}, "desktop": "keep", "fips": False,
+            "config": {"aliases": "", "functions": "", "profile": "", "dotfiles": []}}
+
+
+def text(value, limit, what):
+    value = "" if value is None else value
+    if not isinstance(value, str):
+        raise ValueError("%s must be text." % what)
+    if len(value.encode()) > limit:
+        raise ValueError("%s is too long (at most %d KB)." % (what, limit // 1024))
+    return value
+
+
+def clean_spec(spec, image_id):
+    """The builder's spec, checked: anything malformed is refused with a reason a person can act on."""
+    if not isinstance(spec, dict):
+        raise ValueError("Expected an image definition.")
+    out = empty_spec()
+    base = spec.get("base") or {"kind": "workspace"}
+    if base.get("kind") == "image":
+        other = str(base.get("id") or "")
+        if other == image_id or not NAME_RE.match(other):
+            raise ValueError("Pick another built image as the base.")
+        out["base"] = {"kind": "image", "id": other}
+    packages = spec.get("packages") or []
+    if not isinstance(packages, list) or len(packages) > 500:
+        raise ValueError("At most 500 packages.")
+    seen = set()
+    for p in packages:
+        p = str(p).strip()
+        if not PKG_RE.match(p):
+            raise ValueError("'%s' is not an apt package name." % p[:60])
+        if p not in seen:
+            seen.add(p)
+            out["packages"].append(p)
+    for d in spec.get("debs") or []:
+        n = str((d or {}).get("name") or "")
+        if FILE_NAME_RE.match(n) and n.endswith(".deb") and os.path.isfile(file_path(image_id, "deb", n)):
+            out["debs"].append({"name": n, "size": os.path.getsize(file_path(image_id, "deb", n))})
+    installs = spec.get("installations") or []
+    if not isinstance(installs, list) or len(installs) > 50:
+        raise ValueError("At most 50 installations.")
+    ids = set()
+    for i in installs:
+        iid = str((i or {}).get("id") or "")
+        if not INSTALL_ID_RE.match(iid) or iid in ids:
+            raise ValueError("An installation has no valid id.")
+        ids.add(iid)
+        name = text(i.get("name"), 120, "An installation's name").strip() or iid
+        files = []
+        for f in i.get("files") or []:
+            n = str((f or {}).get("name") or "")
+            p = file_path(image_id, "install", n, iid) if FILE_NAME_RE.match(n) else None
+            if p and os.path.isfile(p):
+                files.append({"name": n, "size": os.path.getsize(p)})
+        out["installations"].append({"id": iid, "name": name, "script": text(i.get("script"), 256 * 1024,
+                                                                                "%s's script" % name),
+                                     "files": files})
+    for p in spec.get("remove") or []:
+        p = str(p).strip()
+        if not PKG_RE.match(p):
+            raise ValueError("'%s' is not an apt package name." % p[:60])
+        if p not in out["remove"]:
+            out["remove"].append(p)
+    hardening = spec.get("hardening") or {}
+    for key in HARDENING:
+        if hardening.get(key):
+            out["hardening"][key] = True
+    out["hardening"]["script"] = text(hardening.get("script"), 128 * 1024, "The hardening script")
+    if spec.get("desktop") in DESKTOPS:
+        out["desktop"] = spec["desktop"]
+    out["fips"] = bool(spec.get("fips"))
+    config = spec.get("config") or {}
+    for key, what in (("aliases", "Aliases"), ("functions", "Functions"), ("profile", "Environment")):
+        out["config"][key] = text(config.get(key), 64 * 1024, what)
+    for d in config.get("dotfiles") or []:
+        path = str((d or {}).get("path") or "").lstrip("/")
+        if not DOTFILE_RE.match(path):
+            raise ValueError("'%s' is not a path inside the home directory." % path[:80])
+        out["config"]["dotfiles"].append({"path": path, "content": text(d.get("content"), 256 * 1024, path)})
+    if len(out["config"]["dotfiles"]) > 50:
+        raise ValueError("At most 50 dotfiles.")
+    return out
+
+
+def spec_problems(spec, apt_results=None):
+    """What stops a build: packages apt doesn't have, empty installation scripts."""
+    out = []
+    for name, r in (apt_results or {}).items():
+        if not r.get("available"):
+            out.append("'%s' is not in the apt sources: upload its .deb or install it manually." % name)
+    for i in spec.get("installations") or []:
+        if not i["script"].strip():
+            out.append("The installation '%s' has no script." % i["name"])
+    return out
+
+
+# --------------------------------------------------------------------------- apt package check
+def parse_sources(text_):
+    """deb822 stanzas (or one-line "deb URI suite comp..." entries) -> [(uri, suite, [components])]."""
+    out = []
+    for line in text_.splitlines():
+        line = line.strip()
+        if line.startswith("deb ") and not line.startswith("deb-src"):
+            parts = re.sub(r"\[[^]]*\]", "", line).split()
+            if len(parts) >= 3:
+                out.append((parts[1].rstrip("/"), parts[2], parts[3:] or ["main"]))
+    for stanza in re.split(r"\n\s*\n", text_):
+        fields = {}
+        for line in stanza.splitlines():
+            if ":" in line and not line.startswith((" ", "\t", "#")):
+                k, v = line.split(":", 1)
+                fields[k.strip().lower()] = v.strip()
+        if "uris" in fields and "deb" in fields.get("types", "deb").split():
+            for uri in fields["uris"].split():
+                for suite in fields.get("suites", "").split():
+                    out.append((uri.rstrip("/"), suite, fields.get("components", "main").split()))
+    return out
+
+
+class AptIndex:
+    """Package names in the configured apt sources (amd64), from their Packages indices: fetched on first use and
+    kept a day (on the builder volume too, so a restart doesn't fetch them again)."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.packages, self.loaded_at, self.errors, self.sources_key = {}, 0, [], None
+
+    def sources(self):
+        return (STORE.setting("aptSources") if STORE else None) or DEFAULT_APT_SOURCES
+
+    def load(self, force=False):
+        text_ = self.sources()
+        key = hashlib.sha256(text_.encode()).hexdigest()[:16]
+        with self.lock:
+            if not force and self.sources_key == key and time.time() - self.loaded_at < 86400 and self.packages:
+                return
+            cache = os.path.join(FILES, "apt-cache", key + ".json")
+            if not force and os.path.isfile(cache) and time.time() - os.path.getmtime(cache) < 86400:
+                with open(cache) as f:
+                    saved = json.load(f)
+                self.packages, self.errors = saved["packages"], saved["errors"]
+                self.loaded_at, self.sources_key = os.path.getmtime(cache), key
+                return
+            packages, errors = {}, []
+            for uri, suite, comps in parse_sources(text_):
+                for comp in comps:
+                    for ext, opener in (("xz", lzma.open), ("gz", gzip.open)):
+                        url = "%s/dists/%s/%s/binary-amd64/Packages.%s" % (uri, suite, comp, ext)
+                        try:
+                            with urllib.request.urlopen(url, timeout=120) as r:
+                                # streamed: the uncompressed lists are hundreds of MB
+                                with opener(r, "rt", encoding="utf-8", errors="replace") as lines:
+                                    self._parse(lines, packages)
+                            break
+                        except urllib.error.HTTPError as e:
+                            if e.code != 404:
+                                errors.append("%s: HTTP %s" % (url, e.code))
+                                break
+                        except Exception as e:  # noqa: BLE001 - unreachable source: reported
+                            errors.append("%s: %s" % (url, str(getattr(e, "reason", e))[:120]))
+                            break
+            self.packages, self.errors, self.loaded_at, self.sources_key = packages, errors, time.time(), key
+            if packages:
+                os.makedirs(os.path.dirname(cache), exist_ok=True)
+                with open(cache + ".tmp", "w") as f:
+                    json.dump({"packages": packages, "errors": errors}, f)
+                os.replace(cache + ".tmp", cache)
+
+    @staticmethod
+    def _parse(lines, packages):
+        """Packages-file stanzas from an iterable of lines: name -> version, short description, section."""
+        fields = {}
+
+        def flush():
+            name = fields.get("Package")
+            if name:
+                prev = packages.get(name)
+                if not prev or prev.get("virtual"):
+                    packages[name] = {"v": fields.get("Version", ""), "d": fields.get("Description", "")[:100],
+                                      "s": fields.get("Section", "")}
+                for p in fields.get("Provides", "").split(","):
+                    p = p.strip().split(" ")[0]
+                    if p and p not in packages:
+                        packages[p] = {"virtual": True, "by": name}
+            fields.clear()
+
+        for line in lines:
+            if line in ("\n", ""):
+                flush()
+            elif line[0] not in " \t":
+                k, _, v = line.partition(":")
+                if k in ("Package", "Version", "Description", "Section", "Provides"):
+                    fields[k] = v.strip()
+        flush()
+
+    def status(self):
+        return {"sources": len(parse_sources(self.sources())), "packages": len(self.packages),
+                "loadedAt": datetime.datetime.fromtimestamp(self.loaded_at, datetime.timezone.utc)
+                .strftime("%Y-%m-%dT%H:%M:%SZ") if self.loaded_at else None, "errors": self.errors[:10]}
+
+    def check(self, names):
+        self.load()
+        out = {}
+        for raw in names:
+            name = re.split(r"[:=]", raw, 1)[0]
+            hit = self.packages.get(name)
+            if hit and hit.get("virtual"):
+                out[raw] = {"available": True, "virtual": True, "providedBy": hit["by"],
+                            "description": "provided by %s" % hit["by"]}
+            elif hit:
+                out[raw] = {"available": True, "version": hit["v"], "description": hit["d"], "section": hit["s"]}
+            else:
+                out[raw] = {"available": False}
+        return out
+
+    def search(self, q, limit=25):
+        self.load()
+        q = q.lower().strip()
+        if not q:
+            return []
+        starts = [n for n in self.packages if n.startswith(q) and not self.packages[n].get("virtual")]
+        starts.sort(key=lambda n: (len(n), n))
+        out = starts[:limit]
+        if len(out) < limit:
+            out += sorted(n for n in self.packages if q in n and not n.startswith(q)
+                          and not self.packages[n].get("virtual"))[: limit - len(out)]
+        return [{"name": n, "version": self.packages[n]["v"], "description": self.packages[n]["d"]} for n in out]
+
+
+APT = AptIndex()
+
+
+# --------------------------------------------------------------------------- scripts: lint and format
+def lint(script):
+    try:
+        p = subprocess.run(["shellcheck", "-s", "bash", "-f", "json", "-"], input=script.encode(),
+                           capture_output=True, timeout=15)
+    except FileNotFoundError:
+        return {"available": False, "issues": []}
+    except subprocess.TimeoutExpired:
+        return {"available": True, "issues": [], "error": "shellcheck took too long"}
+    try:
+        issues = json.loads(p.stdout or b"[]")
+    except ValueError:
+        return {"available": True, "issues": [], "error": p.stderr.decode()[:300]}
+    return {"available": True, "issues": [
+        {"line": i["line"], "column": i["column"], "endLine": i["endLine"], "endColumn": i["endColumn"],
+         "level": i["level"], "code": "SC%d" % i["code"], "message": i["message"]} for i in issues]}
+
+
+def fmt(script):
+    try:
+        p = subprocess.run(["shfmt", "-i", "1", "-ln", "bash", "-"], input=script.encode(), capture_output=True,
+                           timeout=15)
+    except FileNotFoundError:
+        return {"available": False}
+    if p.returncode != 0:
+        return {"available": True, "error": p.stderr.decode().strip()[:400].replace("<standard input>", "line")}
+    return {"available": True, "script": p.stdout.decode()}
+
+
+# --------------------------------------------------------------------------- the Dockerfile
+SH = "bash -euo pipefail -c"
+
+
+def q(s):
+    """A shell word, single-quoted."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def custom_sources():
+    """The admins' apt sources when they differ from the workspace image's own (an air-gapped mirror)."""
+    s = STORE.setting("aptSources") if STORE else None
+    return s if s and s.strip() != DEFAULT_APT_SOURCES.strip() else None
+
+
+def hardening_script(spec):
+    h, lines = spec["hardening"], []
+    if h.get("purgeDocs"):
+        lines += ["find /usr/share/doc -mindepth 2 ! -name copyright ! -type d -delete 2>/dev/null || true",
+                  "rm -rf /usr/share/man/* /usr/share/info/* /var/cache/apt/* /var/lib/apt/lists/* /tmp/* "
+                  "/root/.cache 2>/dev/null || true"]
+    if h.get("noSudo"):
+        lines += ["gpasswd -d coder sudo 2>/dev/null || true",
+                  "grep -rl 'coder' /etc/sudoers.d 2>/dev/null | xargs -r rm -f",
+                  "sed -i '/^coder\\b/d' /etc/sudoers 2>/dev/null || true"]
+    if h.get("lockRoot"):
+        lines += ["passwd -l root >/dev/null"]
+    if h.get("noSetuid"):
+        lines += ["find / -xdev \\( -perm -4000 -o -perm -2000 \\) -type f -exec chmod u-s,g-s {} + 2>/dev/null || true"]
+    if h.get("noCompilers"):
+        lines += ["apt-get purge -y --auto-remove 'gcc' 'gcc-[0-9]*' 'g++' 'g++-[0-9]*' make cpp 2>/dev/null || true"]
+    if h.get("strictUmask"):
+        lines += ["sed -i 's/^UMASK.*/UMASK\\t\\t027/' /etc/login.defs",
+                  "echo 'umask 027' > /etc/profile.d/coder-umask.sh"]
+    if h.get("noCoreDumps"):
+        lines += ["mkdir -p /etc/security/limits.d", "echo '* hard core 0' > /etc/security/limits.d/coder-no-core.conf"]
+    if h.get("sshHardening"):
+        lines += ["if [ -d /etc/ssh ]; then mkdir -p /etc/ssh/sshd_config.d && printf '%s\\n' 'PermitRootLogin no' "
+                  "'PasswordAuthentication no' 'KbdInteractiveAuthentication no' "
+                  "'Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr' "
+                  "> /etc/ssh/sshd_config.d/coder-hardening.conf; fi",
+                  "rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub"]
+    return lines
+
+
+FIPS_CIPHERS = "aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+FIPS_MACS = "hmac-sha2-512,hmac-sha2-256"
+FIPS_KEX = "ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group14-sha256"
+
+
+def fips_script():
+    """FIPS-aligned settings: SSH limited to FIPS-approved algorithms; OpenSSL's FIPS provider made the default when a
+    validated module is installed (e.g. Ubuntu Pro's openssl-fips-module from your mirror), else TLS 1.2+ only."""
+    return [
+        "mkdir -p /etc/ssh/ssh_config.d /etc/ssh/sshd_config.d",
+        "printf '%s\\n' 'Ciphers " + FIPS_CIPHERS + "' 'MACs " + FIPS_MACS + "' 'KexAlgorithms " + FIPS_KEX
+        + "' > /etc/ssh/ssh_config.d/coder-fips.conf",
+        "cp /etc/ssh/ssh_config.d/coder-fips.conf /etc/ssh/sshd_config.d/coder-fips.conf",
+        "mod=$(ls /usr/lib/*/ossl-modules/fips.so 2>/dev/null | head -n1 || true)",
+        "if [ -n \"$mod\" ]; then openssl fipsinstall -out /etc/ssl/fipsmodule.cnf -module \"$mod\" >/dev/null 2>&1 "
+        "|| true; printf '%s\\n' '' '# Image builder: FIPS provider by default' '.include /etc/ssl/fipsmodule.cnf' "
+        "'[coder_fips_sect]' 'default_properties = fips=yes' >> /etc/ssl/openssl.cnf; fi",
+        "printf '%s\\n' '' '# Image builder: FIPS-aligned TLS' '[system_default_sect]' 'MinProtocol = TLSv1.2' "
+        "'CipherString = DEFAULT:@SECLEVEL=2' >> /etc/ssl/openssl.cnf",
+        "mkdir -p /etc/coder-image && echo fips > /etc/coder-image/fips",
+    ]
+
+
+GNOME = ["gnome-session-flashback", "gnome-panel", "metacity", "gnome-terminal", "nautilus", "gnome-settings-daemon",
+         "dbus-x11", "adwaita-icon-theme"]
+GNOME_SESSION = """#!/bin/sh
+# Image builder: the desktop the workspace template starts: GNOME Flashback (GNOME without 3D, fit for VNC). Started
+# piece by piece: gnome-session needs systemd, which a container doesn't have.
+export XDG_CURRENT_DESKTOP=GNOME-Flashback:GNOME XDG_SESSION_DESKTOP=gnome-flashback-metacity XDG_SESSION_TYPE=x11
+export NO_AT_BRIDGE=1
+[ -n "$DBUS_SESSION_BUS_ADDRESS" ] || exec dbus-run-session -- "$0" "$@"
+for d in xsettings keyboard media-keys color a11y-settings housekeeping; do
+  [ -x /usr/libexec/gsd-$d ] && /usr/libexec/gsd-$d &
+done
+gnome-flashback &
+gnome-panel &
+exec metacity
+"""
+
+
+def build_plan(spec):
+    """The build's steps, in order: (key, label). They label the progress view and name the Dockerfile's RUN lines."""
+    steps = [("prepare", "Preparing the build"), ("base", "Fetching the base image")]
+    if custom_sources():
+        steps.append(("sources", "Using your apt mirror"))
+    if spec["packages"]:
+        steps.append(("packages", "Installing %d apt package%s" % (len(spec["packages"]),
+                                                                    "" if len(spec["packages"]) == 1 else "s")))
+    if spec["debs"]:
+        steps.append(("debs", "Installing %d uploaded .deb file%s" % (len(spec["debs"]),
+                                                                       "" if len(spec["debs"]) == 1 else "s")))
+    if spec["desktop"] in ("gnome", "none", "xfce") and spec["desktop"] != "keep":
+        steps.append(("desktop", {"gnome": "Installing the GNOME desktop", "none": "Removing the desktop",
+                                  "xfce": "Installing the XFCE desktop"}[spec["desktop"]]))
+    for i in spec["installations"]:
+        steps.append(("install-" + i["id"], "Installing %s" % i["name"]))
+    if spec["remove"]:
+        steps.append(("remove", "Removing %d package%s" % (len(spec["remove"]), "" if len(spec["remove"]) == 1 else "s")))
+    c = spec["config"]
+    if c["aliases"].strip() or c["functions"].strip() or c["profile"].strip() or c["dotfiles"]:
+        steps.append(("config", "Adding your configuration and dotfiles"))
+    if spec["fips"]:
+        steps.append(("fips", "Applying FIPS-aligned crypto settings"))
+    if hardening_script(spec) or spec["hardening"]["script"].strip():
+        steps.append(("harden", "Hardening the image"))
+    steps += [("finish", "Finishing the image"), ("push", "Pushing it to the registry"),
+              ("scan", "Scanning it for vulnerabilities and secrets"), ("checks", "Checking its security and FIPS readiness")]
+    return steps
+
+
+def dockerfile(spec, image_id, version, base_ref):
+    run = lambda key, cmds: 'RUN : coder-step=%s && %s' % (key, " && ".join(cmds))  # noqa: E731
+    lines = ["# Image builder: %s, version %d (generated; edit the image in Templates > Images)" % (image_id, version),
+             "FROM " + base_ref, "USER root", 'SHELL ["/bin/bash", "-o", "pipefail", "-c"]',
+             "ENV DEBIAN_FRONTEND=noninteractive"]
+    if custom_sources():
+        lines += ["COPY apt/coder-mirror.sources /tmp/coder-mirror.sources",
+                  run("sources", ["mkdir -p /etc/apt/sources.list.d.disabled",
+                                  "(mv /etc/apt/sources.list.d/* /etc/apt/sources.list.d.disabled/ 2>/dev/null || true)",
+                                  "(mv /etc/apt/sources.list /etc/apt/sources.list.d.disabled/ 2>/dev/null || true)",
+                                  "mv /tmp/coder-mirror.sources /etc/apt/sources.list.d/coder-mirror.sources"])]
+    if spec["packages"]:
+        lines.append(run("packages", ["apt-get update", "apt-get install -y --no-install-recommends "
+                                      + " ".join(q(p) for p in spec["packages"]), "apt-get clean",
+                                      "rm -rf /var/lib/apt/lists/*"]))
+    if spec["debs"]:
+        lines += ["COPY debs/ /tmp/coder-debs/",
+                  run("debs", ["apt-get update", "apt-get install -y --no-install-recommends /tmp/coder-debs/*.deb",
+                               "apt-get clean", "rm -rf /tmp/coder-debs /var/lib/apt/lists/*"])]
+    if spec["desktop"] == "gnome":
+        lines += ["COPY desktop/coder-desktop-session /usr/local/bin/coder-desktop-session",
+                  run("desktop", ["apt-get update", "apt-get install -y --no-install-recommends " + " ".join(GNOME),
+                                  "chmod 0755 /usr/local/bin/coder-desktop-session", "mkdir -p /etc/coder-image",
+                                  "echo gnome > /etc/coder-image/desktop", "apt-get clean",
+                                  "rm -rf /var/lib/apt/lists/*"])]
+    elif spec["desktop"] == "xfce":
+        lines.append(run("desktop", ["apt-get update", "apt-get install -y --no-install-recommends xfce4 "
+                                     "xfce4-terminal dbus-x11 tigervnc-standalone-server novnc websockify",
+                                     "rm -f /usr/local/bin/coder-desktop-session", "mkdir -p /etc/coder-image",
+                                     "echo xfce > /etc/coder-image/desktop", "apt-get clean",
+                                     "rm -rf /var/lib/apt/lists/*"]))
+    elif spec["desktop"] == "none":
+        # The X server, noVNC and websockify stay: the template's private display for marimo's windows needs them.
+        lines.append(run("desktop", ["(apt-get purge -y --auto-remove 'xfce4*' 'libxfce4*' firefox 2>/dev/null || true)",
+                                     "rm -f /usr/local/bin/coder-desktop-session", "mkdir -p /etc/coder-image",
+                                     "echo none > /etc/coder-image/desktop", "rm -rf /var/lib/apt/lists/*"]))
+    for i in spec["installations"]:
+        d = "/tmp/coder-install/" + i["id"]
+        lines += ["COPY installs/%s/ %s/" % (i["id"], d),
+                  run("install-" + i["id"], ["cd " + d, "INSTALL_DIR=%s bash -euo pipefail ./install.sh" % d,
+                                             "cd /", "rm -rf " + d])]
+    if spec["remove"]:
+        # Only what the image has: a package it doesn't have is skipped (and said so in the log), not an error.
+        names = " ".join(q(p) for p in spec["remove"])
+        lines.append(run("remove", [
+            "installed=$( (dpkg-query -W -f='${db:Status-Abbrev} ${Package}\\n' %s 2>/dev/null || true) "
+            "| awk '$1 ~ /^ii/ {print $2}')"
+            % names,
+            "for p in %s; do echo \"$installed\" | grep -qx \"$p\" || echo \"Not in the image, skipped: $p\"; done" % names,
+            "if [ -n \"$installed\" ]; then apt-get purge -y --auto-remove $installed; fi",
+            "rm -rf /var/lib/apt/lists/*"]))
+    c = spec["config"]
+    if c["aliases"].strip() or c["functions"].strip() or c["profile"].strip() or c["dotfiles"]:
+        lines += ["COPY config/ /tmp/coder-config/",
+                  run("config", ["install -D -m 0644 /tmp/coder-config/bashrc /etc/coder-image/bashrc",
+                                 "(grep -q /etc/coder-image/bashrc /etc/bash.bashrc || printf '%s\\n' '' "
+                                 "'# Image builder: environment, aliases and functions' "
+                                 "'[ -r /etc/coder-image/bashrc ] && . /etc/coder-image/bashrc' >> /etc/bash.bashrc)",
+                                 "if [ -d /tmp/coder-config/home ]; then mkdir -p /usr/share/coder-image/home /etc/skel "
+                                 "&& cp -a /tmp/coder-config/home/. /usr/share/coder-image/home/ "
+                                 "&& cp -a /tmp/coder-config/home/. /etc/skel/; fi", "rm -rf /tmp/coder-config"])]
+    if spec["fips"]:
+        lines.append(run("fips", fips_script()))
+    harden = hardening_script(spec)
+    if harden or spec["hardening"]["script"].strip():
+        if spec["hardening"]["script"].strip():
+            lines.append("COPY harden.sh /tmp/coder-harden.sh")
+            harden = harden + ["bash -euo pipefail /tmp/coder-harden.sh", "rm -f /tmp/coder-harden.sh"]
+        lines.append(run("harden", harden))
+    manifest = json.dumps({"name": image_id, "version": version, "builtAt": now()})
+    lines += [run("finish", ["mkdir -p /etc/coder-image", "printf '%s\\n' " + q(manifest) + " > /etc/coder-image/image.json"]),
+              'LABEL org.opencontainers.image.title="%s" org.opencontainers.image.version="%d" '
+              'com.coder.image.builder="coder-airgapped"' % (image_id, version),
+              "USER coder", "WORKDIR /home/coder"]
+    return "\n".join(lines) + "\n"
+
+
+def bashrc(config):
+    parts = ["# Image builder: added to every shell (/etc/bash.bashrc reads it)."]
+    for key, title in (("profile", "environment"), ("aliases", "aliases"), ("functions", "functions")):
+        if config[key].strip():
+            parts += ["", "# --- " + title, config[key].rstrip()]
+    return "\n".join(parts) + "\n"
+
+
+def context_tar(spec, image_id, version, base_ref, out):
+    """The build context (Dockerfile and files) as a tar, written to `out` (a binary file)."""
+    def add(tf, name, data, mode=0o644):
+        info = tarfile.TarInfo(name)
+        info.size, info.mode, info.mtime = len(data), mode, int(time.time())
+        tf.addfile(info, io.BytesIO(data))
+
+    with tarfile.open(fileobj=out, mode="w|") as tf:
+        add(tf, "Dockerfile", dockerfile(spec, image_id, version, base_ref).encode())
+        src = custom_sources()
+        if src:
+            add(tf, "apt/coder-mirror.sources", src.encode())
+        for d in spec["debs"]:
+            tf.add(file_path(image_id, "deb", d["name"]), "debs/" + d["name"])
+        for i in spec["installations"]:
+            add(tf, "installs/%s/install.sh" % i["id"], i["script"].encode(), 0o755)
+            for f in i["files"]:
+                tf.add(file_path(image_id, "install", f["name"], i["id"]), "installs/%s/%s" % (i["id"], f["name"]))
+        if spec["desktop"] == "gnome":
+            add(tf, "desktop/coder-desktop-session", GNOME_SESSION.encode(), 0o755)
+        c = spec["config"]
+        if c["aliases"].strip() or c["functions"].strip() or c["profile"].strip() or c["dotfiles"]:
+            add(tf, "config/bashrc", bashrc(c).encode())
+            for d in c["dotfiles"]:
+                add(tf, "config/home/" + d["path"], d["content"].encode(), 0o644)
+        if spec["hardening"]["script"].strip():
+            add(tf, "harden.sh", spec["hardening"]["script"].encode(), 0o755)
+
+
+def base_ref_for(spec):
+    if spec["base"]["kind"] == "image":
+        other = STORE.image(spec["base"]["id"], full=False)
+        if not other or not other["ref"]:
+            raise ValueError("The base image '%s' has not been built." % spec["base"]["id"])
+        return other["ref"]
+    if not BASE_IMAGE:
+        raise ValueError("No workspace base image is configured.")
+    return BASE_IMAGE
+
+
+# --------------------------------------------------------------------------- the registry (plain HTTP, in-cluster)
+MANIFEST_TYPES = ", ".join([
+    "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json"])
+
+
+def registry(method, path, accept=MANIFEST_TYPES, timeout=60):
+    req = urllib.request.Request("http://%s/v2/%s" % (REGISTRY, path), method=method, headers={"Accept": accept})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def manifest(repo, ref):
+    """(manifest, digest) of the linux/amd64 image."""
+    with registry("GET", "%s/manifests/%s" % (repo, ref)) as r:
+        m, digest = json.loads(r.read()), r.headers.get("Docker-Content-Digest")
+    if m.get("manifests"):  # an index (BuildKit adds an attestation manifest)
+        pick = next(x for x in m["manifests"] if (x.get("platform") or {}).get("architecture") == "amd64"
+                    and (x.get("platform") or {}).get("os") == "linux")
+        with registry("GET", "%s/manifests/%s" % (repo, pick["digest"])) as r:
+            m = json.loads(r.read())
+    return m, digest
+
+
+def image_size(repo, ref):
+    m, _ = manifest(repo, ref)
+    return sum(int(x.get("size") or 0) for x in m.get("layers") or [])
+
+
+def delete_tags(repo):
+    try:
+        with registry("GET", "%s/tags/list" % repo) as r:
+            tags = json.loads(r.read()).get("tags") or []
+    except urllib.error.HTTPError:
+        return 0
+    n = 0
+    for t in tags:
+        try:
+            with registry("HEAD", "%s/manifests/%s" % (repo, t)) as r:
+                digest = r.headers.get("Docker-Content-Digest")
+            with registry("DELETE", "%s/manifests/%s" % (repo, digest)):
+                n += 1
+        except urllib.error.HTTPError:
+            pass
+    return n
+
+
+def docker_archive(repo, tag, ref_name, out):
+    """Writes the image as a `docker save` tarball to `out` (layers stay gzip-compressed; docker load reads them)."""
+    m, _ = manifest(repo, tag)
+    cfg_digest = m["config"]["digest"]
+
+    def blob(digest):
+        return registry("GET", "%s/blobs/%s" % (repo, digest), accept="*/*", timeout=600)
+
+    with tarfile.open(fileobj=out, mode="w|") as tf:
+        with blob(cfg_digest) as r:
+            cfg = r.read()
+        cfg_name = cfg_digest.split(":")[1] + ".json"
+        info = tarfile.TarInfo(cfg_name)
+        info.size = len(cfg)
+        tf.addfile(info, io.BytesIO(cfg))
+        names = []
+        for layer in m["layers"]:
+            name = layer["digest"].split(":")[1] + ".tar.gz"
+            info = tarfile.TarInfo(name)
+            info.size = int(layer["size"])
+            with blob(layer["digest"]) as r:
+                tf.addfile(info, r)
+            names.append(name)
+        man = json.dumps([{"Config": cfg_name, "RepoTags": [ref_name], "Layers": names}]).encode()
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(man)
+        tf.addfile(info, io.BytesIO(man))
+
+
+# --------------------------------------------------------------------------- S3 (SigV4, multipart; AWS or compatible)
+def _sign(key, msg):
+    return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+
+def s3_request(cfg, method, key, query="", body=b"", headers=None):
+    endpoint = (cfg.get("endpoint") or "https://s3.%s.amazonaws.com" % cfg["region"]).rstrip("/")
+    u = urllib.parse.urlsplit(endpoint)
+    path_style = cfg.get("pathStyle", True)
+    host = u.netloc if path_style else "%s.%s" % (cfg["bucket"], u.netloc)
+    path = "/" + urllib.parse.quote(("%s/%s" % (cfg["bucket"], key)) if path_style else key, safe="/~")
+    t = datetime.datetime.now(datetime.timezone.utc)
+    amz, date = t.strftime("%Y%m%dT%H%M%SZ"), t.strftime("%Y%m%d")
+    payload = hashlib.sha256(body).hexdigest()
+    h = {"host": host, "x-amz-date": amz, "x-amz-content-sha256": payload, **{k.lower(): v for k, v in (headers or {}).items()}}
+    names = sorted(h)
+    canonical = "\n".join([method, path, query, "".join("%s:%s\n" % (k, h[k]) for k in names), ";".join(names), payload])
+    scope = "%s/%s/s3/aws4_request" % (date, cfg["region"])
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    k = _sign(_sign(_sign(_sign(("AWS4" + cfg["secretKey"]).encode(), date), cfg["region"]), "s3"), "aws4_request")
+    sig = hmac.new(k, to_sign.encode(), hashlib.sha256).hexdigest()
+    h["authorization"] = "AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s" % (
+        cfg["accessKey"], scope, ";".join(names), sig)
+    req = urllib.request.Request("%s://%s%s%s" % (u.scheme, host, path, "?" + query if query else ""), data=body or None,
+                                 method=method, headers={k: v for k, v in h.items() if k != "host"})
+    import ssl
+    ctx = ssl.create_default_context(cafile=os.environ.get("CA_FILE") or None) if u.scheme == "https" else None
+    with urllib.request.urlopen(req, timeout=300, context=ctx) as r:
+        return r.status, dict(r.headers), r.read()
+
+
+class S3Upload:
+    """A file-like object: what is written goes to S3 as a multipart upload (64 MB parts)."""
+
+    PART = 64 * 1024 * 1024
+
+    def __init__(self, cfg, key):
+        self.cfg, self.key, self.buf, self.parts, self.size = cfg, key, bytearray(), [], 0
+        _, _, body = s3_request(cfg, "POST", key, "uploads=")
+        self.upload_id = re.search(rb"<UploadId>([^<]+)</UploadId>", body).group(1).decode()
+
+    def write(self, data):
+        self.buf += data
+        self.size += len(data)
+        while len(self.buf) >= self.PART:
+            self._part(bytes(self.buf[: self.PART]))
+            del self.buf[: self.PART]
+        return len(data)
+
+    def _part(self, data):
+        n = len(self.parts) + 1
+        query = "partNumber=%d&uploadId=%s" % (n, urllib.parse.quote(self.upload_id, safe=""))
+        _, headers, _ = s3_request(self.cfg, "PUT", self.key, query, data)
+        self.parts.append(headers.get("ETag") or headers.get("etag"))
+
+    def close(self):
+        if self.buf or not self.parts:
+            self._part(bytes(self.buf))
+            self.buf = bytearray()
+        xml = "<CompleteMultipartUpload>%s</CompleteMultipartUpload>" % "".join(
+            "<Part><PartNumber>%d</PartNumber><ETag>%s</ETag></Part>" % (i + 1, e) for i, e in enumerate(self.parts))
+        s3_request(self.cfg, "POST", self.key, "uploadId=%s" % urllib.parse.quote(self.upload_id, safe=""),
+                   xml.encode(), {"content-type": "application/xml"})
+
+    def abort(self):
+        try:
+            s3_request(self.cfg, "DELETE", self.key, "uploadId=%s" % urllib.parse.quote(self.upload_id, safe=""))
+        except Exception:  # noqa: BLE001
+            pass
+
+    # tarfile asks for these
+    def tell(self):
+        return self.size
+
+    def flush(self):
+        pass
+
+
+def s3_settings(include_secret=False):
+    cfg = STORE.setting("s3", {}) or {}
+    if not include_secret:
+        cfg = dict(cfg, secretKey="", secretSet=bool(cfg.get("secretKey")))
+    return cfg
+
+
+def s3_backup(image_id):
+    """The image's current version to S3 as <prefix><name>-<version>.tar (a `docker load` tarball)."""
+    img = STORE.image(image_id, full=False)
+    cfg = s3_settings(True)
+    if not img or not img["ref"]:
+        raise ValueError("The image has not been built.")
+    if not (cfg.get("bucket") and cfg.get("accessKey") and cfg.get("secretKey") and cfg.get("region")):
+        raise ValueError("S3 is not set up: bucket, region and keys are needed (Images > Settings).")
+    key = "%s%s-%d.tar" % (cfg.get("prefix") or "", image_id, img["version"])
+    s3 = dict(img["s3"], status="uploading", startedAt=now(), error=None)
+    STORE.set(image_id, s3=s3)
+    up = S3Upload(cfg, key)
+    try:
+        docker_archive("%s/%s" % (REPO, image_id), str(img["version"]), img["pullRef"], up)
+        up.close()
+    except Exception as e:
+        up.abort()
+        STORE.set(image_id, s3=dict(s3, status="failed", error=str(e)[:300], finishedAt=now()))
+        raise
+    STORE.set(image_id, s3=dict(s3, status="done", key=key, bytes=up.size, version=img["version"], finishedAt=now(),
+                                bucket=cfg["bucket"]))
+    if LOG:
+        LOG(event="image-s3-backup", image=image_id, version=img["version"], key=key, bytes=up.size)
+
+
+# --------------------------------------------------------------------------- builds
+def kube_call(method, path, body=None, tries=6):
+    """KUBE.call, again after a timeout or a dropped connection (a busy API server must not fail a 10-minute build).
+    Creating a Job again is safe: "already exists" (409) counts as created."""
+    for n in range(tries):
+        try:
+            status, out = KUBE.call(method, path, body)
+        except (OSError, http.client.HTTPException) as e:  # socket.timeout, URLError, a reset connection
+            if n == tries - 1:
+                raise RuntimeError("the Kubernetes API did not answer (%s %s): %s" % (method, path.split("?")[0], e))
+            time.sleep(min(30, 2 ** (n + 1)))
+            continue
+        if method == "POST" and status == 409 and n:
+            return 201, out
+        if status in (0, 429, 500, 502, 503, 504) and n < tries - 1:
+            time.sleep(min(30, 2 ** (n + 1)))
+            continue
+        return status, out
+
+
+def kube_stream(path, timeout, tries=6):
+    for n in range(tries):
+        try:
+            return KUBE.stream(path, timeout=timeout)
+        except (OSError, http.client.HTTPException):
+            if n == tries - 1:
+                raise
+            time.sleep(min(30, 2 ** (n + 1)))
+
+
+def job_name(kind, image_id, build_id):
+    return ("coder-image-%s-%s-%d" % (kind, image_id, build_id))[:63].rstrip("-")
+
+
+def pod_spec(containers, init=None, unconfined=False):
+    spec = {
+        "restartPolicy": "Never",
+        "securityContext": {"runAsNonRoot": True, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000,
+                            "seccompProfile": {"type": "Unconfined" if unconfined else "RuntimeDefault"}},
+        "containers": containers,
+        "volumes": [{"name": "code", "configMap": {"name": "coder-ui-updates", "items": [
+            {"key": "imagebuilder.py", "path": "imagebuilder.py"}]}}],
+    }
+    if unconfined:
+        spec["securityContext"]["appArmorProfile"] = {"type": "Unconfined"}
+    if init:
+        spec["initContainers"] = init
+    if PULL_SECRETS:
+        spec["imagePullSecrets"] = PULL_SECRETS
+    return spec
+
+
+def build_job(image_id, build_id, version, token):
+    name = job_name("build", image_id, build_id)
+    target = "%s/%s/%s" % (REGISTRY, REPO, image_id)
+    url = "%s%s/internal/builds/%s/context.tar" % (SERVICE_URL, BASE, token)
+    tools = {"name": "context", "image": TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent",
+             "command": ["python3", "/app/imagebuilder.py", "fetch-context", url, "/ctx"],
+             "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+             "volumeMounts": [{"name": "ctx", "mountPath": "/ctx"}, {"name": "code", "mountPath": "/app"}]}
+    build = {"name": "build", "image": BUILDKIT_IMAGE, "imagePullPolicy": "IfNotPresent",
+             "command": ["buildctl-daemonless.sh"],
+             "args": ["build", "--frontend", "dockerfile.v0", "--local", "context=/ctx", "--local", "dockerfile=/ctx",
+                      "--output", 'type=image,"name=%s:%d,%s:latest",push=true,registry.insecure=true' % (
+                          target, version, target), "--progress", "rawjson"],
+             "env": [{"name": "BUILDKITD_FLAGS",
+                      "value": "--oci-worker-no-process-sandbox --config /etc/buildkit/buildkitd.toml"}],
+             "resources": {"requests": {"cpu": "500m", "memory": "1Gi"},
+                           "limits": {"cpu": BUILD_CPU, "memory": BUILD_MEMORY}},
+             "volumeMounts": [{"name": "ctx", "mountPath": "/ctx"}, {"name": "cfg", "mountPath": "/etc/buildkit"},
+                              {"name": "state", "mountPath": "/home/user/.local/share/buildkit"}]}
+    spec = pod_spec([build], [tools], unconfined=True)
+    spec["volumes"] += [{"name": "ctx", "emptyDir": {}}, {"name": "cfg", "configMap": {"name": "coder-image-builder"}},
+                        {"name": "state", "emptyDir": {}}]
+    if PULL_SECRETS:  # the base image from your registry (EKS)
+        spec["volumes"].append({"name": "docker", "secret": {"secretName": PULL_SECRETS[0]["name"], "items": [
+            {"key": ".dockerconfigjson", "path": "config.json"}]}})
+        build["volumeMounts"].append({"name": "docker", "mountPath": "/home/user/.docker"})
+    return name, job_body(name, image_id, build_id, "build", spec)
+
+
+def scan_job(image_id, build_id, version, token):
+    name = job_name("scan", image_id, build_id)
+    ref = "%s/%s/%s:%d" % (REGISTRY, REPO, image_id, version)
+    url = "%s%s/internal/builds/%s/report" % (SERVICE_URL, BASE, token)
+    c = {"name": "scan", "image": TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent",
+         "command": ["python3", "/app/imagebuilder.py", "scan", ref, url],
+         "env": [{"name": "TRIVY_INSECURE", "value": "true"}, {"name": "HOME", "value": "/tmp"},
+                 {"name": "BUILDER_REGISTRY", "value": REGISTRY}],
+         "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "2", "memory": "4Gi"}},
+         "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+         "volumeMounts": [{"name": "code", "mountPath": "/app"}, {"name": "tmp", "mountPath": "/tmp"}]}
+    spec = pod_spec([c])
+    spec["volumes"].append({"name": "tmp", "emptyDir": {"sizeLimit": "8Gi"}})
+    return name, job_body(name, image_id, build_id, "scan", spec)
+
+
+def job_body(name, image_id, build_id, kind, spec):
+    labels = {"app.kubernetes.io/name": "coder-image-" + kind, "app.kubernetes.io/part-of": "coder",
+              "coder-image/id": image_id, "coder-image/build": str(build_id)}
+    return {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": name, "namespace": NAMESPACE, "labels": labels},
+            "spec": {"backoffLimit": 0, "activeDeadlineSeconds": BUILD_TIMEOUT * 60, "ttlSecondsAfterFinished": 3600,
+                     "template": {"metadata": {"labels": labels}, "spec": spec}}}
+
+
+class Build(threading.Thread):
+    """Follows one build from start to report: the build Job (its BuildKit progress drives the steps), the scan Job,
+    then the image's new version (and its S3 backup, when that is on)."""
+
+    def __init__(self, image_id, build_id, version, token, spec, user):
+        super().__init__(daemon=True)
+        self.image_id, self.build_id, self.version, self.token, self.spec, self.user = (
+            image_id, build_id, version, token, spec, user)
+        self.plan = build_plan(spec)
+        self.done = set()
+        self.current = "prepare"
+        self.cancelled = False
+        self.started = time.time()
+
+    def steps(self):
+        out = []
+        for key, label in self.plan:
+            out.append({"key": key, "label": label,
+                        "state": "done" if key in self.done else "active" if key == self.current else "pending"})
+        return out
+
+    def progress(self):
+        n = len(self.plan)
+        return round(min(0.99, (len(self.done) + 0.5 * (self.current not in self.done)) / n), 3)
+
+    def advance(self, key, message=None):
+        keys = [k for k, _ in self.plan]
+        if key not in keys:
+            return
+        for k in keys[: keys.index(key)]:
+            self.done.add(k)
+        self.current = key
+        label = dict(self.plan)[key]
+        STORE.update_build(self.build_id, stage=key, message=message or label, progress=self.progress(),
+                           steps=self.steps())
+
+    def finish_step(self, key):
+        self.done.add(key)
+        STORE.update_build(self.build_id, progress=self.progress(), steps=self.steps())
+
+    def fail(self, error):
+        STORE.update_build(self.build_id, status="cancelled" if self.cancelled else "failed", error=error[:2000],
+                           finished_at=now(), steps=self.steps())
+        img = STORE.image(self.image_id, full=False)
+        STORE.set(self.image_id, status="ready" if img and img["ref"] else "draft")
+        if LOG:
+            LOG(event="image-build-failed", image=self.image_id, build=self.build_id, error=error[:300])
+
+    def run(self):
+        try:
+            self._run()
+        except Exception as e:  # noqa: BLE001 - any failure ends the build, with its reason
+            self.fail(str(e))
+        finally:
+            # Its log and report are kept here: the Jobs go now, and BuildKit's scratch space (GBs) with their pods.
+            for kind in ("build", "scan"):
+                try:
+                    kube_call("DELETE", "/apis/batch/v1/namespaces/%s/jobs/%s?propagationPolicy=Background" % (
+                        NAMESPACE, job_name(kind, self.image_id, self.build_id)))
+                except Exception:  # noqa: BLE001 - ttlSecondsAfterFinished removes it later
+                    pass
+
+    def _job(self, body):
+        status, out = kube_call("POST", "/apis/batch/v1/namespaces/%s/jobs" % NAMESPACE, body)
+        if status not in (200, 201):
+            raise RuntimeError("could not start the Job (HTTP %s): %s" % (status, str(out)[:300]))
+
+    def _pod(self, job):
+        status, pods = kube_call("GET", "/api/v1/namespaces/%s/pods?labelSelector=%s" % (
+            NAMESPACE, urllib.parse.quote("job-name=" + job)))
+        items = (pods or {}).get("items") or [] if status == 200 else []
+        return items[0] if items else None
+
+    def _wait_container(self, job, container, init=False, timeout=1800):
+        """The pod once `container` runs (or finished)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline and not self.cancelled:
+            pod = self._pod(job)
+            if pod:
+                st = (pod.get("status") or {})
+                for cs in st.get("initContainerStatuses" if init else "containerStatuses") or []:
+                    if cs["name"] == container and (cs["state"].get("running") or cs["state"].get("terminated")):
+                        return pod
+                for cs in st.get("initContainerStatuses") or []:
+                    t = cs["state"].get("terminated")
+                    if t and t.get("exitCode"):
+                        raise RuntimeError("The build context could not be fetched (exit %s)." % t.get("exitCode"))
+                    w = cs["state"].get("waiting") or {}
+                    if w.get("reason") in ("ErrImagePull", "ImagePullBackOff", "CreateContainerConfigError"):
+                        raise RuntimeError("%s: %s" % (w["reason"], w.get("message", "")[:300]))
+                for cs in st.get("containerStatuses") or []:
+                    w = cs["state"].get("waiting") or {}
+                    if w.get("reason") in ("ErrImagePull", "ImagePullBackOff", "CreateContainerConfigError"):
+                        raise RuntimeError("%s: %s" % (w["reason"], w.get("message", "")[:300]))
+            time.sleep(2)
+        raise RuntimeError("cancelled" if self.cancelled else "The build pod did not start.")
+
+    def _exit_code(self, job, container):
+        for _ in range(60):
+            pod = self._pod(job)
+            for cs in ((pod or {}).get("status") or {}).get("containerStatuses") or []:
+                t = cs["state"].get("terminated")
+                if cs["name"] == container and t:
+                    return t.get("exitCode", 1), t.get("reason")
+            time.sleep(2)
+        return None, None
+
+    def _follow(self, job):
+        """BuildKit's rawjson progress -> the steps, and its logs -> the build log."""
+        names = {}
+        errors = []
+        self.problems = []
+        stream = kube_stream("/api/v1/namespaces/%s/pods/%s/log?container=build&follow=true" % (
+            NAMESPACE, self._pod(job)["metadata"]["name"]), timeout=BUILD_TIMEOUT * 60)
+        pending = ""
+        try:
+            for raw in stream:
+                if self.cancelled:
+                    break
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("{"):
+                    if line:
+                        STORE.append_log(self.build_id, line + "\n")
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                for v in d.get("vertexes") or []:
+                    name = v.get("name") or ""
+                    names[v["digest"]] = name
+                    m = re.search(r"coder-step=([a-z0-9-]+)", name)
+                    if v.get("started") and not v.get("completed"):
+                        if m:
+                            self.advance(m.group(1))
+                        elif "FROM " in name or "load metadata" in name:
+                            self.advance("base")
+                        elif name.startswith("exporting"):
+                            self.advance("finish", "Exporting the image's layers")
+                    if v.get("completed") and m and not v.get("error"):
+                        self.finish_step(m.group(1))
+                    if v.get("error"):
+                        errors.append("%s: %s" % (name[:200], v["error"][:500]))
+                for s in d.get("statuses") or []:
+                    if (s.get("id") or "").startswith("pushing") or "push" in (s.get("name") or ""):
+                        self.advance("push", "Pushing it to the registry")
+                for l in d.get("logs") or []:
+                    try:
+                        pending += base64.b64decode(l.get("data") or "").decode("utf-8", "replace")
+                    except ValueError:
+                        pass
+                    if len(pending) > 4096 or "\n" in pending:
+                        cut = pending.rfind("\n") + 1 or len(pending)
+                        self._note_problems(pending[:cut])
+                        STORE.append_log(self.build_id, pending[:cut])
+                        pending = pending[cut:]
+        finally:
+            if pending:
+                STORE.append_log(self.build_id, pending)
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+        return errors
+
+    PROBLEM = re.compile(r"^(E: |error|fatal|.*(command not found|No such file or directory|Permission denied|"
+                         r"Unable to locate|has no installation candidate))", re.I)
+
+    def _note_problems(self, text_):
+        """Lines of the build's output that say what went wrong (apt's "E: ...", a missing command...): the last ones
+        explain a failure better than BuildKit's "exit code: 100"."""
+        for line in text_.splitlines():
+            line = line.strip()
+            if self.PROBLEM.match(line) and "failed to solve" not in line:
+                self.problems = (self.problems + [line[:300]])[-5:]
+
+    def _run(self):
+        STORE.update_build(self.build_id, status="building", steps=self.steps(), message="Preparing the build")
+        STORE.set(self.image_id, status="building")
+        name, body = build_job(self.image_id, self.build_id, self.version, self.token)
+        STORE.update_build(self.build_id, job=name)
+        self._job(body)
+        if LOG:
+            LOG(event="image-build", image=self.image_id, build=self.build_id, version=self.version, by=self.user)
+        self._wait_container(name, "build")
+        self.advance("base")
+        errors = self._follow(name)
+        if self.cancelled:
+            raise RuntimeError("cancelled")
+        code, reason = self._exit_code(name, "build")
+        if code != 0:
+            step = dict(self.plan).get(self.current, "The build")
+            first = ("%s failed: %s" % (step, self.problems[-1]) if self.problems
+                     else "%s failed%s. See the log." % (step, " (%s)" % reason if reason and reason != "Error" else ""))
+            more = self.problems[:-1] + errors[-3:]
+            raise RuntimeError(first + ("\n" + "\n".join(more) if more else ""))
+        self.finish_step("push")
+        repo = "%s/%s" % (REPO, self.image_id)
+        _, digest = manifest(repo, str(self.version))
+        size = image_size(repo, str(self.version))
+        # the scan
+        self.advance("scan")
+        STORE.update_build(self.build_id, status="scanning")
+        name, body = scan_job(self.image_id, self.build_id, self.version, self.token)
+        self._job(body)
+        deadline = time.time() + 1800
+        while time.time() < deadline and not self.cancelled:
+            b = STORE.build(self.build_id)
+            if b.get("stage") == "checks-done":
+                break
+            code, _ = self._exit_code_quick(name)
+            if code not in (None, 0):
+                STORE.append_log(self.build_id, "\n[scan] the scan Job failed (exit %s); the image is kept, without a "
+                                 "report.\n" % code)
+                break
+            if code == 0 and STORE.build(self.build_id).get("stage") != "checks-done":
+                time.sleep(3)
+                break
+            time.sleep(3)
+        report = (STORE.setting("report-%d" % self.build_id) or None)
+        STORE.set(self.image_id, status="ready", version=self.version, ref="%s/%s:%d" % (REGISTRY, repo, self.version),
+                  digest=digest, size=size, builtAt=now(), builtBy=self.user, report=report)
+        self.done = {k for k, _ in self.plan}
+        STORE.update_build(self.build_id, status="ready", progress=1.0, stage="done", finished_at=now(),
+                           message="Ready: %s/%s:%d" % (PULL_PREFIX, repo, self.version), steps=self.steps())
+        if LOG:
+            LOG(event="image-built", image=self.image_id, build=self.build_id, version=self.version, size=size,
+                grade=(report_summary(report) or {}).get("grade"))
+        img = STORE.image(self.image_id, full=False)
+        if (img["s3"] or {}).get("enabled"):
+            try:
+                s3_backup(self.image_id)
+            except Exception as e:  # noqa: BLE001 - the build stands; the backup says why it failed
+                if LOG:
+                    LOG(event="image-s3-backup-failed", image=self.image_id, error=str(e)[:300])
+
+    def _exit_code_quick(self, job):
+        pod = self._pod(job)
+        for cs in ((pod or {}).get("status") or {}).get("containerStatuses") or []:
+            t = cs["state"].get("terminated")
+            if t:
+                return t.get("exitCode", 1), t.get("reason")
+        return None, None
+
+
+BUILDS = {}  # build id -> Build (running here)
+
+
+def start_build(image_id, user):
+    img = STORE.image(image_id)
+    if not img:
+        raise ValueError("No such image.")
+    if STORE.active_build(image_id):
+        raise ValueError("This image is being built already.")
+    spec = clean_spec(img["spec"], image_id)
+    problems = spec_problems(spec, APT.check(spec["packages"]) if spec["packages"] else {})
+    if problems:
+        raise ValueError(" ".join(problems))
+    base_ref_for(spec)
+    version = img["version"] + 1
+    build_id, token = STORE.new_build(image_id, version, spec, user)
+    b = Build(image_id, build_id, version, token, spec, user)
+    STORE.update_build(build_id, steps=b.steps())
+    BUILDS[build_id] = b
+    b.start()
+    return build_id
+
+
+def cancel_build(image_id, build_id):
+    b = BUILDS.get(build_id)
+    row = STORE.build(build_id)
+    if not row or row["image_id"] != image_id:
+        raise ValueError("No such build.")
+    if b:
+        b.cancelled = True
+    for kind in ("build", "scan"):
+        kube_call("DELETE", "/apis/batch/v1/namespaces/%s/jobs/%s?propagationPolicy=Background" % (
+            NAMESPACE, job_name(kind, image_id, build_id)))
+    if row["status"] in ("queued", "building", "pushing", "scanning"):
+        STORE.update_build(build_id, status="cancelled", error="Cancelled.", finished_at=now())
+        img = STORE.image(image_id, full=False)
+        STORE.set(image_id, status="ready" if img["ref"] else "draft")
+
+
+# --------------------------------------------------------------------------- the report
+SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
+
+
+def grade(report):
+    v = report.get("vulnerabilities", {}).get("counts", {})
+    checks = report.get("checks") or []
+    fails = sum(1 for c in checks if c["status"] == "fail")
+    warns = sum(1 for c in checks if c["status"] == "warn")
+    secrets_n = len(report.get("secrets") or [])
+    if report.get("error"):
+        return "?"  # not scanned: no grade
+    if v.get("CRITICAL", 0) > 0 or secrets_n or fails:
+        return "F" if (v.get("CRITICAL", 0) > 5 or secrets_n or fails > 1) else "D"
+    if v.get("HIGH", 0) > 20:
+        return "D"
+    if v.get("HIGH", 0) > 0:
+        return "C"
+    if v.get("MEDIUM", 0) > 20 or warns > 2:
+        return "B"
+    return "A"
+
+
+def report_summary(report):
+    if not report:
+        return None
+    v = report.get("vulnerabilities", {})
+    return {"grade": report.get("grade"), "counts": v.get("counts", {}), "fixable": v.get("fixable", 0),
+            "secrets": len(report.get("secrets") or []), "fips": (report.get("fips") or {}).get("status"),
+            "scannedAt": report.get("scannedAt"), "dbUpdatedAt": report.get("dbUpdatedAt"),
+            "checks": {s: sum(1 for c in report.get("checks") or [] if c["status"] == s) for s in ("pass", "warn", "fail")}}
+
+
+# --------------------------------------------------------------------------- the scan (runs in the scan Job)
+def walk_image(ref):
+    """The image's files (layers applied in order, whiteouts honoured): {path: (mode, size, type)} and the contents of
+    the few files the checks read."""
+    host, rest = ref.split("/", 1)
+    repo, tag = rest.rsplit(":", 1)
+    global REGISTRY
+    REGISTRY = host
+    m, _ = manifest(repo, tag)
+    with registry("GET", "%s/blobs/%s" % (repo, m["config"]["digest"]), accept="*/*") as r:
+        config = json.loads(r.read())
+    wanted = re.compile(r"^(etc/(sudoers(\.d/.*)?|ssh/(ssh|sshd)_config(\.d/.*)?|ssh/ssh_host_.*_key|passwd|shadow|group|"
+                        r"ssl/openssl\.cnf|ssl/fipsmodule\.cnf|coder-image/.*|os-release)|usr/lib/os-release|var/lib/dpkg/status|"
+                        r"(root|home/[^/]+)/\.(bash_history|ssh/id_[a-z0-9]+))$")
+    files, contents = {}, {}
+    for layer in m["layers"]:
+        with registry("GET", "%s/blobs/%s" % (repo, layer["digest"]), accept="*/*", timeout=1800) as r:
+            with tarfile.open(fileobj=r, mode="r|*") as tf:
+                for ti in tf:
+                    path = ti.name.lstrip("./")
+                    d, base = os.path.split(path)
+                    if base == ".wh..wh..opq":
+                        pre = d + "/"
+                        for p in [p for p in files if p.startswith(pre)]:
+                            files.pop(p, None)
+                            contents.pop(p, None)
+                        continue
+                    if base.startswith(".wh."):
+                        gone = os.path.join(d, base[4:])
+                        for p in [p for p in files if p == gone or p.startswith(gone + "/")]:
+                            files.pop(p, None)
+                            contents.pop(p, None)
+                        continue
+                    t = "d" if ti.isdir() else "l" if ti.issym() or ti.islnk() else "f"
+                    files[path] = (ti.mode, ti.size, t)
+                    if t == "f" and wanted.match(path) and ti.size < 8 * 1024 * 1024:
+                        f = tf.extractfile(ti)
+                        contents[path] = f.read().decode("utf-8", "replace") if f else ""
+                    else:
+                        contents.pop(path, None)
+    return config, files, contents
+
+
+def image_checks(config, files, contents):
+    checks = []
+
+    def add(cid, title, status, detail, items=None):
+        checks.append({"id": cid, "title": title, "status": status, "detail": detail, "items": (items or [])[:30]})
+
+    user = (config.get("config") or {}).get("User") or "root"
+    add("user", "Runs as a regular user", "fail" if user in ("", "root", "0", "0:0") else "pass",
+        "The image's default user is %s." % (user or "root"))
+    shadow = contents.get("etc/shadow", "")
+    empty = [line.split(":")[0] for line in shadow.splitlines() if line.count(":") >= 2 and line.split(":")[1] == ""]
+    add("passwords", "No account without a password", "fail" if empty else "pass",
+        "Accounts anyone can log in to without a password: %s." % ", ".join(empty) if empty
+        else "Every account has a password or is locked.", empty)
+    root_locked = any(line.startswith("root:") and line.split(":")[1].startswith(("!", "*")) for line in shadow.splitlines())
+    add("root", "The root account is locked", "pass" if root_locked else "warn",
+        "root has no usable password." if root_locked else "root has a password: lock it (Hardening).")
+    sudo = "\n".join(v for k, v in contents.items() if k.startswith("etc/sudoers"))
+    nopasswd = [line.strip() for line in sudo.splitlines() if "NOPASSWD" in line and not line.strip().startswith("#")]
+    add("sudo", "No passwordless sudo", "warn" if nopasswd else "pass",
+        "Anyone with a terminal in the workspace can become root: %d rule(s)." % len(nopasswd) if nopasswd
+        else "No NOPASSWD rules.", nopasswd)
+    suid = sorted(p for p, (mode, _, t) in files.items() if t == "f" and mode & 0o6000)
+    add("setuid", "Few setuid / setgid programs", "warn" if len(suid) > 15 else "pass",
+        "%d program(s) run with their owner's or group's rights." % len(suid), ["/" + p for p in suid])
+    ww = sorted(p for p, (mode, _, t) in files.items() if t in ("f", "d") and mode & 0o002 and not (mode & 0o1000)
+                and not p.startswith(("tmp/", "var/tmp/", "dev/", "proc/", "run/")))
+    add("world-writable", "No world-writable files or folders", "warn" if ww else "pass",
+        "%d path(s) anyone can change." % len(ww), ["/" + p for p in ww])
+    hostkeys = sorted(p for p in contents if p.startswith("etc/ssh/ssh_host_") and p.endswith("_key"))
+    add("ssh-host-keys", "No SSH host keys baked in", "warn" if hostkeys else "pass",
+        "Every workspace from this image would share these keys." if hostkeys else "None.", ["/" + p for p in hostkeys])
+    keys = sorted(p for p in contents if re.search(r"/\.ssh/id_", p))
+    hist = sorted(p for p in contents if p.endswith(".bash_history"))
+    add("leftovers", "No private keys or shell history in home folders", "fail" if keys else "warn" if hist else "pass",
+        "Files that should not ship in an image." if keys or hist else "None.", ["/" + p for p in keys + hist])
+    status = contents.get("var/lib/dpkg/status", "")
+    pkgs = re.findall(r"^Package: (.+)$", status, re.M)
+    add("packages", "Package count", "pass", "%d Debian packages installed." % len(pkgs))
+    compilers = [p for p in ("gcc", "g++", "make", "clang") if any(x == p or x.startswith(p + "-") for x in pkgs)]
+    add("compilers", "Compilers", "warn" if compilers else "pass",
+        "Installed: %s (remove them if workspaces need not build code)." % ", ".join(compilers) if compilers
+        else "None installed.", compilers)
+    return checks, pkgs
+
+
+def fips_checks(files, contents, pkgs):
+    out = []
+
+    def add(cid, title, status, detail):
+        out.append({"id": cid, "title": title, "status": status, "detail": detail})
+
+    module = sorted(p for p in files if re.match(r"usr/lib/[^/]+/ossl-modules/fips\.so$", p))
+    validated = [p for p in pkgs if p in ("openssl-fips-module-3", "ubuntu-fips", "libssl3-fips", "fips-initramfs")]
+    add("module", "A FIPS 140 validated OpenSSL module is installed",
+        "pass" if module and validated else "warn" if module else "fail",
+        ("Ubuntu Pro FIPS packages: %s." % ", ".join(validated)) if validated
+        else ("An OpenSSL FIPS provider (%s) is there, but not from a validated package." % ("/" + module[0]))
+        if module else "No FIPS provider. Validated modules come with Ubuntu Pro (openssl-fips-module-3 from its FIPS "
+                       "repository, through your mirror); add the package and build again.")
+    cnf = contents.get("etc/ssl/openssl.cnf", "")
+    add("openssl-default", "OpenSSL uses the FIPS provider by default",
+        "pass" if re.search(r"default_properties\s*=\s*fips\s*=\s*yes", cnf) and "fipsmodule.cnf" in cnf else "fail",
+        "openssl.cnf makes fips=yes the default." if "fips=yes" in cnf.replace(" ", "") else
+        "openssl.cnf does not select the FIPS provider (FIPS-aligned crypto, in the builder, does once a module is there).")
+    tls = re.search(r"MinProtocol\s*=\s*TLSv1\.[23]", cnf)
+    add("tls", "TLS 1.2 or later only", "pass" if tls else "warn",
+        "openssl.cnf sets MinProtocol." if tls else "Older TLS versions are allowed by OpenSSL's defaults.")
+    ssh = "\n".join(v for k, v in contents.items() if k.startswith("etc/ssh/ssh_config"))
+    ciphers = re.findall(r"^\s*Ciphers\s+(\S+)", ssh, re.M | re.I)
+    approved = set(FIPS_CIPHERS.split(","))
+    ok = ciphers and all(set(c.split(",")) <= approved for c in ciphers)
+    add("ssh", "SSH uses FIPS-approved ciphers", "pass" if ok else "warn",
+        "Ciphers: %s." % ciphers[-1] if ciphers else "SSH's defaults include ciphers FIPS does not approve (chacha20).")
+    gnutls = [p for p in pkgs if p.startswith("libgnutls")]
+    add("other-libs", "Other crypto libraries", "warn" if gnutls else "pass",
+        "GnuTLS / libgcrypt run in FIPS mode only when the host kernel does: %s." % ", ".join(gnutls[:4]) if gnutls
+        else "Only OpenSSL.")
+    add("kernel", "The host runs in FIPS mode", "info",
+        "A container shares its node's kernel: FIPS mode (fips=1) is set on the nodes, not in the image.")
+    by_id = {c["id"]: c["status"] for c in out}
+    problems = [c for c in out if c["status"] in ("fail", "warn")]
+    if by_id["module"] == "pass" and by_id["openssl-default"] == "pass" and not problems:
+        status = "ready"
+    elif by_id["module"] == "fail" and by_id["openssl-default"] == "fail":
+        status = "not-ready"
+    else:
+        status = "partial"
+    return {"status": status, "checks": out,
+            "note": "An image cannot be FIPS certified on its own: it needs a validated module, FIPS mode on its "
+                    "nodes, and applications that use them. This checks the image's part."}
+
+
+def scan(ref, report_url):
+    """The scan Job: trivy (vulnerabilities, secrets) on the image in the registry, then the image's files."""
+    def post(body):
+        req = urllib.request.Request(report_url, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=60).read()
+
+    post({"progress": "scan"})
+    report = {"ref": ref, "scannedAt": now()}
+    # Java archives need trivy's separate Java database, which the air-gapped bundle doesn't carry: not analysed.
+    p = subprocess.run(["trivy", "image", "--insecure", "--cache-backend", "memory", "--scanners", "vuln,secret",
+                        "--skip-files", "**/*.jar", "--skip-files", "**/*.war", "--skip-files", "**/*.ear",
+                        "--format", "json", "--quiet", "--timeout", "25m", ref],
+                       capture_output=True, timeout=1800)
+    try:
+        t = json.loads(p.stdout or b"{}")
+    except ValueError:
+        t = {}
+    if p.returncode != 0 and not t:
+        report["error"] = "trivy: " + p.stderr.decode()[-600:]
+    vulns, secrets_ = [], []
+    for res in t.get("Results") or []:
+        for v in res.get("Vulnerabilities") or []:
+            vulns.append({"id": v.get("VulnerabilityID"), "pkg": v.get("PkgName"), "installed": v.get("InstalledVersion"),
+                          "fixed": v.get("FixedVersion") or "", "severity": v.get("Severity", "UNKNOWN"),
+                          "title": (v.get("Title") or v.get("Description") or "")[:160], "target": res.get("Target")})
+        for s in res.get("Secrets") or []:
+            secrets_.append({"rule": s.get("RuleID"), "title": s.get("Title"), "severity": s.get("Severity"),
+                             "target": res.get("Target"), "line": s.get("StartLine")})
+    counts = {s: sum(1 for v in vulns if v["severity"] == s) for s in SEVERITIES}
+    order = {s: i for i, s in enumerate(SEVERITIES)}
+    vulns.sort(key=lambda v: (order.get(v["severity"], 9), v["fixed"] == "", v["pkg"] or ""))
+    report["vulnerabilities"] = {"counts": counts, "total": len(vulns), "fixable": sum(1 for v in vulns if v["fixed"]),
+                                 "top": vulns[:200], "scanned": not report.get("error"),
+                                 "os": (t.get("Metadata") or {}).get("OS"),
+                                 "note": "Java archives (.jar) are not checked: their vulnerability database is not "
+                                         "in the bundle."}
+    report["secrets"] = secrets_[:50]
+    d = subprocess.run(["trivy", "--version", "--format", "json"], capture_output=True)
+    try:
+        report["dbUpdatedAt"] = (json.loads(d.stdout).get("VulnerabilityDB") or {}).get("UpdatedAt")
+    except ValueError:
+        report["dbUpdatedAt"] = None
+    post({"progress": "checks"})
+    config, files, contents = walk_image(ref)
+    checks, pkgs = image_checks(config, files, contents)
+    report["checks"] = checks
+    report["fips"] = fips_checks(files, contents, pkgs)
+    release = contents.get("etc/os-release") or contents.get("usr/lib/os-release") or ""
+    report["os"] = (re.search(r'^PRETTY_NAME="?([^"\n]+)', release, re.M) or [None, None])[1]
+    report["grade"] = grade(report)
+    post({"report": report})
+
+
+def fetch_context(url, dest):
+    with urllib.request.urlopen(url, timeout=600) as r:
+        with tarfile.open(fileobj=r, mode="r|") as tf:
+            tf.extractall(dest, filter="data")
+
+
+# --------------------------------------------------------------------------- the API (called by ui-service's handler)
+def can_edit(user, admin_roles):
+    return bool(set(user.get("roles") or []) & (set(admin_roles) | EDIT_EXTRA_ROLES))
+
+
+def handle_internal(h, method, path):
+    """Build and scan Jobs: token-protected, no user."""
+    m = re.match(r"^%s/internal/builds/([A-Za-z0-9_-]{20,})/(context\.tar|report)$" % BASE, path)
+    if not m or not STORE:
+        return False
+    b = STORE.build(token=m.group(1))
+    if not b or b["status"] in ("ready", "failed", "cancelled"):
+        h.send(404, "not found\n")
+        return True
+    if m.group(2) == "context.tar" and method == "GET":
+        spec = json.loads(b["spec"])
+        h.send_response(200)
+        h.send_header("Content-Type", "application/x-tar")
+        h.send_header("Connection", "close")
+        h.end_headers()
+        h.close_connection = True
+        context_tar(spec, b["image_id"], b["version"], base_ref_for(spec), h.wfile)
+        return True
+    if m.group(2) == "report" and method == "POST":
+        n = int(h.headers.get("Content-Length") or 0)
+        if n > 64 * 1024 * 1024:
+            h.send(413, "too large\n")
+            return True
+        body = json.loads(h.rfile.read(n) or b"{}")
+        run = BUILDS.get(b["id"])
+        if body.get("progress") and run:
+            run.advance(body["progress"])
+        if body.get("report"):
+            STORE.put_setting("report-%d" % b["id"], body["report"])
+            STORE.update_build(b["id"], stage="checks-done")
+        h.send_json(200, {"ok": True})
+        return True
+    return False
+
+
+def upload_csrf_ok(h):
+    """ui-service's cross-site check for a file upload: the same, except that the body is the file, not JSON."""
+    if h.headers.get("X-Requested-With") != "coder-ui":
+        return False
+    origin = h.headers.get("Origin")
+    if origin and urllib.parse.urlsplit(origin).netloc != h.headers.get("Host"):
+        return False
+    return h.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+
+
+def read_json(h, limit=8 * 1024 * 1024):
+    n = int(h.headers.get("Content-Length") or 0)
+    if n > limit:
+        raise ValueError("The request is too large.")
+    data = json.loads(h.rfile.read(n) or b"{}") if n else {}
+    if not isinstance(data, dict):
+        raise ValueError("Expected a JSON object.")
+    return data
+
+
+def handle(h, method, path, query, admin_roles):
+    """The Images API. True when it answered."""
+    if not path.startswith(BASE + "/api/images"):
+        return False
+    if not ENABLED or not STORE:
+        h.send_json(404, {"error": "The image builder is not enabled."})
+        return True
+    if method == "PUT" and not upload_csrf_ok(h) or method == "POST" and not h.csrf_ok():
+        h.send_json(403, {"error": "Request rejected (cross-site protection)."})
+        return True
+    user, err = h.user()
+    if err:
+        return True
+    editor = can_edit(user, admin_roles)
+    admin = bool(set(user.get("roles") or []) & set(admin_roles))
+    rest = path[len(BASE + "/api/images"):]
+    try:
+        return route(h, method, rest, query, user, editor, admin)
+    except ValueError as e:
+        h.send_json(400, {"error": str(e)})
+        return True
+
+
+def need(editor):
+    if not editor:
+        raise PermissionError
+
+
+def route(h, method, rest, query, user, editor, admin):
+    q_ = urllib.parse.parse_qs(query)
+    try:
+        if rest in ("", "/") and method == "GET":
+            return h.send_json(200, {"images": STORE.images(), "canEdit": editor, "pullPrefix": PULL_PREFIX,
+                                     "baseImage": BASE_IMAGE.rsplit("/", 1)[-1]}) or True
+        if rest in ("", "/") and method == "POST":
+            need(editor)
+            body = read_json(h)
+            image_id = str(body.get("name") or "").strip().lower()
+            if not NAME_RE.match(image_id):
+                raise ValueError("A name of 3-40 lowercase letters, digits and dashes (it becomes the image's name).")
+            if STORE.image(image_id, full=False):
+                raise ValueError("There is an image called '%s' already." % image_id)
+            spec = clean_spec(dict(empty_spec(), base=body.get("base") or {"kind": "workspace"}), image_id)
+            STORE.create(image_id, text(body.get("description"), 2000, "The description"), spec, user["username"])
+            LOG(event="image-created", image=image_id, by=user["username"])
+            return h.send_json(200, {"image": STORE.image(image_id)}) or True
+        if rest == "/apt-check" and method == "POST":
+            body = read_json(h)
+            names = [str(n).strip() for n in body.get("packages") or [] if str(n).strip()][:500]
+            bad = [n for n in names if not PKG_RE.match(n)]
+            results = APT.check([n for n in names if PKG_RE.match(n)])
+            for n in bad:
+                results[n] = {"available": False, "invalid": True}
+            return h.send_json(200, {"results": results, "index": APT.status()}) or True
+        if rest == "/apt-search" and method == "GET":
+            return h.send_json(200, {"packages": APT.search((q_.get("q") or [""])[0][:60]), "index": APT.status()}) or True
+        if rest == "/lint" and method == "POST":
+            return h.send_json(200, lint(text(read_json(h).get("script"), 256 * 1024, "The script"))) or True
+        if rest == "/format" and method == "POST":
+            return h.send_json(200, fmt(text(read_json(h).get("script"), 256 * 1024, "The script"))) or True
+        if rest == "/dockerfile" and method == "POST":
+            body = read_json(h)
+            image_id = str(body.get("id") or "preview")
+            spec = clean_spec(body.get("spec") or {}, image_id)
+            try:
+                base = base_ref_for(spec)
+            except ValueError as e:
+                base = "(%s)" % e
+            return h.send_json(200, {"dockerfile": dockerfile(spec, image_id, (STORE.image(image_id, full=False) or
+                                                                                {"version": 0})["version"] + 1, base),
+                                     "steps": [{"key": k, "label": l} for k, l in build_plan(spec)]}) or True
+        if rest == "/settings":
+            if method == "GET":
+                return h.send_json(200, {"aptSources": APT.sources(), "defaultAptSources": DEFAULT_APT_SOURCES,
+                                         "index": APT.status(), "s3": s3_settings(), "canChange": admin,
+                                         "hardening": HARDENING}) or True
+            if not admin:
+                raise PermissionError
+            body = read_json(h)
+            if "aptSources" in body:
+                src = text(body["aptSources"], 32 * 1024, "The apt sources")
+                if src.strip() and not parse_sources(src):
+                    raise ValueError("No apt source found: deb822 stanzas (Types/URIs/Suites/Components) or "
+                                     "'deb URI suite components' lines.")
+                STORE.put_setting("aptSources", src if src.strip() else None)
+                threading.Thread(target=APT.load, kwargs={"force": True}, daemon=True).start()
+            if "s3" in body:
+                cur = s3_settings(True)
+                new = body["s3"] or {}
+                cfg = {k: text(str(new.get(k, cur.get(k, "")) or ""), 1024, k) for k in
+                       ("endpoint", "region", "bucket", "prefix", "accessKey")}
+                cfg["pathStyle"] = bool(new.get("pathStyle", cur.get("pathStyle", True)))
+                # kept unless replaced; with no access key there is no secret either (S3 switched off)
+                cfg["secretKey"] = (new.get("secretKey") or cur.get("secretKey", "")) if cfg["accessKey"] else ""
+                STORE.put_setting("s3", cfg)
+            LOG(event="image-settings", by=user["username"])
+            return h.send_json(200, {"ok": True, "s3": s3_settings()}) or True
+        if rest == "/apt-refresh" and method == "POST":
+            need(editor)
+            APT.load(force=True)
+            return h.send_json(200, {"index": APT.status()}) or True
+        m = re.match(r"^/([a-z0-9-]+)(/.*)?$", rest)
+        if not m:
+            return h.send_json(404, {"error": "not found"}) or True
+        image_id, sub = m.group(1), m.group(2) or ""
+        img = STORE.image(image_id)
+        if not img:
+            return h.send_json(404, {"error": "No image called '%s'." % image_id}) or True
+        def detail(img):
+            """The image page's view (GET, and what a save answers with, so the dashboard can keep it)."""
+            img["builds"] = STORE.builds(image_id)
+            img["activeBuild"] = STORE.active_build(image_id)
+            img["canEdit"] = editor
+            return {"image": img}
+
+        if sub == "" and method == "GET":
+            return h.send_json(200, detail(img)) or True
+        if sub == "" and method == "POST":
+            need(editor)
+            body = read_json(h)
+            spec = clean_spec(body["spec"], image_id) if "spec" in body else None
+            desc = text(body.get("description"), 2000, "The description") if "description" in body else None
+            STORE.save(image_id, user["username"], spec, desc)
+            return h.send_json(200, detail(STORE.image(image_id))) or True
+        if sub == "/delete" and method == "POST":
+            need(editor)
+            if STORE.active_build(image_id):
+                raise ValueError("Wait for the build to finish (or cancel it) first.")
+            users = [i["id"] for i in STORE.images() if i["base"].get("kind") == "image" and i["base"].get("id") == image_id]
+            if users:
+                raise ValueError("These images are built on it: %s." % ", ".join(users))
+            removed = delete_tags("%s/%s" % (REPO, image_id))
+            shutil.rmtree(image_dir(image_id), ignore_errors=True)
+            STORE.delete(image_id)
+            LOG(event="image-deleted", image=image_id, by=user["username"], tags=removed)
+            return h.send_json(200, {"ok": True}) or True
+        if sub == "/build" and method == "POST":
+            need(editor)
+            build_id = start_build(image_id, user["username"])
+            return h.send_json(200, {"build": build_id}) or True
+        mb = re.match(r"^/builds/(\d+)(/cancel)?$", sub)
+        if mb:
+            build_id = int(mb.group(1))
+            if mb.group(2) and method == "POST":
+                need(editor)
+                cancel_build(image_id, build_id)
+                return h.send_json(200, {"ok": True}) or True
+            b = STORE.build(build_id)
+            if not b or b["image_id"] != image_id:
+                return h.send_json(404, {"error": "No such build."}) or True
+            tail = int((q_.get("log") or ["400"])[0] or 400)
+            log = b["log"].splitlines()[-min(tail, 4000):]
+            return h.send_json(200, {"build": {
+                "id": b["id"], "version": b["version"], "status": b["status"], "stage": b["stage"],
+                "progress": b["progress"], "message": b["message"], "steps": json.loads(b["steps"] or "[]"),
+                "startedAt": b["started_at"], "finishedAt": b["finished_at"], "by": b["by"], "error": b["error"],
+                "log": log}, "image": {"id": image_id, "pullRef": STORE.image(image_id, full=False)["pullRef"],
+                                       "summary": STORE.image(image_id, full=False)["summary"]}}) or True
+        mf = re.match(r"^/files/(deb|install|dotfile)/([^/]+)$", sub)
+        if mf and method == "PUT":
+            need(editor)
+            return upload(h, image_id, mf.group(1), urllib.parse.unquote(mf.group(2)), (q_.get("install") or [None])[0])
+        if sub == "/files/delete" and method == "POST":
+            need(editor)
+            body = read_json(h)
+            kind, name = body.get("kind"), str(body.get("name") or "")
+            install = body.get("install")
+            if kind not in ("deb", "install", "dotfile") or not FILE_NAME_RE.match(name) or (
+                    kind == "install" and not INSTALL_ID_RE.match(str(install or ""))):
+                raise ValueError("Which file?")
+            try:
+                os.remove(file_path(image_id, kind, name, install))
+            except FileNotFoundError:
+                pass
+            return h.send_json(200, {"ok": True}) or True
+        if sub == "/download" and method == "GET":
+            if not img["ref"]:
+                raise ValueError("The image has not been built yet.")
+            h.send_response(200)
+            h.send_header("Content-Type", "application/x-tar")
+            h.send_header("Content-Disposition", 'attachment; filename="%s-%d.tar"' % (image_id, img["version"]))
+            h.send_header("Cache-Control", "no-store")
+            h.send_header("Connection", "close")
+            h.end_headers()
+            h.close_connection = True
+            LOG(event="image-download", image=image_id, version=img["version"], by=user["username"])
+            docker_archive("%s/%s" % (REPO, image_id), str(img["version"]), img["pullRef"], h.wfile)
+            return True
+        if sub == "/s3" and method == "POST":
+            need(editor)
+            on = bool(read_json(h).get("enabled"))
+            STORE.set(image_id, s3=dict(img["s3"], enabled=on))
+            return h.send_json(200, {"s3": STORE.image(image_id, full=False)["s3"]}) or True
+        if sub == "/s3/backup" and method == "POST":
+            need(editor)
+            if (img["s3"] or {}).get("status") == "uploading":
+                raise ValueError("A backup is running.")
+            threading.Thread(target=lambda: _quiet(s3_backup, image_id), daemon=True).start()
+            return h.send_json(200, {"ok": True}) or True
+        return h.send_json(404, {"error": "not found"}) or True
+    except PermissionError:
+        return h.send_json(403, {"error": "Only admins and template admins can change images."}) or True
+
+
+def _quiet(fn, *args):
+    try:
+        fn(*args)
+    except Exception as e:  # noqa: BLE001 - recorded on the image
+        if LOG:
+            LOG(event="image-s3-backup-failed", error=str(e)[:300])
+
+
+def upload(h, image_id, kind, name, install):
+    """A file streamed to the builder volume (up to 2 GB): a .deb, an installation's file or a dotfile."""
+    if not FILE_NAME_RE.match(name):
+        raise ValueError("A file name of letters, digits, dots, dashes and underscores.")
+    if kind == "deb" and not name.endswith(".deb"):
+        raise ValueError("A Debian package (.deb).")
+    if kind == "install" and not INSTALL_ID_RE.match(str(install or "")):
+        raise ValueError("Which installation?")
+    n = int(h.headers.get("Content-Length") or -1)
+    if n < 0:
+        raise ValueError("The upload needs a Content-Length.")
+    if n > MAX_UPLOAD:
+        raise ValueError("Files can be at most 2 GB.")
+    dest = file_path(image_id, kind, name, install)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    digest = hashlib.sha256()
+    with open(dest + ".part", "wb") as f:
+        left = n
+        while left:
+            chunk = h.rfile.read(min(1024 * 1024, left))
+            if not chunk:
+                break
+            f.write(chunk)
+            digest.update(chunk)
+            left -= len(chunk)
+    if left:
+        os.remove(dest + ".part")
+        raise ValueError("The upload was cut short.")
+    if kind == "deb":
+        with open(dest + ".part", "rb") as f:
+            if f.read(8) != b"!<arch>\n":
+                os.remove(dest + ".part")
+                raise ValueError("%s is not a Debian package." % name)
+    os.replace(dest + ".part", dest)
+    LOG(event="image-file", image=image_id, kind=kind, file=name, bytes=n)
+    h.send_json(200, {"file": {"name": name, "size": n, "sha256": digest.hexdigest()}})
+    return True
+
+
+def start():
+    global STORE
+    if ENABLED:
+        STORE = DB(os.path.join(FILES, "images.sqlite"))
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["fetch-context"]:
+        fetch_context(sys.argv[2], sys.argv[3])
+    elif sys.argv[1:2] == ["scan"]:
+        scan(sys.argv[2], sys.argv[3])
+    else:
+        sys.exit(__doc__)

@@ -1,4 +1,4 @@
-# coder-airgapped 1.24.1: portable Helm chart of the live Coder fork
+# coder-airgapped 1.25.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -225,5 +225,8 @@ were missing from `prereqs/`; three HTTPRoutes stayed OutOfSync. The harness to 
   and File Browser (`raw.githubusercontent.com`). In a strict air gap the agent connects and the desktop and marimo
   work (they are in the workspace image, `development/workspace-image`), but those two apps are missing. Add them to
   the workspace image the same way, or point the downloads at internal mirrors.
+* **The image builder (Templates › Images) needs an apt mirror** in a strict air gap: set `imageBuilder.aptSources`
+  (or Images › Settings) to it. Otherwise the package check finds nothing and builds that install packages fail.
+  Its vulnerability database is the one in `coder-image-tools`, as old as the bundle; Java archives are not scanned.
 * The noVNC app icon is a wikimedia.org URL (cosmetic).
 * `ghcr.io/coder/coder:latest` (the push Job's CLI) is a floating tag: mirror it once and keep that copy.

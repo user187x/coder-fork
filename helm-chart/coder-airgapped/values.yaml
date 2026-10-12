@@ -84,9 +84,9 @@ coder:
   coder:
     image:
       repo: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-platform") }}'
-      # The fork's 2.0.0-platform.21 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
+      # The fork's 2.0.0-platform.22 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
       # (development/airgap-image), without which templates cannot be pushed or built offline.
-      tag: 2.0.0-platform.21-airgap
+      tag: 2.0.0-platform.22-airgap
       pullSecrets: []
     # No gap during rollouts. The new pod starts first and must be ready before the old one stops (the defaults with
     # one replica: maxSurge 25% rounds up to 1, maxUnavailable 25% down to 0). The old pod then keeps serving for 15 s
@@ -254,13 +254,54 @@ bootstrap:
   timeoutSeconds: 900
 
 # ---------------------------------------------------------------------------------------------------------------
+# Images view (Templates > Images): workspace images built in the cluster (templates/image-builder.yaml). Builds run as
+# Jobs with BuildKit rootless (its pods need seccomp and AppArmor unconfined, nothing more); built images are kept in
+# coder-image-registry and pulled by workspace pods as localhost:<localPort>/coder-images/<name>:<version>.
+# ---------------------------------------------------------------------------------------------------------------
+imageBuilder:
+  enabled: true
+  buildkitImage: '{{ include "platform.image" (list . "docker.io/moby/buildkit:v0.33.0-rootless") }}'
+  # The node proxy's image: any image with python3 (the add-on services' is reused).
+  proxyImage: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
+  registry:
+    deploy: true
+    image: '{{ include "platform.image" (list . "docker.io/library/registry:3.1.2") }}'
+    size: 50Gi
+    storageClass: ""
+    localPort: 5000
+  # Uploads (.deb files, installation files) and build contexts.
+  files:
+    size: 20Gi
+    storageClass: ""
+  # Each build Job's resources and time limit.
+  build:
+    cpu: "4"
+    memory: 8Gi
+    timeoutMinutes: 60
+  # Where apt packages come from (deb822), for the package check and for the builds themselves. In an air-gapped
+  # network: your internal mirror (it can also be set in the Images view). These are the workspace image's own
+  # (Ubuntu 26.04 "resolute").
+  aptSources: |
+    Types: deb
+    URIs: http://archive.ubuntu.com/ubuntu/
+    Suites: resolute resolute-updates resolute-backports
+    Components: main universe restricted multiverse
+
+    Types: deb
+    URIs: http://security.ubuntu.com/ubuntu/
+    Suites: resolute-security
+    Components: main universe restricted multiverse
+
+# ---------------------------------------------------------------------------------------------------------------
 # coder-ui-updates: the platform service under /__coder-ui/ (General, Health, Certificates, Chat, Network,
 # Monitoring, Keycloak, logo, avatars...). Files: files/ui-updates/ (source: devbox coder-ui-updates/resources).
 # The platform image renders the UI natively, so no Traefik rewrite middleware is involved for these.
 # ---------------------------------------------------------------------------------------------------------------
 uiUpdates:
   enabled: true
-  image: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
+  # The bundled Python with shellcheck, shfmt, trivy (+ its database) and regctl (development/image-tools): the Images
+  # view lints and formats installation scripts and scans built images with them.
+  image: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-image-tools:1.0.0") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'
@@ -276,7 +317,7 @@ uiUpdates:
     storageClass: standard
   resources:
     requests: {cpu: 10m, memory: 32Mi}
-    limits: {memory: 192Mi}
+    limits: {memory: 512Mi}  # the Images builder: apt package lists, streamed image downloads
   # The Keycloak view reads Keycloak's admin Secret and repairs the client. Disable where Keycloak is elsewhere.
   keycloak:
     enabled: true
