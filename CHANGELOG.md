@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.26.2 – 2026-10-12
+
+Coder `2.0.0-platform.23` (rebuilt: `022e2cc56`).
+
+* **Metrics Interval: 1 s by default** (until a browser has chosen another).
+* **The choices are in order of length:** 1 s, 5 s, Live (at the agent's own interval, 10 s), 30 s, 1 min, 5 min,
+  then Off.
+* **A compact menu** (232 px wide, half its former height). Each choice is one line: the interval in its circle, its
+  name, and on the right the span the graphs cover (40 s to 3.3 h). The longer explanations are on hover. A
+  one-line colour scale (<50, 50, 65, 75, 90 %) and how often the agent reports sit above and below.
+
 ## 1.26.1 – 2026-10-12
 
 Coder `2.0.0-platform.23` (rebuilt: `fbfb8f451`).

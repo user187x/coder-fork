@@ -4,7 +4,7 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.23-airgap  sha256:90edf1aec52d2ab913afc49b294cbc15c8201867bbae4ed8a3dcbdd6586d564d   coder (server); = the fork's platform.23 (fbfb8f451) + Terraform provider mirror
+ghcr.io/user187x/coder-platform:2.0.0-platform.23-airgap  sha256:810cb36094eb938cc62b4961b391baabeb1e5ee7859870d679a394649abc32fa   coder (server); = the fork's platform.23 (022e2cc56) + Terraform provider mirror
 ghcr.io/user187x/coder-workspace:1.7.0                    sha256:e814705b7f91d1e9896e558d646668f944531aea348eb3d7d74cccaf674df189   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
 ghcr.io/user187x/coder-image-tools:1.0.0                  sha256:b173c95de907b184a0219d40ac1dedb6c07a929a10406c96856eb9cda092f8af   coder-ui-updates and the Images builder's scans: the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
 

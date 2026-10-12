@@ -12,13 +12,13 @@ The machine needs these installed:  docker, minikube, helm, kubectl
 
 1. UNPACK THE BUNDLE
 --------------------
-    tar -xzf coder-airgapped-1.26.1.tar.gz
-    cd coder-airgapped-1.26.1
+    tar -xzf coder-airgapped-1.26.2.tar.gz
+    cd coder-airgapped-1.26.2
 
 (The release on GitHub comes in two parts. Join them first:
-    sha256sum -c coder-airgapped-1.26.1.parts.sha256
-    cat coder-airgapped-1.26.1.tar.gz.part-0* > coder-airgapped-1.26.1.tar.gz
-    sha256sum -c coder-airgapped-1.26.1.tar.gz.sha256 )
+    sha256sum -c coder-airgapped-1.26.2.parts.sha256
+    cat coder-airgapped-1.26.2.tar.gz.part-0* > coder-airgapped-1.26.2.tar.gz
+    sha256sum -c coder-airgapped-1.26.2.tar.gz.sha256 )
 
 
 2. RUN THE INSTALLER
