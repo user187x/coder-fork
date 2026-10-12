@@ -38,6 +38,10 @@ Coder `2.0.0-platform.23`.
     are kept. Tested on Minikube: 1 → 3 GiB in 28 s, data intact.
   * The workspace template ignores the home volume's size after creation (`lifecycle { ignore_changes }`), so a
     later build never shrinks a grown disk.
+* **Workspace metrics graphs** (workspace page, the agent's metrics): every metric (CPU Usage, RAM Usage, Home Disk,
+  Load Average, the host's, …) has a live bar graph of its readings between its name and its value: the last 40
+  readings (about 7 minutes), newest on the right, percentages on a 0–100 % scale, hover for each reading's time and
+  value. Kept while the page is open.
 * **Agent outdated indicator** (workspace page, next to the agent's name): the glowing green **Update** pill of
   `workspace-update.html` (rim, recessed refresh icon with a pulsing ring), built in HTML and CSS for both themes,
   instead of the badge images. Clicking it still opens the details and "Update workspace".
