@@ -38,7 +38,9 @@
   GET  /__coder-ui/api/gallery                the provided pictures to choose from as logo or avatar (signed in)
   GET  /__coder-ui/background/<login|dashboard>?v=<sha>   a background image (public: the sign-in page shows it)
   GET  /__coder-ui/api/backgrounds            admins: both background images, their opacity, fit and layer
-  POST /__coder-ui/api/backgrounds {slot, dataUrl?, opacity?, fit?, layer?}   POST /api/backgrounds/reset {slot}
+  POST /__coder-ui/api/backgrounds {slot, dataUrl? | html?, opacity?, fit?, layer?, params?}   POST /api/backgrounds/reset
+       {slot}. html: an HTML / CSS background, served sandboxed (BG_HTML_CSP); params: its dials (speed, hue,
+       saturation, brightness, blur) and, for a preset, the preset's settings
   GET  /__coder-ui/gallery/<file>?v=<sha>     one of them (public, like the default avatar)
 
   Chat (every signed-in user; admins in ADMIN_ROLES write to anyone, others to admins or whoever wrote to them;
@@ -2953,16 +2955,59 @@ BG_MAX_BYTES = 4 * 1024 * 1024  # the dashboard sends at most 1920 x 1200 (WebP)
 BG_FITS = ("cover", "contain", "tile")
 BG_LAYERS = ("under", "over")  # behind the page's content, or a faint watermark over it
 BG_OPACITY = (0.02, 0.3, 0.06)  # min, max, default: hardly noticeable
+BG_HTML_MAX = 256 * 1024  # an HTML / CSS background (an animated one like the Particles preset)
+BG_PARAMS_MAX = 16 * 1024
+# The dials every HTML background has, and their bounds: playback speed of its animations, then CSS filters.
+BG_DIALS = {"speed": (0.1, 4.0, 1.0), "hue": (-180.0, 180.0, 0.0), "saturation": (0.0, 3.0, 1.0),
+            "brightness": (0.3, 2.0, 1.0), "blur": (0.0, 20.0, 0.0)}
+# How an HTML background is served (its own response, shown in a sandboxed frame): no access to Coder's page, its
+# cookies or the network; inline styles and scripts only, pictures only as data: URLs.
+BG_HTML_CSP = ("sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' data:; script-src 'unsafe-inline'; "
+               "img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; "
+               "form-action 'none'; base-uri 'none'; frame-ancestors 'self'")
+# Added to every HTML background: plays its CSS (and Web) animations at the speed in the frame's #speed=, paused with
+# #paused=1 (the dashboard's Animations switch). The same script as the dashboard's preview (backgroundHtml.ts).
+BG_HTML_CONTROLLER = (
+    "<script>(()=>{const q=()=>new URLSearchParams(location.hash.slice(1));let r=1;const a=()=>{const h=q();"
+    "r=h.get('paused')==='1'?0:Math.min(4,Math.max(0.1,Number(h.get('speed'))||1));for(const x of "
+    "document.getAnimations())if(x.playbackRate!==r)x.playbackRate=r};addEventListener('hashchange',a);"
+    "addEventListener('load',a);setInterval(a,500);a()})();</script>"
+)
+
+
+def clean_bg_params(value):
+    """The dials of an HTML background (bounded numbers) and, for a preset, its own settings (kept as given, small)."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("params must be an object.")
+    out = {}
+    for key, (lo, hi, _default) in BG_DIALS.items():
+        if value.get(key) is not None:
+            try:
+                out[key] = round(min(hi, max(lo, float(value[key]))), 3)
+            except (TypeError, ValueError):
+                raise ValueError("%s must be a number." % key) from None
+    if value.get("preset") is not None:
+        if not isinstance(value["preset"], dict):
+            raise ValueError("preset must be an object.")
+        out["preset"] = value["preset"]
+    if len(json.dumps(out)) > BG_PARAMS_MAX:
+        raise ValueError("The settings are too large.")
+    return out
 
 
 def clean_bg_settings(payload, current=None):
-    """{opacity, fit, layer} from a request, within bounds; missing ones keep `current` (else the defaults)."""
+    """{opacity, fit, layer, params} from a request, within bounds; missing ones keep `current` (else the defaults)."""
     current = current or {}
     out = {
         "opacity": current.get("opacity", BG_OPACITY[2]),
         "fit": current.get("fit", "cover"),
         "layer": current.get("layer", "under"),
+        "params": current.get("params") or {},
     }
+    if payload.get("params") is not None:
+        out["params"] = clean_bg_params(payload["params"])
     if payload.get("opacity") is not None:
         try:
             value = float(payload["opacity"])
@@ -2978,6 +3023,23 @@ def clean_bg_settings(payload, current=None):
             raise ValueError("layer must be one of %s." % ", ".join(BG_LAYERS))
         out["layer"] = payload["layer"]
     return out
+
+
+def parse_background_html(html):
+    """An HTML / CSS background: text, at most BG_HTML_MAX bytes. It is not sanitised: it only ever runs sandboxed."""
+    if not isinstance(html, str) or not html.strip():
+        raise ValueError("The HTML is empty.")
+    data = html.encode("utf-8")
+    if len(data) > BG_HTML_MAX:
+        raise ValueError("The HTML must be smaller than %d KB." % (BG_HTML_MAX // 1024))
+    return "text/html", data
+
+
+def serve_background_html(data):
+    """The stored HTML with the speed controller added (before </body>, else at the end)."""
+    html = data.decode("utf-8", errors="replace")
+    i = html.lower().rfind("</body>")
+    return (html[:i] + BG_HTML_CONTROLLER + html[i:] if i >= 0 else html + BG_HTML_CONTROLLER).encode("utf-8")
 
 
 def parse_background(data_url):
@@ -3003,6 +3065,7 @@ class BackgroundStore:
         self.ready = False
         self.lock = threading.Lock()
         self.cache, self.loaded_at, self.refreshing = {}, 0, False
+        self.peek()  # start loading them now, so the first pages after a restart have them
 
     @property
     def pool(self):
@@ -3018,6 +3081,10 @@ class BackgroundStore:
             opacity real NOT NULL, fit text NOT NULL, layer text NOT NULL, updated_by text,
             updated_at timestamptz NOT NULL DEFAULT now())"""
         )
+        # 1.24.0: HTML backgrounds' dials (speed, filters) and preset settings
+        self.pool.query(
+            "ALTER TABLE coder_ui_updates.background ADD COLUMN IF NOT EXISTS params text NOT NULL DEFAULT '{}'"
+        )
         self.ready = True
 
     def all(self, fresh=False):
@@ -3029,12 +3096,20 @@ class BackgroundStore:
                 return self.cache
             self._schema()
             rows = self.pool.query(
-                "SELECT slot, content_type, data, sha256, opacity, fit, layer, updated_by, updated_at::text "
+                "SELECT slot, content_type, data, sha256, opacity, fit, layer, updated_by, updated_at::text, params "
                 "FROM coder_ui_updates.background"
             )
+
+            def params(text):
+                try:
+                    value = json.loads(text or "{}")
+                    return value if isinstance(value, dict) else {}
+                except ValueError:
+                    return {}
+
             self.cache = {
                 r[0]: {"type": r[1], "data": r[2], "sha": r[3], "opacity": float(r[4]), "fit": r[5], "layer": r[6],
-                       "by": r[7], "at": r[8]}
+                       "by": r[7], "at": r[8], "params": params(r[9])}
                 for r in rows if r[0] in BG_SLOTS
             }
             self.loaded_at = time.time()
@@ -3063,11 +3138,12 @@ class BackgroundStore:
             self._schema()
             self.pool.query(
                 """INSERT INTO coder_ui_updates.background (slot, content_type, data, sha256, opacity, fit, layer,
-                updated_by, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) ON CONFLICT (slot) DO UPDATE SET
-                content_type = excluded.content_type, data = excluded.data, sha256 = excluded.sha256,
-                opacity = excluded.opacity, fit = excluded.fit, layer = excluded.layer,
+                updated_by, updated_at, params) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9) ON CONFLICT (slot)
+                DO UPDATE SET content_type = excluded.content_type, data = excluded.data, sha256 = excluded.sha256,
+                opacity = excluded.opacity, fit = excluded.fit, layer = excluded.layer, params = excluded.params,
                 updated_by = excluded.updated_by, updated_at = now()""",
-                [slot, ctype, data, sha, settings["opacity"], settings["fit"], settings["layer"], user],
+                [slot, ctype, data, sha, settings["opacity"], settings["fit"], settings["layer"], user,
+                 json.dumps(settings["params"])],
             )
             self.loaded_at = 0
         self.all(fresh=True)
@@ -3077,8 +3153,8 @@ class BackgroundStore:
             self._schema()
             hit = self.pool.query(
                 "UPDATE coder_ui_updates.background SET opacity = $2, fit = $3, layer = $4, updated_by = $5, "
-                "updated_at = now() WHERE slot = $1 RETURNING slot",
-                [slot, settings["opacity"], settings["fit"], settings["layer"], user],
+                "params = $6, updated_at = now() WHERE slot = $1 RETURNING slot",
+                [slot, settings["opacity"], settings["fit"], settings["layer"], user, json.dumps(settings["params"])],
             )
             self.loaded_at = 0
         self.all(fresh=True)
@@ -3097,7 +3173,8 @@ def background_public(slot, bg):
     if not bg:
         return None
     return {"url": "%s/background/%s?v=%s" % (BASE, slot, bg["sha"]), "opacity": bg["opacity"], "fit": bg["fit"],
-            "layer": bg["layer"]}
+            "layer": bg["layer"], "kind": "html" if bg["type"] == "text/html" else "image",
+            "params": bg.get("params") or {}}
 
 
 BACKGROUNDS = None
@@ -6571,7 +6648,7 @@ class Handler(BaseHTTPRequestHandler):
         if urllib.parse.urlsplit(self.path).path == BASE + "/api/avatar":
             limit = AVATAR_MAX_BYTES * 2
         if urllib.parse.urlsplit(self.path).path == BASE + "/api/backgrounds":
-            limit = BG_MAX_BYTES * 2
+            limit = BG_MAX_BYTES * 2 + BG_HTML_MAX * 2 + BG_PARAMS_MAX
         if urllib.parse.urlsplit(self.path).path == BASE + "/api/icons":
             limit = (
                 ICON_MAX_BYTES * 2 + 1024
@@ -6729,6 +6806,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(503, "Coder's database is not reachable: %s\n" % str(e)[:200])
             if not bg:
                 return self.send(404, "no background\n", headers={"Cache-Control": "no-cache"})
+            if bg["type"] == "text/html":
+                return self.send(200, serve_background_html(bg["data"]), "text/html; charset=utf-8", {
+                    "Content-Security-Policy": BG_HTML_CSP,
+                    "Cache-Control": "public, max-age=31536000, immutable" if "v=" in url.query else "no-cache"})
             return self.send(200, bg["data"], bg["type"], {
                 "Cache-Control": "public, max-age=31536000, immutable" if "v=" in url.query else "no-cache"})
         if path == BASE + "/api/backgrounds":
@@ -6741,7 +6822,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(503, {"error": "Coder's database is not reachable: %s" % str(e)[:200]})
             out = {"available": bool(BACKGROUNDS and BACKGROUNDS.pool), "limits": {
                 "opacity": {"min": BG_OPACITY[0], "max": BG_OPACITY[1], "default": BG_OPACITY[2]},
-                "fits": list(BG_FITS), "layers": list(BG_LAYERS), "maxBytes": BG_MAX_BYTES}}
+                "fits": list(BG_FITS), "layers": list(BG_LAYERS), "maxBytes": BG_MAX_BYTES,
+                "htmlMaxBytes": BG_HTML_MAX,
+                "dials": {k: {"min": v[0], "max": v[1], "default": v[2]} for k, v in BG_DIALS.items()}}}
             for slot in BG_SLOTS:
                 bg = found.get(slot)
                 out[slot] = dict(background_public(slot, bg), type=bg["type"], bytes=len(bg["data"]),
@@ -7467,14 +7550,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(200, {"ok": True, "set": False})
                 current = BACKGROUNDS.all(fresh=True).get(slot)
                 settings = clean_bg_settings(payload, current)
-                if payload.get("dataUrl"):
-                    ctype, data = parse_background(payload["dataUrl"])
+                if payload.get("dataUrl") or payload.get("html"):
+                    ctype, data = (parse_background_html(payload["html"]) if payload.get("html")
+                                   else parse_background(payload["dataUrl"]))
+                    if ctype != "text/html" and payload.get("params") is None:
+                        settings["params"] = {}  # an image has no dials
                     BACKGROUNDS.put(slot, ctype, data, settings, user["username"])
                     log(event="background-saved", user=user["username"], slot=slot, type=ctype, bytes=len(data),
-                        **settings)
+                        opacity=settings["opacity"], fit=settings["fit"], layer=settings["layer"])
                 elif current:
                     BACKGROUNDS.set_settings(slot, settings, user["username"])
-                    log(event="background-settings", user=user["username"], slot=slot, **settings)
+                    log(event="background-settings", user=user["username"], slot=slot, opacity=settings["opacity"],
+                        fit=settings["fit"], layer=settings["layer"])
                 else:
                     return self.send_json(400, {"error": "Choose an image first."})
             except ValueError as e:

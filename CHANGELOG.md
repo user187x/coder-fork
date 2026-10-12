@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.24.0 – 2026-10-12
+
+Coder `2.0.0-platform.21`.
+
+* **Animated and HTML backgrounds** (Customize › Background image), next to pictures.
+  * **Particles, built in.** The animated background of `example.html`: glowing orbs circling slowly over a plain
+    colour. Its own dials: the background colour, the three particle colours, how many particles (1–60), their size,
+    how far each glow sits from its particle, and how soft it is. "Original colours and sizes" brings back
+    `example.html` exactly.
+  * **Your own HTML.** Paste a page (HTML with its CSS, and scripts if it needs them), or import an `.html` file (up
+    to 256 KB). "Start from the Particles example" fills in the example to edit.
+  * **Dials for every HTML background:**
+    * **Speed** (0.1–4×) changes the playback rate of every CSS / Web animation on the page, so it works for any
+      HTML;
+    * **Hue shift, saturation, brightness and blur** are colour filters;
+    * then the usual **strength** and **layer** (behind the page or over it).
+  * A live preview shows the result before saving.
+  * **Safe to show to everyone, on the sign-in page too.** The page runs in a sandboxed frame with an origin of its
+    own. It cannot reach Coder's page, its cookies or the network: the platform service serves it with a sandbox
+    Content-Security-Policy that blocks connections, and allows only inline styles and scripts and `data:` pictures.
+  * The mouse passes through it, and it pauses while the Animations switch (user menu) is off.
+  * **Behind the page,** the frame lies beneath every element. While it shows, the page colour is moved from `body`
+    to `html` so the frame can show through; the page looks the same, and the change is undone when it goes.
+  * Stored like the pictures (`coder_ui_updates.background`, new column `params` for the dials).
+* The platform service loads the backgrounds as it starts, so the first pages after a restart have them too.
+
 ## 1.23.0 – 2026-10-12
 
 Coder `2.0.0-platform.20`.
