@@ -583,7 +583,7 @@ MARIMO_DARK
   # has it). Where the file system is the volume (EBS...), df says both; where the volume is a directory of a bigger
   # disk (local-path, hostPath), df would show that disk, so du counts the home instead.
   metadata {
-    display_name = "Home Disk"
+    display_name = "Disk"
     key          = "3_home_disk"
     script       = <<EOT
       vol=$(echo "$${CODER_HOME_DISK_SIZE:-}" | awk '{ n = $0 + 0; u = $0; sub(/^[0-9.]+/, "", u); m = 1; if (u == "Ki") m = 1024; else if (u == "Mi") m = 1024^2; else if (u == "Gi") m = 1024^3; else if (u == "Ti") m = 1024^4; else if (u == "k" || u == "K") m = 1e3; else if (u == "M") m = 1e6; else if (u == "G") m = 1e9; else if (u == "T") m = 1e12; printf "%.0f", n * m }')
@@ -600,7 +600,7 @@ MARIMO_DARK
   }
 
   metadata {
-    display_name = "CPU Usage (Host)"
+    display_name = "CPU Usage"
     key          = "4_cpu_usage_host"
     script       = "coder stat cpu --host"
     interval     = 10
@@ -608,19 +608,32 @@ MARIMO_DARK
   }
 
   metadata {
-    display_name = "Memory Usage (Host)"
+    display_name = "Memory Usage"
     key          = "5_mem_usage_host"
     script       = "coder stat mem --host"
     interval     = 10
     timeout      = 1
   }
 
+  # The disk of the node the workspace runs on (where its images and containers live; on Minikube, the host's disk),
+  # in GB like the workspace's.
+  metadata {
+    display_name = "Disk"
+    key          = "6_disk_host"
+    script       = <<EOT
+      set -- $(df -B1 --output=size,used / | tail -1)
+      awk -v t="$1" -v u="$2" 'BEGIN { printf "%.1f/%.1f GB (%.0f%%)", u / 1e9, t / 1e9, (t > 0 ? u * 100 / t : 0) }'
+    EOT
+    interval = 60
+    timeout  = 5
+  }
+
   # The host's 1-minute load over its cores: /proc/loadavg is the host's, so it is divided by the host's online
   # cores (getconf), not by nproc (in the container: the workspace's CPU limit, which made 6 / 6 cores read as fully
   # loaded on a 24-core host).
   metadata {
-    display_name = "Load Average (Host)"
-    key          = "6_load_host"
+    display_name = "Load Average"
+    key          = "7_load_host"
     script       = <<EOT
       awk -v n="$(getconf _NPROCESSORS_ONLN 2>/dev/null || grep -c ^processor /proc/cpuinfo)" '{ printf "%.2f / %d cores (%.0f%%)", $1, n, $1 * 100 / n }' /proc/loadavg
     EOT

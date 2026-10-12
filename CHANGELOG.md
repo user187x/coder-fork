@@ -2,7 +2,7 @@
 
 ## 1.26.3 – 2026-10-12
 
-Coder `2.0.0-platform.23` (rebuilt: `d7bf300bd`).
+Coder `2.0.0-platform.23` (rebuilt: `8d45d1d51`).
 
 * **Home Disk shows the workspace's own disk, in GB.** On a storage class whose volumes are directories of a bigger
   disk (local-path, hostPath: Minikube), `df` of the home showed that whole disk. A 25 GB workspace read "872/935
@@ -21,8 +21,16 @@ Coder `2.0.0-platform.23` (rebuilt: `d7bf300bd`).
 * **A gauge of the current reading above each metric's graph:** a pill filled to the reading and coloured by it (green
   to red). It follows the Metrics Interval (each second at 1 s, the newest bar otherwise) and slides from one reading
   to the next.
-* Running workspaces show the new Home Disk and Load Average after their next update and restart (the template has a
-  new version).
+* **The metrics in two groups**, each in a rounded container:
+  * **Workspace:** CPU Usage, RAM Usage, Disk ("Home Disk" before).
+  * **Cluster:** the node the workspace runs on (CPU Usage, Memory Usage, Disk, Load Average). "(Host)" is dropped
+    from their names; the group says it. Host metrics are told by their key (`_host`) or an old "(Host)" name.
+
+  A template without host metrics keeps the plain row.
+* **New Cluster Disk metric:** the node's disk (where its images and containers live; on Minikube, the host's disk)
+  in GB.
+* Running workspaces show the new Disk names, the Cluster Disk and the fixed Load Average after their next update and
+  restart (the template has a new version).
 
 ## 1.26.2 – 2026-10-12
 
