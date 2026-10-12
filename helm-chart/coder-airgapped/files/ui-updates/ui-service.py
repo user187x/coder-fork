@@ -1,6 +1,6 @@
 """coder-ui-updates service, served on Coder's hostname under /__coder-ui/ (Python standard library only).
 
-  GET  /__coder-ui/<file>                 the dashboard add-ons (dashboard.js, views, ..., the Workspaces icon), revalidated on every use
+  GET  /__coder-ui/<file>                 the dashboard add-ons (dashboard.js, views, ...), revalidated on every use
   GET  /__coder-ui/refresh                clears the browser's cached Coder JavaScript (Clear-Site-Data) and returns to /
   GET  /__coder-ui/healthz
   GET  /__icons/<file>                   the workspace template's app icons (TEMPLATE_ICONS_DIR), public, cacheable

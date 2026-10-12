@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.22.1 – 2026-10-11
+
+Coder `2.0.0-platform.19` (unchanged).
+
+* **Cleanup.**
+  * The route that sent `/workspaces-icon.png` to the platform service is gone, and so is the chart's copy of that
+    icon. The dashboard now shows its own light and dark versions (1.22.0).
+  * The platform service's old logo page (`logo.html`, `logo-view.js`, `logo.css`) is gone. **Admin settings ›
+    Customize** has been the logo editor since the fork took it over.
+  * The design source folders `alt-logos/` and `update-resources/` were moved into the chart (`defaults/gallery/`) and
+    the fork (`site/static/`) in 1.22.0, and are removed.
+
 ## 1.22.0 – 2026-10-11
 
 Coder `2.0.0-platform.19` (fork `2260748f8`).
