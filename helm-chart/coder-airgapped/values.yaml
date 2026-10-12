@@ -84,9 +84,9 @@ coder:
   coder:
     image:
       repo: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-platform") }}'
-      # The fork's 2.0.0-platform.18 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
+      # The fork's 2.0.0-platform.19 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
       # (development/airgap-image), without which templates cannot be pushed or built offline.
-      tag: 2.0.0-platform.18-airgap
+      tag: 2.0.0-platform.19-airgap
       pullSecrets: []
     # No gap during rollouts. The new pod starts first and must be ready before the old one stops (the defaults with
     # one replica: maxSurge 25% rounds up to 1, maxUnavailable 25% down to 0). The old pod then keeps serving for 15 s
@@ -293,6 +293,10 @@ uiUpdates:
   defaults:
     logoConfigMap: coder-ui-updates-default-logo
     avatarConfigMap: coder-ui-updates-default-avatar
+    # Pictures to choose from in the logo and avatar editors (../defaults/gallery/, one ConfigMap each, made by
+    # ../install.sh: <prefix>-1, -2, ...). Slots without a ConfigMap are skipped.
+    galleryConfigMapPrefix: coder-ui-updates-gallery
+    gallerySlots: 8
   # The workspace template's icons ConfigMap (coder-workspace, <namePrefix>-icons). This service serves them at
   # https://<coder host>/__icons/<file>; the route is coder-workspace's (icons.backend below points here).
   templateIconsConfigMap: '{{ index .Values "coder-workspace" "namePrefix" }}-icons'

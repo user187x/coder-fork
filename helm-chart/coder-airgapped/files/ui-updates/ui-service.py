@@ -14,6 +14,7 @@
   POST /__coder-ui/api/notes/update  {id, text?, color?, x?, y?}       an admin edits or moves it
   POST /__coder-ui/api/notes/delete  {id}                              an admin deletes it
   POST /__coder-ui/api/notes/dismiss {id}                              the workspace's owner dismisses it
+  GET  /__coder-ui/api/notes/users        admins: every note not dismissed yet, by the workspace owner's user id
   GET  /__coder-ui/api/acks               admins: every announcement ("event") with who saw / confirmed it, who has not
   POST /__coder-ui/api/events/delete {"id": X}   admins: forget one announcement and its receipts
 
@@ -34,6 +35,8 @@
   GET  /__coder-ui/avatar/<user id>?v=<sha>   the picture            GET  /__coder-ui/api/avatar   mine
   POST /__coder-ui/api/avatar {"dataUrl"}     set mine               POST /__coder-ui/api/avatar/reset   remove mine
   GET  /__coder-ui/avatar/default?v=<sha>     the default avatar     GET  /__coder-ui/api/avatar/defaults   who gets it
+  GET  /__coder-ui/api/gallery                the provided pictures to choose from as logo or avatar (signed in)
+  GET  /__coder-ui/gallery/<file>?v=<sha>     one of them (public, like the default avatar)
 
   Chat (every signed-in user; admins in ADMIN_ROLES write to anyone, others to admins or whoever wrote to them;
         kept 30 days in SQLite)
@@ -301,8 +304,8 @@ def clean_note(payload, partial=False):
     return out
 
 
-def workspace_owner(token, workspace_id):
-    """The owner id of the workspace, if this session may see it (else None)."""
+def workspace_info(token, workspace_id):
+    """The workspace (Coder's API object), if this session may see it (else None)."""
     try:
         status, ws = http_json(
             CODER_URL + "/api/v2/workspaces/" + workspace_id,
@@ -311,7 +314,12 @@ def workspace_owner(token, workspace_id):
         )
     except Exception:  # noqa: BLE001 - unreachable: no access decision
         return None
-    return ws.get("owner_id") if status == 200 and isinstance(ws, dict) else None
+    return ws if status == 200 and isinstance(ws, dict) else None
+
+
+def workspace_owner(token, workspace_id):
+    """The owner id of the workspace, if this session may see it (else None)."""
+    return (workspace_info(token, workspace_id) or {}).get("owner_id")
 
 
 def coder_user(token):
@@ -1046,6 +1054,11 @@ class Store:
                 CREATE INDEX IF NOT EXISTS notes_workspace ON notes(workspace_id);
                 """
             )
+            # Notes made before 1.22.0 lack their workspace's owner and name: filled in when an admin lists them.
+            have = {r["name"] for r in db.execute("PRAGMA table_info(notes)")}
+            for column in ("owner_id", "owner_name", "workspace_name"):
+                if column not in have:
+                    db.execute("ALTER TABLE notes ADD COLUMN %s TEXT" % column)
 
     # ---- post-it notes (admins stick them on a user's workspace page)
     @staticmethod
@@ -1062,6 +1075,9 @@ class Store:
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
             "dismissedAt": row["dismissed_at"],
+            "ownerId": row["owner_id"],
+            "ownerName": row["owner_name"],
+            "workspaceName": row["workspace_name"],
         }
 
     def notes(self, workspace_id, include_dismissed):
@@ -1079,17 +1095,31 @@ class Store:
             row = db.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone()
         return self._note(row) if row else None
 
-    def note_create(self, workspace_id, fields, author):
+    def note_create(self, workspace, fields, author):
         note_id = uuid.uuid4().hex[:16]
         stamp = now()
         with self.lock, self.connect() as db:
             db.execute(
-                "INSERT INTO notes (id, workspace_id, text, color, x, y, tilt, author, created_at, updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (note_id, workspace_id, fields["text"], fields["color"], fields["x"], fields["y"],
-                 round(random.uniform(-5.5, 5.5), 1), author, stamp, stamp),
+                "INSERT INTO notes (id, workspace_id, text, color, x, y, tilt, author, created_at, updated_at,"
+                " owner_id, owner_name, workspace_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (note_id, workspace["id"], fields["text"], fields["color"], fields["x"], fields["y"],
+                 round(random.uniform(-5.5, 5.5), 1), author, stamp, stamp,
+                 workspace.get("owner_id"), workspace.get("owner_name"), workspace.get("name")),
             )
         return self.note(note_id)
+
+    def active_notes(self):
+        """Every note its workspace's owner has not dismissed, oldest first."""
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM notes WHERE dismissed_at IS NULL ORDER BY created_at").fetchall()
+        return [self._note(r) for r in rows]
+
+    def note_set_owner(self, workspace_id, workspace):
+        with self.lock, self.connect() as db:
+            db.execute(
+                "UPDATE notes SET owner_id=?, owner_name=?, workspace_name=? WHERE workspace_id=?",
+                (workspace.get("owner_id"), workspace.get("owner_name"), workspace.get("name"), workspace_id),
+            )
 
     def note_update(self, note_id, fields):
         sets = ", ".join("%s=?" % k for k in fields)
@@ -2681,6 +2711,54 @@ class Defaults:
 
 
 DEFAULTS = None
+
+
+class Gallery:
+    """The pictures installed with this tool for the logo and avatar editors to offer (resources defaults/gallery/:
+    each file in its own optional ConfigMap, all projected into DEFAULTS_DIR/gallery/). Re-read at most every 30
+    seconds. Only images the avatar editor can take too (no SVG), up to LOGO_MAX_BYTES each."""
+
+    NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(png|jpe?g|gif|webp|avif)$")
+
+    def __init__(self, folder):
+        self.folder = folder
+        self.cache = (0, {})
+        self.lock = threading.Lock()
+
+    def items(self):
+        with self.lock:
+            if time.time() - self.cache[0] < 30:
+                return self.cache[1]
+            found = {}
+            try:
+                names = sorted(os.listdir(self.folder))
+            except OSError:
+                names = []
+            for name in names:
+                if not self.NAME_RE.match(name):
+                    continue
+                try:
+                    with open(os.path.join(self.folder, name), "rb") as f:
+                        data = f.read(LOGO_MAX_BYTES + 1)
+                except OSError:
+                    continue
+                ctype = image_type(data) if 0 < len(data) <= LOGO_MAX_BYTES else None
+                if ctype:
+                    found[name] = {"type": ctype, "data": data, "sha": hashlib.sha256(data).hexdigest()[:16]}
+                else:
+                    log(event="gallery-image-ignored", file=name, reason="not a supported image or too large")
+            self.cache = (time.time(), found)
+            return found
+
+    def listing(self):
+        return [
+            {"name": name, "type": it["type"], "bytes": len(it["data"]),
+             "url": "%s/gallery/%s?v=%s" % (BASE, urllib.parse.quote(name), it["sha"])}
+            for name, it in self.items().items()
+        ]
+
+
+GALLERY = None
 
 
 class LogoStore:
@@ -6359,6 +6437,21 @@ class Handler(BaseHTTPRequestHandler):
             if not admin and workspace_owner(self.token(), workspace_id) != user["id"]:
                 return self.send_json(403, {"error": "Only the workspace's owner and admins see its notes."})
             return self.send_json(200, {"notes": STORE.notes(workspace_id, admin), "canEdit": admin})
+        if path == BASE + "/api/notes/users":
+            user, err = self.user(admin=True)
+            if err:
+                return
+            notes = STORE.active_notes()
+            # Older notes do not know their workspace's owner yet: looked up once, then kept.
+            for workspace_id in {n["workspaceId"] for n in notes if not n["ownerId"]}:
+                ws = workspace_info(self.token(), workspace_id)
+                if ws:
+                    STORE.note_set_owner(workspace_id, ws)
+            by_user = {}
+            for n in STORE.active_notes():
+                if n["ownerId"]:
+                    by_user.setdefault(n["ownerId"], []).append(n)
+            return self.send_json(200, {"users": by_user})
         if path == BASE + "/api/me":
             token = self.token()
             status, user = coder_user(token) if token else ("unauthenticated", None)
@@ -6469,6 +6562,17 @@ class Handler(BaseHTTPRequestHandler):
                 )
         if path.startswith(BASE + "/avatar/"):
             return self.avatar(path[len(BASE) + 8 :], versioned="v=" in url.query)
+        if path == BASE + "/api/gallery":
+            user, err = self.user()
+            if err:
+                return
+            return self.send_json(200, {"images": GALLERY.listing() if GALLERY else []})
+        if path.startswith(BASE + "/gallery/"):
+            hit = (GALLERY.items() if GALLERY else {}).get(urllib.parse.unquote(path[len(BASE) + 9 :]))
+            if not hit:
+                return self.send(404, "not found\n", headers={"Cache-Control": "no-cache"})
+            return self.send(200, hit["data"], hit["type"], {
+                "Cache-Control": "public, max-age=31536000, immutable" if "v=" in url.query else "no-cache"})
         if path == BASE + "/api/avatar":
             user, err = self.user()
             if err:
@@ -7323,9 +7427,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(200, {"note": note})
                 return self.send_json(200, {"note": STORE.note_update(note["id"], fields)})
             workspace_id = str(payload.get("workspace", ""))
-            if not UUID_RE.match(workspace_id) or workspace_owner(self.token(), workspace_id) is None:
+            workspace = workspace_info(self.token(), workspace_id) if UUID_RE.match(workspace_id) else None
+            if not workspace:
                 return self.send_json(400, {"error": "That workspace does not exist."})
-            note = STORE.note_create(workspace_id, clean_note(payload), user["username"])
+            note = STORE.note_create(workspace, clean_note(payload), user["username"])
             log(event="note-created", user=user["username"], note=note["id"], workspace=workspace_id)
             return self.send_json(200, {"note": note})
         except ValueError as e:
@@ -7355,12 +7460,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS
+    global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY
     STORE = Store(DB_PATH)
     CHAT = ChatStore(DB_PATH)
     DEFAULTS = Defaults(
         DEFAULTS_DIR
     )  # before the logo store, which installs the default logo on a fresh database
+    GALLERY = Gallery(os.path.join(DEFAULTS_DIR, "gallery"))
     LOGOS = LogoStore()
     AVATARS = AvatarStore(LOGOS)
     ICONS = IconStore(LOGOS)

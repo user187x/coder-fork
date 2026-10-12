@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.22.0 – 2026-10-11
+
+Coder `2.0.0-platform.19` (fork `2260748f8`).
+
+* **The update gear and the Resources button follow the theme.** Each has its own image for the light theme (black)
+  and the dark theme (white), and the dashboard shows the one for the selected theme (`agent-outdated-light/-dark.png`,
+  `workspaces-icon-light/-dark.png`).
+* **Provided pictures for the logo and the avatar.** Three pictures come with the platform (destructed cube, loading
+  cube, pulsing cube) in `helm-chart/defaults/gallery/`.
+  * **Customize › Logo** (*Choose a new logo*) and the **Avatar** dialog show them under "choose your own". A click
+    uses one exactly like a chosen file: preview, then Save.
+  * `install.sh` puts each picture in its own ConfigMap (`coder-ui-updates-gallery-1`, `-2`, …; a ConfigMap holds at
+    most 1 MiB), outside the Helm release. The platform service serves them (`/__coder-ui/api/gallery`,
+    `/__coder-ui/gallery/<file>`). Add or remove files there and redeploy. Up to 8 (`uiUpdates.defaults.gallerySlots`).
+* **Post-it notes: from the workspace page's sidebar, and in the users table.**
+  * Admins looking at another user's workspace get an amber sticky-note button in the left sidebar, under Resources
+    and History. It starts a new note, with a count of the notes up there. It replaces the floating "Add a note"
+    button. It does not show on an admin's own workspace.
+  * **Admin settings › Users:** the Groups column is now **Notes**. A sticky-note icon (with a count) shows when admins
+    have notes up on the user's workspaces that the user has not dismissed. A click shows them: the text, the
+    workspace (a link) and who wrote it.
+  * Notes now record their workspace's owner and name. Older notes get them the first time an admin opens the users
+    table.
+* **Announcement banner.**
+  * The scroll-down view's prompt is root's: `root@platform:~#`.
+  * The Confirm button's background is a grayer, slightly lighter shade of the banner's colour.
+  * The Viewed box's tooltip reads `Announcement Viewed:` / `Date: October 11, 2026 @ 10:29 PM UTC-5` /
+    `TLS/x509 Fingerprint: AB:CD:…`, in the viewer's time zone.
+* **Certificates record their x509 fingerprint.** Settings › Certificates now saves the certificate's SHA-256
+  fingerprint (of the certificate itself, as `openssl x509 -fingerprint -sha256` shows it) with its other details,
+  when the password is given at upload. The password is still only used in the browser. Certificates uploaded
+  before have no fingerprint on record, and the tooltip says so: upload them again, with the password, to add it.
+
 ## 1.21.0 – 2026-10-11
 
 Coder `2.0.0-platform.18` (unchanged), workspace image `coder-workspace:1.7.0`.

@@ -151,6 +151,7 @@ spec:
             - {name: db-ca, mountPath: /etc/coder-ui/db-ca, readOnly: true}
             - {name: default-logo, mountPath: /app/defaults/logo, readOnly: true}
             - {name: default-avatar, mountPath: /app/defaults/avatar, readOnly: true}
+            - {name: gallery, mountPath: /app/defaults/gallery, readOnly: true}
             - {name: template-icons, mountPath: /app/template-icons, readOnly: true}
       volumes:
         - name: code
@@ -186,6 +187,14 @@ spec:
           configMap: {name: {{ $ui.defaults.logoConfigMap }}, optional: true}
         - name: default-avatar
           configMap: {name: {{ $ui.defaults.avatarConfigMap }}, optional: true}
+        # The pictures the logo and avatar editors offer (defaults/gallery/): one optional ConfigMap per picture
+        # (<galleryConfigMapPrefix>-1 ... -<gallerySlots>; ../install.sh makes them), all in one folder.
+        - name: gallery
+          projected:
+            sources:
+              {{- range $i := until (int $ui.defaults.gallerySlots) }}
+              - configMap: {name: {{ printf "%s-%d" $ui.defaults.galleryConfigMapPrefix (add1 $i) }}, optional: true}
+              {{- end }}
         # The workspace template's icons (charts/coder-workspace/files/icons/), served at /__icons/.
         - name: template-icons
           configMap: {name: {{ $ui.templateIconsConfigMap }}, optional: true}

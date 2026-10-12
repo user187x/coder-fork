@@ -120,6 +120,23 @@ for kind in logo avatar; do
 	echo "    configmap/$cm from $(basename "$f")"
 done
 
+# Pictures the logo and avatar editors offer: one ConfigMap per file (a ConfigMap holds at most 1 MiB), kept equal to
+# defaults/gallery/ (sorted by name; slots past the last file are removed). At most 8 (gallerySlots in values.yaml).
+log "Logo / avatar gallery ConfigMaps (defaults/gallery/)"
+i=0
+for f in "${here}"/defaults/gallery/*; do
+	[[ -f "$f" ]] || continue
+	i=$((i + 1)); ((i <= 8)) || { warn "defaults/gallery: more than 8 pictures, $(basename "$f") left out"; continue; }
+	kubectl -n "$ns" create configmap "coder-ui-updates-gallery-${i}" --from-file="$(basename "$f")=$f" --dry-run=client -o yaml |
+		kubectl label --local -f - app.kubernetes.io/name=coder-ui-updates app.kubernetes.io/part-of=coder -o yaml | apply
+	echo "    configmap/coder-ui-updates-gallery-${i} from $(basename "$f")"
+done
+for ((j = i + 1; j <= 8; j++)); do
+	if ! ((dry)) && exists configmap "coder-ui-updates-gallery-${j}"; then
+		kubectl -n "$ns" delete configmap "coder-ui-updates-gallery-${j}" >/dev/null && echo "    configmap/coder-ui-updates-gallery-${j} removed"
+	fi
+done
+
 if ((prepare)); then
 	log "Prepared namespace $ns for Argo CD (Secrets: ${sname[*]})"
 	exit 0
