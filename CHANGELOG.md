@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.26.3 – 2026-10-12
+
+Coder `2.0.0-platform.23` (rebuilt: `c1425a6ee`).
+
+* **Home Disk shows the workspace's own disk, in GB.** On a storage class whose volumes are directories of a bigger
+  disk (local-path, hostPath: Minikube), `df` of the home showed that whole disk. A 25 GB workspace read "872/935
+  GiB (93%)".
+  * The template now passes the volume's size, as Kubernetes has it (so a grown disk counts), to the workspace as
+    `CODER_HOME_DISK_SIZE`.
+  * The metric compares the home's use with that size: `df` where the file system is the volume (EBS on EKS), else
+    `du` of the home.
+  * Shown in decimal GB, e.g. "0.4/26.8 GB (2%)".
+* **New workspaces get the GB they ask for:** the home volume is `<size>G`, as the parameter says, no longer
+  `<size>Gi`. Existing volumes keep their size; a 25Gi one shows as 26.8 GB.
+* **Expand disk** works in GB too.
+* Running workspaces show the new Home Disk after their next update and restart (the template has a new version).
+
 ## 1.26.2 – 2026-10-12
 
 Coder `2.0.0-platform.23` (rebuilt: `022e2cc56`).

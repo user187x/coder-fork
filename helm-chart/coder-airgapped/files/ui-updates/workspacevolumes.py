@@ -8,7 +8,7 @@ workspace's ⋮ menu and its Settings.
                                                            online), its backups and the latest disk change
   POST /__coder-ui/api/workspace-volumes/<id>/backup       {target: download | s3}
   GET  /__coder-ui/api/workspace-volumes/<id>/backups/<n>/download
-  POST /__coder-ui/api/workspace-volumes/<id>/expand       {size: GiB}
+  POST /__coder-ui/api/workspace-volumes/<id>/expand       {size: GB}
 
 Backups: a Job mounts the home volume read-only (beside the running workspace: the volume is ReadWriteOnce, and pods
 on its node share it) and streams a .tar.gz of it to the service, which writes it to S3 (Images > Settings) or keeps
@@ -41,7 +41,7 @@ BASE = "/__coder-ui"
 NAMESPACE = os.environ.get("WORKSPACE_NAMESPACE", ib.NAMESPACE)
 CODER_URL = os.environ.get("CODER_URL", "http://coder.coder.svc.cluster.local").rstrip("/")
 KEEP_DOWNLOADS = int(os.environ.get("WORKSPACE_BACKUP_KEEP_HOURS", "24")) * 3600
-MAX_DISK_GI = int(os.environ.get("WORKSPACE_DISK_MAX_GI", "2000"))
+MAX_DISK_GB = int(os.environ.get("WORKSPACE_DISK_MAX_GB", "2000"))   # sizes are decimal GB (10^9 bytes)
 ICON_RE = re.compile(r"^(/[A-Za-z0-9_./%+-]{1,500}|https://[^\s\"'<>]{1,500})$")
 
 LOG = HTTP_JSON = KUBE = None
@@ -123,7 +123,7 @@ def public(op):
     """An operation as the dashboard sees it (no token, no file path)."""
     out = {k: op.get(k) for k in ("id", "kind", "target", "status", "message", "error", "bytes", "bucket", "key",
                                   "mode", "by", "created_at", "finished_at")}
-    out["fromGi"], out["toGi"] = op.get("from_gi"), op.get("to_gi")
+    out["fromGB"], out["toGB"] = op.get("from_gi"), op.get("to_gi")   # (columns named before sizes were GB)
     out["downloadable"] = bool(op.get("path") and op.get("status") == "done" and os.path.exists(op["path"]))
     return out
 
@@ -183,10 +183,9 @@ def get_pvc(name):
     return pvc if status == 200 else None
 
 
-def gi(q):
-    """'25Gi' / '10G' / bytes -> GiB (rounded up)."""
-    v = ib_quantity(q)
-    return int(-(-v // 1024 ** 3)) if v else 0
+def gb(q):
+    """'25Gi' / '10G' / bytes -> decimal GB, to one place (25Gi = 26.8 GB)."""
+    return round(ib_quantity(q) / 1e9, 1)
 
 
 def ib_quantity(q):
@@ -211,7 +210,7 @@ def volume_info(wid):
     cap = ((pvc.get("status") or {}).get("capacity") or {}).get("storage")
     req = (((pvc.get("spec") or {}).get("resources") or {}).get("requests") or {}).get("storage")
     conditions = [c.get("type") for c in (pvc.get("status") or {}).get("conditions") or []]
-    return {"name": pvc["metadata"]["name"], "sizeGi": gi(cap or req), "requestedGi": gi(req),
+    return {"name": pvc["metadata"]["name"], "sizeGB": gb(cap or req), "requestedGB": gb(req),
             "storageClass": sc_name, "expandable": expandable, "phase": (pvc.get("status") or {}).get("phase"),
             "conditions": conditions}
 
@@ -440,13 +439,13 @@ def start_expand(token, ws, size, user):
     info = volume_info(wid)
     if not info:
         raise ValueError("This workspace has no home volume.")
-    if not isinstance(size, int) or size <= info["sizeGi"] or size > MAX_DISK_GI:
-        raise ValueError("A size larger than now (%d GiB), up to %d GiB." % (info["sizeGi"], MAX_DISK_GI))
+    if not isinstance(size, int) or size <= info["sizeGB"] or size > MAX_DISK_GB:
+        raise ValueError("A whole number of GB larger than now (%g GB), up to %d GB." % (info["sizeGB"], MAX_DISK_GB))
     mode = "online" if info["expandable"] else "copy"
     with OPS_LOCK:
         if wid in OPS:
             raise ValueError("Another backup or disk change of this workspace is running.")
-        op_id = STORE.new_op(wid, "disk", user, from_gi=info["sizeGi"], to_gi=size, mode=mode,
+        op_id = STORE.new_op(wid, "disk", user, from_gi=info["sizeGB"], to_gi=size, mode=mode,
                              message="Starting")
         OPS[wid] = op_id
     threading.Thread(target=run_expand, args=(token, ws, op_id, info, size, mode), daemon=True).start()
@@ -461,7 +460,7 @@ def run_expand(token, ws, op_id, info, size, mode):
             expand_online(token, ws, op_id, info, size)
         else:
             expand_by_copy(token, ws, op_id, info, size)
-        STORE.update(op_id, status="done", finished_at=now(), message="The home disk is %d GiB" % size)
+        STORE.update(op_id, status="done", finished_at=now(), message="The home disk is %d GB" % size)
     except Exception as e:  # noqa: BLE001
         STORE.update(op_id, status="failed", error=str(e)[:1500], finished_at=now())
         LOG(event="workspace-disk-expand-failed", workspace=ws["name"], error=str(e)[:300])
@@ -473,7 +472,7 @@ def run_expand(token, ws, op_id, info, size, mode):
 def expand_online(token, ws, op_id, info, size):
     STORE.update(op_id, message="Growing the volume")
     status, out = KUBE.call("PATCH", "/api/v1/namespaces/%s/persistentvolumeclaims/%s" % (NAMESPACE, info["name"]),
-                            {"spec": {"resources": {"requests": {"storage": "%dGi" % size}}}},
+                            {"spec": {"resources": {"requests": {"storage": "%dG" % size}}}},
                             "application/merge-patch+json")
     if status != 200:
         raise RuntimeError("Kubernetes refused to grow the volume: %s" % ((out or {}).get("message") or status))
@@ -482,7 +481,7 @@ def expand_online(token, ws, op_id, info, size):
     while time.time() < deadline:
         time.sleep(5)
         cur = volume_info(ws["id"]) or {}
-        if cur.get("sizeGi", 0) >= size and "FileSystemResizePending" not in cur.get("conditions", []):
+        if cur.get("sizeGB", 0) >= size and "FileSystemResizePending" not in cur.get("conditions", []):
             return
         if "FileSystemResizePending" in cur.get("conditions", []) and not restarted:
             # the file system grows when the volume is mounted again
@@ -492,7 +491,7 @@ def expand_online(token, ws, op_id, info, size):
                 build(token, fresh, "stop")
                 build(token, fresh, "start")
             restarted = True
-    raise RuntimeError("The volume did not reach %d GiB in 30 minutes (storage class %s)." % (size, info["storageClass"]))
+    raise RuntimeError("The volume did not reach %d GB in 30 minutes (storage class %s)." % (size, info["storageClass"]))
 
 
 def wait_gone(path, timeout=600):
@@ -517,13 +516,13 @@ def wait_no_pods(wid, timeout=900):
 
 
 def new_pvc_body(old, name, size, temp=False):
-    """A PVC like `old` (its labels and annotations, so Terraform and the dashboard know it), of `size` GiB; a
+    """A PVC like `old` (its labels and annotations, so Terraform and the dashboard know it), of `size` GB; a
     temporary one only says whose copy it is."""
     md = old["metadata"]
     keep = lambda d: {k: v for k, v in (d or {}).items() if not re.match(  # noqa: E731
         r"^(pv\.kubernetes\.io|volume\.kubernetes\.io|volume\.beta\.kubernetes\.io|kubectl\.kubernetes\.io)/", k)}
     spec = {"accessModes": old["spec"].get("accessModes") or ["ReadWriteOnce"],
-            "resources": {"requests": {"storage": "%dGi" % size}}}
+            "resources": {"requests": {"storage": "%dG" % size}}}
     if old["spec"].get("storageClassName"):
         spec["storageClassName"] = old["spec"]["storageClassName"]
     if old["spec"].get("volumeMode"):
@@ -559,7 +558,7 @@ def expand_by_copy(token, ws, op_id, info, size):
         build(token, fresh, "stop")
     wait_no_pods(ws["id"])
     old = get_pvc(name)
-    STORE.update(op_id, message="Copying the home volume onto a %d GiB one" % size)
+    STORE.update(op_id, message="Copying the home volume onto a %d GB one" % size)
     status, out = ib.kube_call("POST", pvcs, new_pvc_body(old, temp, size, temp=True))
     if status not in (200, 201):
         raise RuntimeError("Could not create the new volume: %s" % ((out or {}).get("message") or status))
@@ -661,7 +660,7 @@ def route(h, method, path, user, token):
             "backups": [public(o) for o in STORE.ops(ws["id"], "backup")],
             "disk": [public(o) for o in STORE.ops(ws["id"], "disk", 1)],
             "s3": bool(s3.get("bucket") and s3.get("accessKey") and s3.get("secretKey")),
-            "keepHours": KEEP_DOWNLOADS // 3600, "maxGi": MAX_DISK_GI}) or True
+            "keepHours": KEEP_DOWNLOADS // 3600, "maxGB": MAX_DISK_GB}) or True
     if sub == "/backup" and method == "POST":
         op_id = start_backup(token, ws, str(read_json(h).get("target") or ""), user["username"])
         return h.send_json(200, {"backup": op_id}) or True

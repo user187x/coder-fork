@@ -579,12 +579,24 @@ MARIMO_DARK
     timeout      = 1
   }
 
+  # The home volume, in GB: what it holds of its own size (CODER_HOME_DISK_SIZE, the volume's size as Kubernetes
+  # has it). Where the file system is the volume (EBS...), df says both; where the volume is a directory of a bigger
+  # disk (local-path, hostPath), df would show that disk, so du counts the home instead.
   metadata {
     display_name = "Home Disk"
     key          = "3_home_disk"
-    script       = "coder stat disk --path $${HOME}"
+    script       = <<EOT
+      vol=$(echo "$${CODER_HOME_DISK_SIZE:-}" | awk '{ n = $0 + 0; u = $0; sub(/^[0-9.]+/, "", u); m = 1; if (u == "Ki") m = 1024; else if (u == "Mi") m = 1024^2; else if (u == "Gi") m = 1024^3; else if (u == "Ti") m = 1024^4; else if (u == "k" || u == "K") m = 1e3; else if (u == "M") m = 1e6; else if (u == "G") m = 1e9; else if (u == "T") m = 1e12; printf "%.0f", n * m }')
+      set -- $(df -B1 --output=size,used "$HOME" | tail -1)
+      total=$1; used=$2
+      if [ -n "$vol" ] && [ "$vol" -gt 0 ] && awk -v t="$total" -v v="$vol" 'BEGIN { exit !(t > v * 1.1) }'; then
+        used=$(nice -n 19 du -sxB1 "$HOME" 2>/dev/null | awk '{ print $1 }')
+        total=$vol
+      fi
+      awk -v u="$used" -v t="$total" 'BEGIN { printf "%.1f/%.1f GB (%.0f%%)", u / 1e9, t / 1e9, (t > 0 ? u * 100 / t : 0) }'
+    EOT
     interval     = 60
-    timeout      = 1
+    timeout      = 15
   }
 
   metadata {
@@ -718,7 +730,7 @@ resource "kubernetes_persistent_volume_claim_v1" "home" {
     access_modes = ["ReadWriteOnce"]
     resources {
       requests = {
-        storage = "${data.coder_parameter.home_disk_size.value}Gi"
+        storage = "${data.coder_parameter.home_disk_size.value}G"
       }
     }
   }
@@ -833,6 +845,11 @@ resource "kubernetes_deployment_v1" "main" {
           env {
             name  = "CODER_AGENT_TOKEN"
             value = coder_agent.main.token
+          }
+          # The home volume's size as Kubernetes has it (it can grow after creation), for the Home Disk metric.
+          env {
+            name  = "CODER_HOME_DISK_SIZE"
+            value = kubernetes_persistent_volume_claim_v1.home.spec[0].resources[0].requests["storage"]
           }
           resources {
             requests = {
