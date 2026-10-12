@@ -9,6 +9,11 @@
   GET  /__coder-ui/api/me?id=X            signed in? when did they see and confirm announcement X
   POST /__coder-ui/api/view   {"id": X}   the signed-in user has seen announcement X
   POST /__coder-ui/api/ack    {"id": X}   ... and confirmed it
+  GET  /__coder-ui/api/notes?workspace=W  the post-it notes on workspace W (its owner: those not dismissed; admins: all)
+  POST /__coder-ui/api/notes  {workspace, text, color, x, y}           an admin sticks a note on a workspace page
+  POST /__coder-ui/api/notes/update  {id, text?, color?, x?, y?}       an admin edits or moves it
+  POST /__coder-ui/api/notes/delete  {id}                              an admin deletes it
+  POST /__coder-ui/api/notes/dismiss {id}                              the workspace's owner dismisses it
   GET  /__coder-ui/api/acks               admins: every announcement ("event") with who saw / confirmed it, who has not
   POST /__coder-ui/api/events/delete {"id": X}   admins: forget one announcement and its receipts
 
@@ -84,6 +89,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import random
 import re
 import sqlite3
 import ssl
@@ -93,6 +99,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -264,6 +271,47 @@ CACHE = TTLCache()
 
 
 # --------------------------------------------------------------------------- Coder
+
+
+NOTE_COLORS = ("yellow", "pink", "green", "blue", "orange")
+NOTE_TEXT_MAX = 600
+
+
+def clean_note(payload, partial=False):
+    """The note fields in payload (all of them unless partial), checked; raises ValueError."""
+    out = {}
+    if "text" in payload or not partial:
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Write something on the note.")
+        if len(text) > NOTE_TEXT_MAX:
+            raise ValueError("A note holds at most %d characters." % NOTE_TEXT_MAX)
+        out["text"] = text.strip()
+    if "color" in payload or not partial:
+        color = payload.get("color", "yellow")
+        if color not in NOTE_COLORS:
+            raise ValueError("Colour must be one of: %s." % ", ".join(NOTE_COLORS))
+        out["color"] = color
+    for key in ("x", "y"):
+        if key in payload or not partial:
+            value = payload.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+                raise ValueError("The note's position must be within the page.")
+            out[key] = float(value)
+    return out
+
+
+def workspace_owner(token, workspace_id):
+    """The owner id of the workspace, if this session may see it (else None)."""
+    try:
+        status, ws = http_json(
+            CODER_URL + "/api/v2/workspaces/" + workspace_id,
+            headers={"Coder-Session-Token": token},
+            timeout=5,
+        )
+    except Exception:  # noqa: BLE001 - unreachable: no access decision
+        return None
+    return ws.get("owner_id") if status == 200 and isinstance(ws, dict) else None
 
 
 def coder_user(token):
@@ -889,8 +937,75 @@ class Store:
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS value_backups (
                   id INTEGER PRIMARY KEY AUTOINCREMENT, saved_at TEXT NOT NULL, saved_by TEXT, app TEXT, values_text TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS notes (
+                  id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, text TEXT NOT NULL, color TEXT NOT NULL,
+                  x REAL NOT NULL, y REAL NOT NULL, tilt REAL NOT NULL, author TEXT,
+                  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, dismissed_at TEXT);
+                CREATE INDEX IF NOT EXISTS notes_workspace ON notes(workspace_id);
                 """
             )
+
+    # ---- post-it notes (admins stick them on a user's workspace page)
+    @staticmethod
+    def _note(row):
+        return {
+            "id": row["id"],
+            "workspaceId": row["workspace_id"],
+            "text": row["text"],
+            "color": row["color"],
+            "x": row["x"],
+            "y": row["y"],
+            "tilt": row["tilt"],
+            "author": row["author"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+            "dismissedAt": row["dismissed_at"],
+        }
+
+    def notes(self, workspace_id, include_dismissed):
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT * FROM notes WHERE workspace_id=?"
+                + ("" if include_dismissed else " AND dismissed_at IS NULL")
+                + " ORDER BY created_at",
+                (workspace_id,),
+            ).fetchall()
+        return [self._note(r) for r in rows]
+
+    def note(self, note_id):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone()
+        return self._note(row) if row else None
+
+    def note_create(self, workspace_id, fields, author):
+        note_id = uuid.uuid4().hex[:16]
+        stamp = now()
+        with self.lock, self.connect() as db:
+            db.execute(
+                "INSERT INTO notes (id, workspace_id, text, color, x, y, tilt, author, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (note_id, workspace_id, fields["text"], fields["color"], fields["x"], fields["y"],
+                 round(random.uniform(-5.5, 5.5), 1), author, stamp, stamp),
+            )
+        return self.note(note_id)
+
+    def note_update(self, note_id, fields):
+        sets = ", ".join("%s=?" % k for k in fields)
+        with self.lock, self.connect() as db:
+            db.execute(
+                "UPDATE notes SET %s, updated_at=? WHERE id=?" % sets,
+                (*fields.values(), now(), note_id),
+            )
+        return self.note(note_id)
+
+    def note_delete(self, note_id):
+        with self.lock, self.connect() as db:
+            return db.execute("DELETE FROM notes WHERE id=?", (note_id,)).rowcount
+
+    def note_dismiss(self, note_id):
+        with self.lock, self.connect() as db:
+            db.execute("UPDATE notes SET dismissed_at=COALESCE(dismissed_at, ?) WHERE id=?", (now(), note_id))
+        return self.note(note_id)
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -6131,6 +6246,17 @@ class Handler(BaseHTTPRequestHandler):
                     "Cache-Control": "no-store",
                 },
             )
+        if path == BASE + "/api/notes":
+            user, err = self.user()
+            if err:
+                return
+            workspace_id = urllib.parse.parse_qs(url.query).get("workspace", [""])[0]
+            if not UUID_RE.match(workspace_id):
+                return self.send_json(400, {"error": "Which workspace?"})
+            admin = bool(set(user["roles"]) & ADMIN_ROLES)
+            if not admin and workspace_owner(self.token(), workspace_id) != user["id"]:
+                return self.send_json(403, {"error": "Only the workspace's owner and admins see its notes."})
+            return self.send_json(200, {"notes": STORE.notes(workspace_id, admin), "canEdit": admin})
         if path == BASE + "/api/me":
             token = self.token()
             status, user = coder_user(token) if token else ("unauthenticated", None)
@@ -6802,6 +6928,10 @@ class Handler(BaseHTTPRequestHandler):
             BASE + "/api/quota/check",
             BASE + "/api/scheduler",
             BASE + "/api/scheduler/check",
+            BASE + "/api/notes",
+            BASE + "/api/notes/update",
+            BASE + "/api/notes/delete",
+            BASE + "/api/notes/dismiss",
         }
         if path not in routes and not path.startswith(BASE + "/api/chat/"):
             return self.send(404, "not found\n")
@@ -6814,6 +6944,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(400, {"error": "Expected a JSON object."})
         if path in (BASE + "/api/view", BASE + "/api/ack"):
             return self.receipt(path.endswith("/ack"), payload)
+        if path == BASE + "/api/notes/dismiss":
+            user, err = self.user()
+            if err:
+                return
+            note = STORE.note(str(payload.get("id", "")))
+            if not note:
+                return self.send_json(404, {"error": "That note is gone."})
+            admin = bool(set(user["roles"]) & ADMIN_ROLES)
+            if not admin and workspace_owner(self.token(), note["workspaceId"]) != user["id"]:
+                return self.send_json(403, {"error": "Only the workspace's owner can dismiss its notes."})
+            log(event="note-dismissed", user=user["username"], note=note["id"], workspace=note["workspaceId"])
+            return self.send_json(200, {"note": STORE.note_dismiss(note["id"])})
         if path in (BASE + "/api/avatar", BASE + "/api/avatar/reset"):
             return self.save_avatar(path.endswith("/reset"), payload)
         if path.startswith(BASE + "/api/chat/"):
@@ -6848,6 +6990,8 @@ class Handler(BaseHTTPRequestHandler):
         user, err = self.user(admin=True)
         if err:
             return
+        if path in (BASE + "/api/notes", BASE + "/api/notes/update", BASE + "/api/notes/delete"):
+            return self.notes_post(path, payload, user)
         if path == BASE + "/api/scheduler":
             try:
                 value = clean_scheduler(payload)
@@ -7060,6 +7204,30 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(503, {"error": "Coder's database: %s" % str(e)[:200]})
         log(event="avatar-saved", user=user["username"], type=ctype, bytes=len(data))
         return self.send_json(200, {"ok": True, "set": True, "url": url})
+
+    def notes_post(self, path, payload, user):
+        """Admins: create, edit/move or delete a post-it note."""
+        try:
+            if path.endswith("/delete"):
+                removed = STORE.note_delete(str(payload.get("id", "")))
+                log(event="note-deleted", user=user["username"], note=payload.get("id"))
+                return self.send_json(200, {"ok": True, "removed": removed})
+            if path.endswith("/update"):
+                note = STORE.note(str(payload.get("id", "")))
+                if not note:
+                    return self.send_json(404, {"error": "That note is gone."})
+                fields = clean_note(payload, partial=True)
+                if not fields:
+                    return self.send_json(200, {"note": note})
+                return self.send_json(200, {"note": STORE.note_update(note["id"], fields)})
+            workspace_id = str(payload.get("workspace", ""))
+            if not UUID_RE.match(workspace_id) or workspace_owner(self.token(), workspace_id) is None:
+                return self.send_json(400, {"error": "That workspace does not exist."})
+            note = STORE.note_create(workspace_id, clean_note(payload), user["username"])
+            log(event="note-created", user=user["username"], note=note["id"], workspace=workspace_id)
+            return self.send_json(200, {"note": note})
+        except ValueError as e:
+            return self.send_json(400, {"error": str(e)})
 
     def receipt(self, ack, payload):
         event_id = payload.get("id")

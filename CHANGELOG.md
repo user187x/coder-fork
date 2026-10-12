@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.20.0 – 2026-10-11
+
+Coder `2.0.0-platform.18` (fork `25b73e9ed`).
+
+* **The outdated-agent gear pulses.** Its glow swells and fades now and then, at irregular intervals: two loops of
+  different lengths (11 s and 17 s) overlap, so the rhythm never settles. It is off when animations are off (user
+  menu) or the system asks for reduced motion.
+* **Post-it notes on workspace pages.** Admins stick short notes on a user's workspace page: reminders, how-tos,
+  "don't forget" messages.
+  * **Add a note** (admins only, bottom left) opens a draft. Write up to 600 characters, pick a colour (yellow, pink,
+    blue, green, orange), then **Stick it**.
+  * The notes sit above everything on the page. Each hangs a little crooked (its own tilt, kept), with a strip of
+    tape, a curled corner and a handwritten look.
+  * Admins drag a note to move it (the place is kept, relative to the window), double-click or use the pencil to
+    edit it, and use the bin to delete it.
+  * The workspace's owner sees the notes and dismisses them with ×. Admins still see a dismissed note, faded and
+    marked "dismissed by the owner", until they delete it.
+  * The platform service stores the notes (`/__coder-ui/api/notes`). Only the workspace's owner and admins can read
+    a workspace's notes; only admins can create, change or delete them.
+
 ## 1.19.0 – 2026-10-11
 
 Coder `2.0.0-platform.17` (fork `73d2c8a54`).
