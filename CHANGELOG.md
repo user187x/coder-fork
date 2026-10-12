@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.24.1 – 2026-10-12
+
+Coder `2.0.0-platform.21` (unchanged).
+
+* **Cleanup: the platform service's old dashboard add-ons are gone.** These were 41 scripts, styles and pages in
+  `files/ui-updates/` (`dashboard.js`, `views.js`, `chat.js`, …, about 570 KB). The fork's dashboard has had all of
+  them built in, and nothing loaded them any more.
+  * With them go the service's route for its static files, the `static` volume and `STATIC_DIR`. Only the service's
+    own code remains: `ui-service.py`, `pgwire.py` and `certinfo.py`.
+  * The Helm release is smaller, leaving more room under its 1 MiB limit.
+* `example.html` is removed: it is the built-in Particles background now (1.24.0).
+
 ## 1.24.0 – 2026-10-12
 
 Coder `2.0.0-platform.21`.

@@ -10,7 +10,7 @@ Everything needed to keep developing the coder-airgapped deliverable, other than
 | To change | Edit |
 |---|---|
 | Coder server settings, defaults, wiring | `../helm-chart/coder-airgapped/values.yaml` (`global:` first), `templates/` |
-| Platform service, dashboard add-ons (JS/CSS), their images | `../helm-chart/coder-airgapped/files/ui-updates/` |
+| Platform service (the dashboard's add-ons are built into the fork) | `../helm-chart/coder-airgapped/files/ui-updates/` |
 | Default logo (animated GIF) and default user avatar | `../helm-chart/defaults/` (installed as ConfigMaps by `install.sh`) |
 | First user / template-push bootstrap | `../helm-chart/coder-airgapped/files/bootstrap/bootstrap.py`, `templates/bootstrap-job.yaml` |
 | Workspace image (desktop, fonts, tmux, preinstalled tools) | `workspace-image/` (then `tools/build-workspace-image.sh`) |

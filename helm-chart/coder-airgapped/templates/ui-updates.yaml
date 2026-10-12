@@ -85,7 +85,6 @@ spec:
           command: [python3, /app/ui-service.py]
           env:
             - {name: PORT, value: "8080"}
-            - {name: STATIC_DIR, value: /app/static}
             - {name: DB_PATH, value: /data/receipts.sqlite}
             - {name: CODER_URL, value: {{ include "ca.svcUrl" (list "coder" . 80) | quote }}}
             - {name: BANNER_URL, value: {{ include "ca.svcUrl" (list "coder-banner" . 80) | quote }}}
@@ -145,7 +144,6 @@ spec:
             {{- range $code }}
             - {name: code, mountPath: /app/{{ . }}, subPath: {{ . }}}
             {{- end }}
-            - {name: static, mountPath: /app/static}
             - {name: data, mountPath: /data}
             - {name: ca, mountPath: /etc/coder-ui/ca, readOnly: true}
             - {name: db-ca, mountPath: /etc/coder-ui/db-ca, readOnly: true}
@@ -160,15 +158,6 @@ spec:
             items:
               {{- range $code }}
               - {key: {{ . }}, path: {{ . }}}
-              {{- end }}
-        - name: static
-          configMap:
-            name: coder-ui-updates
-            items:
-              {{- range $path, $_ := $files }}
-              {{- if not (has (base $path) $code) }}
-              - {key: {{ base $path }}, path: {{ base $path }}}
-              {{- end }}
               {{- end }}
         - name: data
           persistentVolumeClaim:

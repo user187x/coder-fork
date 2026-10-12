@@ -1,6 +1,5 @@
 """coder-ui-updates service, served on Coder's hostname under /__coder-ui/ (Python standard library only).
 
-  GET  /__coder-ui/<file>                 the dashboard add-ons (dashboard.js, views, ...), revalidated on every use
   GET  /__coder-ui/refresh                clears the browser's cached Coder JavaScript (Clear-Site-Data) and returns to /
   GET  /__coder-ui/healthz
   GET  /__icons/<file>                   the workspace template's app icons (TEMPLATE_ICONS_DIR), public, cacheable
@@ -97,7 +96,6 @@ import base64
 import collections
 import hashlib
 import json
-import mimetypes
 import os
 import random
 import re
@@ -118,7 +116,6 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("PORT", "8080"))
-STATIC_DIR = os.environ.get("STATIC_DIR", "/app/static")
 DB_PATH = os.environ.get("DB_PATH", "/data/receipts.sqlite")
 CODER_URL = os.environ.get("CODER_URL", "http://coder").rstrip(
     "/"
@@ -211,10 +208,6 @@ MAX_EVENTS = 50
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-HTML_CSP = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
-    "connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
-)
 
 
 def log(**fields):
@@ -5086,7 +5079,7 @@ def apply_persistence(fixes, raw_settings, user):
 # --------------------------------------------------------------------------- Chat (admins <-> users)
 CHAT_MAX_TEXT = 4000
 CHAT_KEEP_DAYS = 30
-CHAT_TYPING_SECONDS = 6  # a "typing" signal lasts this long unless renewed (chat.js renews it every 2.5 s)
+CHAT_TYPING_SECONDS = 6  # a "typing" signal lasts this long unless renewed (the dashboard renews it every 2.5 s)
 CHAT_POLL_SECONDS = 25  # a long poll answers at the latest after this, with nothing new
 CHAT_RATE = (30, 60)  # at most 30 messages per 60 seconds per sender
 CHAT_ADMIN_RATE = (120, 60)  # admins answering many conversations at once
@@ -5100,7 +5093,7 @@ CHAT_MAX_IMAGE = (
 class ChatStore:
     """Direct messages between admins and users: an admin starts a conversation from Admin > Users ("Chat"), or a user
     writes to an admin from the Chats panel (their line to support); both answer in the window that opens on every Coder
-    page (chat.js). Admins may write to anyone; everyone else to admins, or to whoever wrote to them first. A message
+    page (the dashboard's chat). Admins may write to anyone; everyone else to admins, or to whoever wrote to them first. A message
     may carry a screenshot (chat_files, read only by the two people in the conversation). Messages are kept CHAT_KEEP_DAYS days in the service's SQLite file
     (its PersistentVolumeClaim). Typing signals live in memory only. A tab keeps one long poll open
     (/api/chat/poll), answered as soon as a message or a typing change concerns its user.
@@ -6531,7 +6524,7 @@ def boot_js():
     js += "window.__cuiBackgrounds=%s;\n" % json.dumps(
         {slot: background_public(slot, backgrounds.get(slot)) for slot in BG_SLOTS})
     if default_avatar:
-        # Who gets the default avatar is not public: this browser's last answer (dashboard.js refreshes it once signed in).
+        # Who gets the default avatar is not public: this browser's last answer (the dashboard refreshes it once signed in).
         js += (
             "try{window.__cuiAvatarUsers=new Set(JSON.parse(localStorage.getItem('coder-ui-avatar-users')||'[]'))}"
             "catch(e){window.__cuiAvatarUsers=new Set()}\n"
@@ -7014,35 +7007,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 log(event="keycloak-report-failed", error=str(e))
                 return self.send_json(500, {"error": "Discovery failed: %s" % e})
-        if path.startswith(BASE + "/"):
-            return self.static(path[len(BASE) + 1 :])
         self.send(404, "not found\n")
-
-    def static(self, name):
-        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]*\.(js|css|html|gif|png)$", name):
-            return self.send(404, "not found\n")
-        file = os.path.join(STATIC_DIR, name)
-        if not os.path.isfile(file):
-            return self.send(404, "not found\n")
-        with open(file, "rb") as f:
-            body = f.read()
-        etag = '"%s"' % hashlib.sha256(body).hexdigest()[:20]
-        headers = {"Cache-Control": "no-cache", "ETag": etag}
-        if name.endswith(".html"):
-            headers["Content-Security-Policy"] = HTML_CSP
-        if self.headers.get("If-None-Match") == etag:
-            self.send_response(304)
-            for k, v in {**self.SECURITY, **headers, "Content-Length": "0"}.items():
-                self.send_header(k, v)
-            return self.end_headers()
-        ctype = {
-            "js": "text/javascript; charset=utf-8",
-            "css": "text/css; charset=utf-8",
-            "html": "text/html; charset=utf-8",
-            "gif": "image/gif",
-            "png": "image/png",
-        }.get(name.rsplit(".", 1)[1]) or mimetypes.guess_type(name)[0]
-        self.send(200, body, ctype, headers)
 
     def logo(self, versioned):
         logo = (
