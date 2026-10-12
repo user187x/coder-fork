@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.26.1 – 2026-10-12
+
+Coder `2.0.0-platform.23` (rebuilt: `03b8450f2`).
+
+* **Workspace metric graphs, coloured by magnitude.** Each bar shows how much of what there is its reading uses:
+  * green under 50 %;
+  * yellow-green at 50–64 %;
+  * yellow at 65–74 %;
+  * orange at 75–89 %;
+  * red from 90 % (critical).
+
+  Load average counts per core (1.0 = every core busy). A metric without a scale stays green.
+* **Graphs control**, the last item of the metrics row: "live · 10 s" or "every 30 s" shows how the graphs advance.
+  Its panel gives:
+  * how often the agent reports each metric (set in the template; Home Disk and Load Average every 60 s);
+  * the choice of Live (a bar per reading), 30 s, 1 min or 5 min (a bar per period, its highest reading, so spikes
+    stay visible), remembered in the browser;
+  * how long a span the graphs cover (40 bars: 7 min live, up to 3.3 h at 5 min);
+  * the colour legend.
+
 ## 1.26.0 – 2026-10-12
 
 Coder `2.0.0-platform.23`.
