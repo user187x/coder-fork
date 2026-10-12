@@ -615,11 +615,14 @@ MARIMO_DARK
     timeout      = 1
   }
 
+  # The host's 1-minute load over its cores: /proc/loadavg is the host's, so it is divided by the host's online
+  # cores (getconf), not by nproc (in the container: the workspace's CPU limit, which made 6 / 6 cores read as fully
+  # loaded on a 24-core host).
   metadata {
     display_name = "Load Average (Host)"
     key          = "6_load_host"
     script       = <<EOT
-      echo "`cat /proc/loadavg | awk '{ print $1 }'` `nproc`" | awk '{ printf "%0.2f", $1/$2 }'
+      awk -v n="$(getconf _NPROCESSORS_ONLN 2>/dev/null || grep -c ^processor /proc/cpuinfo)" '{ printf "%.2f / %d cores (%.0f%%)", $1, n, $1 * 100 / n }' /proc/loadavg
     EOT
     interval = 60
     timeout  = 1

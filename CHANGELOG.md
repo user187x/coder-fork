@@ -2,7 +2,7 @@
 
 ## 1.26.3 – 2026-10-12
 
-Coder `2.0.0-platform.23` (rebuilt: `c1425a6ee`).
+Coder `2.0.0-platform.23` (rebuilt: `d7bf300bd`).
 
 * **Home Disk shows the workspace's own disk, in GB.** On a storage class whose volumes are directories of a bigger
   disk (local-path, hostPath: Minikube), `df` of the home showed that whole disk. A 25 GB workspace read "872/935
@@ -15,7 +15,14 @@ Coder `2.0.0-platform.23` (rebuilt: `c1425a6ee`).
 * **New workspaces get the GB they ask for:** the home volume is `<size>G`, as the parameter says, no longer
   `<size>Gi`. Existing volumes keep their size; a 25Gi one shows as 26.8 GB.
 * **Expand disk** works in GB too.
-* Running workspaces show the new Home Disk after their next update and restart (the template has a new version).
+* **Load Average (Host) fixed:** the host's load (`/proc/loadavg`) was divided by `nproc`, which in the container is
+  the workspace's CPU limit. A 24-core host with a load of 6 read 1.0, "fully loaded". It is now divided by the
+  host's online cores and shown as "6.39 / 24 cores (27%)", so its graph and colour follow the percentage.
+* **A gauge of the current reading above each metric's graph:** a pill filled to the reading and coloured by it (green
+  to red). It follows the Metrics Interval (each second at 1 s, the newest bar otherwise) and slides from one reading
+  to the next.
+* Running workspaces show the new Home Disk and Load Average after their next update and restart (the template has a
+  new version).
 
 ## 1.26.2 – 2026-10-12
 
