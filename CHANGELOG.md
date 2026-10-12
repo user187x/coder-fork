@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.26.0 – 2026-10-12
+
+Coder `2.0.0-platform.23`.
+
+* **HUD: live usage, and three graphs under the totals.**
+  * **metrics-server is now part of the chart** (`metricsServer.enabled: auto`): it is installed only where the
+    cluster has no metrics API yet, so an existing one (the EKS add-on) stays in charge. The HUD said "no live usage"
+    because the cluster had none. On Minikube, `./make` sets `metricsServer.kubeletInsecureTLS`.
+  * New totals: **CPU in use** and **Memory in use** by running workspaces, live, next to what they claimed.
+  * **Graphs** of system latency (the median and 95th percentile of users' connections to their workspaces, from
+    Coder's agent stats), total CPU used and total memory used (the cluster, and the workspaces' part of it). Ranges:
+    15 minutes to 7 days, with hover details. The platform service samples them every 15 seconds whether or not
+    anyone looks, and keeps 7 days (`/data/hud.sqlite`).
+  * The "Live" mark turns amber when metrics-server does not answer. (Before, it went by whether any workspace pod
+    was measured.)
+* **Templates:**
+  * **Overview** replaces Resources. It shows the resources, with the docs (README) below them; the Docs tab is gone.
+  * **Source Code** holds the versions: a compact list under the file tree. Click one to see its code there; Promote
+    sits on the right of each entry; small active / newest / failed marks.
+  * **Squash** (template editors): pick the two ends of a range. The newest version of the range stays, with the
+    others' messages added to its own, and the others are archived. The active version and any version a workspace
+    still uses stay.
+  * **Insights** is now **Details**.
+  * **Embed** no longer shows the button preview or "Copy button Markdown". **⋮ › Share** copies the Open in Coder
+    button (Markdown or HTML) or its link, with the Embed tab's settings. Share is in everyone's menu; the rest of
+    the menu is still for editors.
+  * Old links (`/docs`, `/resources`, `/versions`) redirect.
+* **Workspaces:**
+  * **Their own icon:** Settings › General › Icon (emoji, Coder icon or path). It shows in the workspaces list and
+    next to the name on the workspace page. Empty: the template's icon again.
+  * **⋮ › Back up home** (owners and admins): the home volume as a .tar.gz, to S3 (Images › Settings) or as a
+    download kept 24 hours. A Job beside the workspace streams it; the workspace keeps running.
+  * **⋮ › Expand disk** (owners and admins): a bigger home volume. Where the storage class grows volumes (EBS on
+    EKS), in place, with one restart only if the file system needs it. Elsewhere (local-path), the workspace is
+    stopped, its home copied onto a bigger volume that takes the old one's name, and started again; owners and modes
+    are kept. Tested on Minikube: 1 → 3 GiB in 28 s, data intact.
+  * The workspace template ignores the home volume's size after creation (`lifecycle { ignore_changes }`), so a
+    later build never shrinks a grown disk.
+* **Images:** the New Image dialog fits without a horizontal scroll bar.
+* New bundled image: `registry.k8s.io/metrics-server/metrics-server:v0.8.1`. The platform service's builder Role may
+  now manage PVCs in the workspace namespace; workspace backups use the image builder's volume.
+
 ## 1.25.0 – 2026-10-12
 
 Coder `2.0.0-platform.22`.

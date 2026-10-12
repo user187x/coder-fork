@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.25.0.tar.gz && cd coder-airgapped-1.25.0
+tar -xzf coder-airgapped-1.26.0.tar.gz && cd coder-airgapped-1.26.0
 ./make --deploy
 ```
 
@@ -73,8 +73,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.25.0.tar.gz
-cd coder-airgapped-1.25.0
+tar -xzf coder-airgapped-1.26.0.tar.gz
+cd coder-airgapped-1.26.0
 ./mirror-images.sh list
 ```
 
@@ -85,14 +85,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.25.0` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.26.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.25.0
+cd coder-airgapped-1.26.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -254,6 +254,24 @@ bundled. Set S3 backups (bucket, region, keys, or an S3-compatible endpoint such
 
 On EKS with your own registry (`global.registry`), images start from the workspace image in that registry. On
 Minikube, `./make --deploy` seeds the built-in registry with it.
+
+## metrics-server (live CPU and memory)
+
+The HUD, Health and quotas show live usage from the Kubernetes metrics API. The chart installs metrics-server
+(`registry.k8s.io/metrics-server/metrics-server:v0.8.1`, in the bundle) only where the cluster has none
+(`metricsServer.enabled: auto`). On EKS with the metrics-server add-on, nothing is installed. Set `false` to never
+install it, `true` to always. Kubelets with self-signed serving certificates (Minikube, kind) need
+`metricsServer.kubeletInsecureTLS: true`; `./make --deploy` sets it on Minikube. Keep it false on EKS.
+
+## Workspace backups and disk growth
+
+A workspace's ⋮ menu has **Back up home** and **Expand disk**, for its owner and admins. Both use the image builder's
+volume (`imageBuilder.enabled`) and the platform service's permission to manage PVCs in the workspace namespace.
+
+* **Backups** go to the S3 bucket set in Templates › Images › Settings, or become a download kept 24 hours on the
+  builder volume (`imageBuilder.files.size` bounds how large).
+* **Expand disk** grows the volume in place where the storage class has `allowVolumeExpansion: true` (EBS gp2 / gp3
+  on EKS). Elsewhere it stops the workspace and copies its home onto a bigger volume.
 
 > **Good to know – workspaces in a strict air gap:** workspaces start and connect. The desktop, the JetBrains Mono Nerd
 > Font, tmux, k9s/kubectl and marimo (with all its packages) are in the workspace image. The template still installs

@@ -722,6 +722,12 @@ resource "kubernetes_persistent_volume_claim_v1" "home" {
       }
     }
   }
+
+  # The parameter is the size the workspace was created with; the disk can grow later (the workspace's ⋮ menu >
+  # Expand disk, done by the platform service), so later builds leave the volume's size alone.
+  lifecycle {
+    ignore_changes = [spec[0].resources]
+  }
 }
 
 resource "kubernetes_deployment_v1" "main" {

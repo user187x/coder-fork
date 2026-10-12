@@ -84,9 +84,9 @@ coder:
   coder:
     image:
       repo: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-platform") }}'
-      # The fork's 2.0.0-platform.22 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
+      # The fork's 2.0.0-platform.23 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
       # (development/airgap-image), without which templates cannot be pushed or built offline.
-      tag: 2.0.0-platform.22-airgap
+      tag: 2.0.0-platform.23-airgap
       pullSecrets: []
     # No gap during rollouts. The new pod starts first and must be ready before the old one stops (the defaults with
     # one replica: maxSurge 25% rounds up to 1, maxUnavailable 25% down to 0). The old pod then keeps serving for 15 s
@@ -252,6 +252,16 @@ bootstrap:
   # Any image with python3 (the add-on services' image is reused so there is nothing extra to mirror).
   image: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   timeoutSeconds: 900
+
+# ---------------------------------------------------------------------------------------------------------------
+# metrics-server: live CPU and memory for the HUD, Health and quotas (templates/metrics-server.yaml). "auto" installs it
+# only where the cluster has no metrics API yet (an existing one, such as the EKS add-on, is left alone); true / false.
+# ---------------------------------------------------------------------------------------------------------------
+metricsServer:
+  enabled: auto
+  image: '{{ include "platform.image" (list . "registry.k8s.io/metrics-server/metrics-server:v0.8.1") }}'
+  # Kubelets with self-signed serving certificates (Minikube, kind; ./make sets it there). Keep false on EKS.
+  kubeletInsecureTLS: false
 
 # ---------------------------------------------------------------------------------------------------------------
 # Images view (Templates > Images): workspace images built in the cluster (templates/image-builder.yaml). Builds run as

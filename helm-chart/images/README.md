@@ -33,7 +33,7 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
-| `ghcr.io_user187x_coder-platform_2.0.0-platform.22-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.22-airgap` | 312 MB | coder (server); = the fork's platform.22 (73fed2459) + Terraform provider mirror |
+| `ghcr.io_user187x_coder-platform_2.0.0-platform.23-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.23-airgap` | 312 MB | coder (server); = the fork's platform.23 (b7a559785) + Terraform provider mirror |
 | `ghcr.io_user187x_coder-image-tools_1.0.0.tar.gz` | `ghcr.io/user187x/coder-image-tools:1.0.0` | 208 MB | coder-ui-updates and the Images builder's scans: python:3.13-alpine + shellcheck, shfmt, trivy (+ its vulnerability database), regctl (`development/image-tools`) |
 | `ghcr.io_user187x_coder-workspace_1.7.0.tar.gz` | `ghcr.io/user187x/coder-workspace:1.7.0` | 1539 MB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools (btop, bat, vim, eza, fzf, grc, jq, yq), k9s (custom build + config), kubectl, kubelogin (admins' kubectl sign-in), marimo with its Python packages (offline), default ~/.bashrc and desktop background |
 
@@ -46,6 +46,7 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 | `ghcr.io_coder_coder_latest.tar.gz` | `ghcr.io/coder/coder:latest` | 244 MB | coder-workspace push-template Job (floating tag, pinned here) |
 | `docker.io_moby_buildkit_v0.33.0-rootless.tar.gz` | `docker.io/moby/buildkit:v0.33.0-rootless` | 123 MB | Images view: the build Jobs (BuildKit rootless) |
 | `docker.io_library_registry_3.1.2.tar.gz` | `docker.io/library/registry:3.1.2` | 20 MB | Images view: coder-image-registry, where built images are kept |
+| `registry.k8s.io_metrics-server_metrics-server_v0.8.1.tar.gz` | `registry.k8s.io/metrics-server/metrics-server:v0.8.1` | 21 MB | metrics-server: live CPU and memory (HUD, Health, quotas); installed only where the cluster has no metrics API |
 
 ### `public/prereqs/`
 

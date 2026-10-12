@@ -2,7 +2,7 @@
 {{- if .Values.uiUpdates.enabled }}
 {{- $ui := .Values.uiUpdates }}
 {{- $ns := .Release.Namespace }}
-{{- $code := list "ui-service.py" "pgwire.py" "certinfo.py" "imagebuilder.py" }}
+{{- $code := list "ui-service.py" "pgwire.py" "certinfo.py" "imagebuilder.py" "workspacevolumes.py" }}
 {{- $files := .Files.Glob "files/ui-updates/*" }}
 apiVersion: v1
 kind: ConfigMap

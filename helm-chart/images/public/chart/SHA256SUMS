@@ -3,3 +3,4 @@
 d4e243c5a4fdabfef6c2465aae668e4545d9aba39f2e2ed8b9e4cd2ce67c9d63  docker.io_moby_buildkit_v0.33.0-rootless.tar.gz
 83855e017e7aafbecf488fd8e335abe9e3af3729294ad5d3c3eb011f0320ad74  ghcr.io_cloudnative-pg_postgresql_18.4-system-trixie.tar.gz
 107070501e991805c9f5654e805d640238b1c83f149fd5bda6c47647fde58994  ghcr.io_coder_coder_latest.tar.gz
+b99aa379c0c02f7d6e209f21825a44b4999de69f7e1946d47c68e458267a0bb3  registry.k8s.io_metrics-server_metrics-server_v0.8.1.tar.gz

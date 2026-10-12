@@ -76,6 +76,9 @@
   GET  /__coder-ui/api/monitoring          users and their running workspaces
   GET  /__coder-ui/api/monitoring/posture  zero-trust checks and runtime signals (identity, exposure, pods, failures)
   GET  /__coder-ui/api/hud                 admins: the HUD's metrics (totals, leaders, health), cached 5 seconds
+  GET  /__coder-ui/api/hud/history?range=  admins: the HUD graphs (CPU, memory, latency), sampled every 15 s, kept 7 days
+  /__coder-ui/api/workspace-icons, /__coder-ui/api/workspace-volumes/<id>   workspace icons, home backups and disk
+                                           growth (owners and admins): see workspacevolumes.py
   GET  /__coder-ui/api/monitoring/logs?workspace=<id>&after=<seq>   new log lines (starts / keeps the follower)
 
   Keycloak <-> Coder sign-in (admins)
@@ -113,6 +116,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pgwire  # noqa: E402  (next to this file)
 import imagebuilder  # noqa: E402  (next to this file: the Images view)
+import workspacevolumes  # noqa: E402  (workspace icons, home backups, disk growth)
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -6260,6 +6264,7 @@ def hud_report(token):
     claimed = {w["id"]: w for w in quota_workspaces(token)}      # cores / GiB each workspace was built with
     live = _pod_usage_by_workspace()                              # live usage per workspace (metrics-server)
     snapshot = cluster_snapshot()
+    metrics_live = snapshot["usage"] is not None                  # metrics-server answers (nodes)
     pods = [p for p in snapshot["pods"] if ((p.get("metadata") or {}).get("labels") or {}).get("com.coder.workspace.id")]
     gpu_by_ws, requested = {}, {}
     for pod in pods:
@@ -6336,7 +6341,9 @@ def hud_report(token):
     top_ws = _leader([(o["workspaces"], k, None) for k, o in per_owner.items()])
     top_fail = _leader([(o["failures"], k, None) for k, o in per_owner.items()])
     latencies.sort()
-    source = "Live, from metrics-server" if live else "What running workspaces were built with (no metrics-server)"
+    source = "Live, from metrics-server" if metrics_live else "What running workspaces were built with (no metrics-server)"
+    ws_cpu_live = sum(v["cpu"] for v in live.values()) if metrics_live else None
+    ws_mem_live = sum(v["memory"] for v in live.values()) if metrics_live else None
 
     def m(mid, label, group, value, unit="", detail="", hint="", href=""):
         return {"id": mid, "label": label, "group": group, "value": value, "unit": unit, "detail": detail, "hint": hint,
@@ -6356,6 +6363,12 @@ def hud_report(token):
           "Existing workspaces", _workspaces_href()),
         m("active", "Workspaces active", "totals", running, "", "of %d" % len(workspaces), "Running now",
           _workspaces_href("status:running")),
+        m("cpu-used", "CPU in use", "totals", round(ws_cpu_live, 2) if ws_cpu_live is not None else None, "cores",
+          "by running workspaces, live", "What running workspaces use now (metrics-server)" if metrics_live
+          else "Needs metrics-server", _workspaces_href("status:running")),
+        m("memory-used", "Memory in use", "totals", round(ws_mem_live, 2) if ws_mem_live is not None else None, "GiB",
+          "by running workspaces, live", "What running workspaces use now (metrics-server)" if metrics_live
+          else "Needs metrics-server", _workspaces_href("status:running")),
         m("cpu", "CPU claimed", "totals", round(cpu_claimed, 2), "cores",
           "of %g allocatable" % round(cluster["cpu"]["total"], 1) if cluster else "", "Cores running workspaces were built with",
           "/health/user-quota"),
@@ -6391,9 +6404,105 @@ def hud_report(token):
         m("disconnected", "Agents disconnected", "health", disconnected, "", "running workspaces", "", _workspaces_href("status:running")),
         m("unhealthy-apps", "Unhealthy apps", "health", unhealthy, "", "in running workspaces", "", "/health/workspace-health"),
     ]
-    out = {"metrics": metrics, "generatedAt": now(), "live": bool(live)}
+    out = {"metrics": metrics, "generatedAt": now(), "live": metrics_live}
     CACHE.put("hud:" + token[:16], out, 5)
     return out
+
+
+HUD_SAMPLE_EVERY = int(os.environ.get("HUD_SAMPLE_EVERY", "15"))
+HUD_HISTORY_DAYS = int(os.environ.get("HUD_HISTORY_DAYS", "7"))
+HUD_RANGES = {"15m": 900, "1h": 3600, "6h": 6 * 3600, "24h": 86400, "7d": 7 * 86400}
+
+
+class HudHistory(threading.Thread):
+    """The HUD's graphs: every HUD_SAMPLE_EVERY seconds, whether or not anyone looks, the cluster's CPU and memory in
+    use (live, from metrics-server; what workspaces use of it too) and the latency of users' connections to their
+    workspaces (Coder's agent stats: the median of each connection, over the last minute). Kept HUD_HISTORY_DAYS days
+    in /data/hud.sqlite; read back in up to 120 buckets per range."""
+
+    def __init__(self, path):
+        super().__init__(daemon=True)
+        self.path = path
+        with self.connect() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS samples (t INTEGER PRIMARY KEY, live INTEGER,
+                cpu REAL, cpu_ws REAL, cpu_total REAL, mem REAL, mem_ws REAL, mem_total REAL,
+                lat_p50 REAL, lat_p95 REAL, lat_max REAL, connections INTEGER)""")
+
+    def connect(self):
+        db = sqlite3.connect(self.path, timeout=10)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def latency(self):
+        pool = LOGOS.pool if LOGOS else None
+        if not pool:
+            return None
+        rows = pool.query(
+            """SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY connection_median_latency_ms),
+                      percentile_cont(0.95) WITHIN GROUP (ORDER BY connection_median_latency_ms),
+                      max(connection_median_latency_ms), count(DISTINCT agent_id)
+               FROM workspace_agent_stats
+               WHERE created_at > now() - interval '60 seconds' AND connection_median_latency_ms > 0"""
+        )
+        return rows[0] if rows else None
+
+    def sample(self):
+        cluster = cluster_usage()
+        live = cluster_snapshot()["usage"] is not None
+        ws = _pod_usage_by_workspace() if live else {}
+        lat = None
+        try:
+            lat = self.latency()
+        except Exception:  # noqa: BLE001 - the database is unreachable: no latency this round
+            lat = None
+        gib = 1024 ** 3
+        row = (int(time.time()), int(live),
+               cluster["cpu"]["used"], sum(v["cpu"] for v in ws.values()) if live else None, cluster["cpu"]["total"],
+               cluster["memory"]["used"] / gib, sum(v["memory"] for v in ws.values()) if live else None,
+               cluster["memory"]["total"] / gib,
+               lat[0] if lat else None, lat[1] if lat else None, lat[2] if lat else None, int(lat[3]) if lat else 0)
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO samples VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
+            db.execute("DELETE FROM samples WHERE t < ?", (int(time.time()) - HUD_HISTORY_DAYS * 86400,))
+
+    def run(self):
+        last = None
+        while True:
+            try:
+                self.sample()
+                last = None
+            except Exception as e:  # noqa: BLE001 - reported once, retried next round
+                if str(e) != last:
+                    log(event="hud-sample-failed", error=str(e)[:300])
+                last = str(e)
+            time.sleep(HUD_SAMPLE_EVERY)
+
+    def series(self, range_):
+        span = HUD_RANGES.get(range_, 3600)
+        end = int(time.time())
+        start = end - span
+        step = max(HUD_SAMPLE_EVERY, span // 120)
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT (t - ?) / ? AS b, max(t) AS t, max(live) AS live,
+                    avg(cpu) AS cpu, max(cpu) AS cpu_peak, avg(cpu_ws) AS cpu_ws, max(cpu_total) AS cpu_total,
+                    avg(mem) AS mem, max(mem) AS mem_peak, avg(mem_ws) AS mem_ws, max(mem_total) AS mem_total,
+                    avg(lat_p50) AS lat_p50, max(lat_p95) AS lat_p95, max(lat_max) AS lat_max,
+                    max(connections) AS connections
+                   FROM samples WHERE t >= ? GROUP BY b ORDER BY b""",
+                (start, step, start),
+            ).fetchall()
+        r2 = lambda v: None if v is None else round(v, 3)  # noqa: E731
+        points = [{"t": r["b"] * step + start, "live": bool(r["live"]), "cpu": r2(r["cpu"]), "cpuPeak": r2(r["cpu_peak"]),
+                   "cpuWorkspaces": r2(r["cpu_ws"]), "cpuTotal": r2(r["cpu_total"]), "memory": r2(r["mem"]),
+                   "memoryPeak": r2(r["mem_peak"]), "memoryWorkspaces": r2(r["mem_ws"]), "memoryTotal": r2(r["mem_total"]),
+                   "latency": r2(r["lat_p50"]), "latencyP95": r2(r["lat_p95"]), "latencyMax": r2(r["lat_max"]),
+                   "connections": r["connections"] or 0} for r in rows]
+        return {"range": range_ if range_ in HUD_RANGES else "1h", "start": start, "end": end, "step": step,
+                "points": points}
+
+
+HUD_HISTORY = None
 
 
 # --------------------------------------------------------------------------- Certificates (General > Security)
@@ -6695,6 +6804,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if imagebuilder.handle(self, "GET", path, url.query, ADMIN_ROLES):
             return
+        if workspacevolumes.handle(self, "GET", path, url.query):
+            return
         if path.startswith(TEMPLATE_ICONS_PATH):
             return self.template_icon(path[len(TEMPLATE_ICONS_PATH):])
         if path == BASE + "/refresh":
@@ -6922,6 +7033,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.chat_get(
                 path[len(BASE + "/api/chat/") :], urllib.parse.parse_qs(url.query)
             )
+        if path == BASE + "/api/hud/history":
+            user, err = self.user(admin=True)
+            if err:
+                return
+            if not HUD_HISTORY:
+                return self.send_json(503, {"error": "The HUD history is not running."})
+            rng = (urllib.parse.parse_qs(url.query).get("range") or ["1h"])[0]
+            return self.send_json(200, HUD_HISTORY.series(rng))
         if path == BASE + "/api/hud":
             user, err = self.user(admin=True)
             if err:
@@ -7406,6 +7525,8 @@ class Handler(BaseHTTPRequestHandler):
         """Uploads to the Images view (files of an image being built)."""
         self.close_connection = True
         url = urllib.parse.urlsplit(self.path)
+        if url.path.startswith(BASE + "/internal/") and workspacevolumes.handle_internal(self, "PUT", url.path):
+            return
         if not imagebuilder.handle(self, "PUT", url.path, url.query, ADMIN_ROLES):
             self.send(404, "not found\n")
 
@@ -7416,6 +7537,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith(BASE + "/internal/") and imagebuilder.handle_internal(self, "POST", path):
             return
         if imagebuilder.handle(self, "POST", path, url.query, ADMIN_ROLES):
+            return
+        if workspacevolumes.handle(self, "POST", path, url.query):
             return
         routes = {
             BASE + "/api/view",
@@ -7797,7 +7920,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY, BACKGROUNDS
+    global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY, BACKGROUNDS, HUD_HISTORY
     STORE = Store(DB_PATH)
     CHAT = ChatStore(DB_PATH)
     DEFAULTS = Defaults(
@@ -7809,8 +7932,13 @@ def main():
     BACKGROUNDS = BackgroundStore(LOGOS)
     ICONS = IconStore(LOGOS)
     MONITOR = Monitor()
+    HUD_HISTORY = HudHistory(os.path.join(os.path.dirname(DB_PATH) or "/data", "hud.sqlite"))
+    HUD_HISTORY.start()
     imagebuilder.setup(log, http_json, KUBE)
     imagebuilder.start()
+    workspacevolumes.setup(log, http_json, KUBE)
+    workspacevolumes.CODER_URL = CODER_URL
+    workspacevolumes.start()
     if imagebuilder.ENABLED:
         # the apt indices for the package check, ready before anyone opens the builder
         threading.Thread(target=lambda: imagebuilder.APT.load(), daemon=True).start()

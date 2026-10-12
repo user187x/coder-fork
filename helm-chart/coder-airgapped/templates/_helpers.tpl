@@ -98,7 +98,7 @@ https://{{ include "platform.coderHost" . }}
 {{- end -}}
 
 {{- define "ca.values" -}}
-{{- range $section := list "database" "secrets" "bootstrap" "uiUpdates" "imageBuilder" -}}
+{{- range $section := list "database" "secrets" "bootstrap" "uiUpdates" "imageBuilder" "metricsServer" -}}
 {{- include "ca.walk" (list (index $.Values $section) $) -}}
 {{- end -}}
 {{- if and .Values.global.imagePullSecrets (not .Values.uiUpdates.imagePullSecrets) -}}

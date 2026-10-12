@@ -243,6 +243,11 @@ rules:
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
+  # Workspace volumes (a workspace's ⋮ menu): backups mount the home volume read-only; a disk expansion grows it, or
+  # (on a storage class that cannot grow volumes) copies it onto a bigger one under the same name.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, create, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

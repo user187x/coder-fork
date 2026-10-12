@@ -337,6 +337,8 @@ uiUpdates:
   persistence: {storageClass: ${STORAGE_CLASS}}
   keycloak: {enabled: ${kc_view}}
   argocd: {enabled: ${argo_view}}
+metricsServer:
+  kubeletInsecureTLS: $([[ "$TARGET" == minikube ]] && echo true || echo false)
 EOF
 	say "values: ${VALUES}"
 }
