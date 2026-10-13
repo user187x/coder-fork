@@ -37,6 +37,7 @@ it found. The report is [`docs/READINESS.md`](docs/READINESS.md).
     on EKS, BuildKit had to pull it from your registry, which needs credentials: ECR with node roles has none.
   * A GNOME build, or one with apt packages, and no apt mirror is refused before it starts, with the reason. It
     used to fail halfway.
+  * With no reachable apt source, the package check answers in seconds: it waited over two minutes per source.
 * **The image builder's registry starts on a fresh install:** its garbage-collect step failed on an empty volume
   ("Path not found"), so on every new install the registry crash-looped and the image builder could not build. Found
   by the air-gapped end-to-end test; the development cluster's registry already had data.

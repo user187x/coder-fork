@@ -131,8 +131,14 @@ if "ubuntu-vnc-desktop" in names:
         owner = "admin"  # the workspace is the admin's
         for slug, path in (("code-server", "/"), ("filebrowser", "/"), ("novnc", "/")):
             if apps.get(slug) == "healthy":
-                st, _, _ = get("%s/@%s/e2e.main/apps/%s%s" % (CODER, owner, slug, path),
-                               headers={"Coder-Session-Token": admin})
+                # Without the browser's cookie jar (it holds the Keycloak user's session): as the admin.
+                try:
+                    rq = urllib.request.Request("%s/@%s/e2e.main/apps/%s%s" % (CODER, owner, slug, path),
+                                                headers={"Coder-Session-Token": admin})
+                    with urllib.request.urlopen(rq, timeout=30, context=CTX) as r_:
+                        st = r_.status
+                except urllib.error.HTTPError as e_:
+                    st = e_.code
                 check("app %s answers through Coder's proxy" % slug, st in (200, 302, 307), str(st))
 
 # --- 1.7.0: HUD, security posture, Global Workspace Scheduler (platform service, admin + Keycloak user) ---

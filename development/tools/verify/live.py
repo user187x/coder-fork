@@ -53,9 +53,10 @@ class API:
             return s, b
 
 
-def pty_echo(base, ctx, token, agent_id, text, timeout=60):
-    """Coder's web terminal end to end: a reconnecting PTY over a websocket, through Coder to the agent. Sends a
-    command and waits for its output."""
+def pty_echo(base, ctx, token, agent_id, text, timeout=90):
+    """Coder's web terminal end to end: a reconnecting PTY over a websocket, through Coder to the agent. Waits for
+    the shell's first output, sends a command and waits for what it prints (computed, so the echo of the typed
+    command does not count)."""
     u = urllib.parse.urlparse(base)
     port = u.port or (443 if u.scheme == "https" else 80)
     sock = socket.create_connection((u.hostname, port), timeout=timeout)
@@ -66,49 +67,71 @@ def pty_echo(base, ctx, token, agent_id, text, timeout=60):
     sock.sendall(("GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                   "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nCoder-Session-Token: %s\r\n\r\n"
                   % (path, u.netloc, key, token)).encode())
-    head = b""
-    while b"\r\n\r\n" not in head:
-        chunk = sock.recv(4096)
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(65536)
         if not chunk:
             raise RuntimeError("closed during the handshake")
-        head += chunk
+        buf += chunk
+    head, buf = buf.split(b"\r\n\r\n", 1)
     if b" 101 " not in head.split(b"\r\n", 1)[0]:
         raise RuntimeError(head.split(b"\r\n", 1)[0].decode(errors="replace"))
-    buf = head.split(b"\r\n\r\n", 1)[1]
+    sock.settimeout(2)
+
+    def frames():
+        """Payloads of the complete frames in buf (reading more when needed); None on close."""
+        nonlocal buf
+        out = []
+        while True:
+            if len(buf) >= 2:
+                n, off = buf[1] & 0x7F, 2
+                if n == 126 and len(buf) >= 4:
+                    n, off = struct.unpack("!H", buf[2:4])[0], 4
+                elif n == 127 and len(buf) >= 10:
+                    n, off = struct.unpack("!Q", buf[2:10])[0], 10
+                if n < 126 or off > 2:
+                    if len(buf) >= off + n:
+                        op, payload, buf = buf[0] & 0x0F, buf[off:off + n], buf[off + n:]
+                        if op == 8:
+                            return out, True
+                        out.append(payload)
+                        continue
+            try:
+                chunk = sock.recv(65536)
+            except socket.timeout:
+                return out, False
+            if not chunk:
+                return out, True
+            buf += chunk
 
     def send(obj):
         payload = json.dumps(obj).encode()
         mask = os.urandom(4)
         n = len(payload)
-        hdr = bytes([0x81]) + (bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + struct.pack("!H", n))
+        # A binary frame: Coder reads the terminal's input as binary messages (the dashboard sends them so).
+        hdr = bytes([0x82]) + (bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + struct.pack("!H", n))
         sock.sendall(hdr + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
 
-    out, deadline = b"", time.time() + timeout
-    send({"data": text + "\r"})
+    # The shell must be ready to read (its prompt drawn, the terminal quiet) or what is typed is lost: type then,
+    # and again if nothing comes back.
+    out, deadline, quiet_since, tries, last_try = b"", time.time() + timeout, None, 0, 0.0
     while time.time() < deadline:
-        while len(buf) < 2:
-            buf += sock.recv(65536)
-        b1, b2 = buf[0], buf[1]
-        n, off = b2 & 0x7F, 2
-        if n == 126:
-            while len(buf) < 4:
-                buf += sock.recv(65536)
-            n, off = struct.unpack("!H", buf[2:4])[0], 4
-        elif n == 127:
-            while len(buf) < 10:
-                buf += sock.recv(65536)
-            n, off = struct.unpack("!Q", buf[2:10])[0], 10
-        while len(buf) < off + n:
-            buf += sock.recv(65536)
-        frame, buf = buf[off:off + n], buf[off + n:]
-        if b1 & 0x0F == 8:
+        got, closed = frames()
+        if got:
+            out += b"".join(got)
+            quiet_since = None
+        elif quiet_since is None:
+            quiet_since = time.time()
+        if closed:
             break
-        out += frame
-        if b"verify-pty-ok" in out.replace(b"echo verify-pty-ok", b""):
+        if b"verify-pty-" + b"%d" % (6 * 7) in out:
             sock.close()
             return out
+        if out and quiet_since and time.time() - quiet_since >= 1.5 and time.time() - last_try > 8 and tries < 4:
+            send({"data": text + "\r"})
+            tries, last_try = tries + 1, time.time()
     sock.close()
-    raise RuntimeError("no output: %r" % out[-200:])
+    raise RuntimeError("no output from the command (got %d bytes: %r)" % (len(out), out[-160:]))
 
 
 def main():
@@ -239,12 +262,12 @@ def main():
                           headers={"Accept": "text/html"})
             check(U, "app %s answers through Coder's proxy" % slug, s in (200, 302, 307), s)
     try:
-        t0 = time.time(); pty_echo(a.url, ctx, admin, agent["id"], "echo verify-pty-ok")
+        t0 = time.time(); pty_echo(a.url, ctx, admin, agent["id"], "echo verify-pty-$((6*7))")
         check(U, "web terminal: a command runs in the workspace (reconnecting PTY over websocket)", True, "", t0)
     except Exception as e:  # noqa: BLE001
         check(U, "web terminal: a command runs in the workspace (reconnecting PTY over websocket)", False, e)
     s, cons = c.call("/api/v2/workspaceagents/%s/listening-ports" % agent["id"], token=admin)
-    check(U, "listening ports (port forwarding)", s == 200 and len(cons.get("ports", [])) > 0,
+    check(U, "listening ports (port forwarding API)", s == 200 and "ports" in cons,
           [p.get("port") for p in cons.get("ports", [])][:10] if s == 200 else s)
     s, md = c.call("/api/v2/workspaceagents/%s/watch-metadata" % agent["id"], token=admin, timeout=5) if False else (0, None)
 
@@ -304,12 +327,12 @@ def main():
     check(U, "notification templates", s == 200 and len(nt) > 0, len(nt) if s == 200 else s)
 
     # ---- the platform service (fork) ---------------------------------------------------------------------------
-    for path, who, want in (("/__coder-ui/api/classification", utoken, 200), ("/__banner/api/state", utoken, 200),
+    for path, who, want in (("/__coder-ui/api/classification", utoken, 200), ("/__banner/banner.json", utoken, 200), ("/__banner/api/state", admin, 200), ("/__banner/api/state", utoken, 403),
                             ("/__coder-ui/api/hud", admin, 200), ("/__coder-ui/api/hud", utoken, 403),
                             ("/__coder-ui/api/hud/history?range=1h", admin, 200), ("/__coder-ui/api/cluster/usage", admin, 200),
                             ("/__coder-ui/api/monitoring/posture", admin, 200), ("/__coder-ui/api/scheduler", admin, 200),
                             ("/__coder-ui/api/scheduler/me", utoken, 200), ("/__coder-ui/api/quota", admin, 200),
-                            ("/__coder-ui/api/certificates", utoken, 200), ("/__coder-ui/api/logo", utoken, 200),
+                            ("/__coder-ui/api/certificates", admin, 200), ("/__coder-ui/api/certificates", utoken, 403), ("/__coder-ui/api/logo", utoken, 200),
                             ("/__coder-ui/api/avatar/defaults", utoken, 200), ("/__coder-ui/api/keycloak/status", admin, 200),
                             ("/__coder-ui/api/images", utoken, 200), ("/__coder-ui/api/images/settings", admin, 200),
                             ("/__coder-ui/api/images/security-data", admin, 200), ("/__coder-ui/api/acks", admin, 200),

@@ -3,8 +3,9 @@
 Each simulated user signs in with its own password account and polls what an open dashboard tab polls, at the
 fork's intervals (site/src/api/queries/platform.ts) and upstream Coder's (the workspaces list):
 
-  developer tab   workspaces list 5 s, classification 30 s, banner state 15 s, banner 300 s, schedule 60 s, me 30 s
-  admin tab       + HUD 10 s, HUD history 10 s, cluster usage 3 s, announcement report 15 s, quota 30 s, scheduler 30 s
+  developer tab   workspaces list 5 s, classification 30 s, banner 60 s, schedule 60 s, me 30 s
+  admin tab       + banner state 15 s, HUD 10 s, HUD history 10 s, cluster usage 3 s, announcement report 15 s,
+                  quota 30 s, scheduler 30 s
 
 --speed N divides every interval by N, so D developers at speed N load the services like D*N tabs.
 
@@ -17,9 +18,10 @@ Exit status 1 when more than --max-error-rate of the requests fail or the p95 of
 import argparse, json, random, ssl, statistics, sys, threading, time, urllib.error, urllib.request
 
 DEV = [("workspaces", "/api/v2/workspaces?q=owner:me", 5), ("me", "/api/v2/users/me", 30),
-       ("classification", "/__coder-ui/api/classification", 30), ("banner-state", "/__banner/api/state", 15),
-       ("banner", "/__banner/banner.json", 300), ("schedule-me", "/__coder-ui/api/scheduler/me", 60)]
-ADMIN = DEV + [("hud", "/__coder-ui/api/hud", 10), ("hud-history", "/__coder-ui/api/hud/history?range=1h", 10),
+       ("classification", "/__coder-ui/api/classification", 30), ("banner", "/__banner/banner.json", 60),
+       ("schedule-me", "/__coder-ui/api/scheduler/me", 60)]
+ADMIN = DEV + [("banner-state", "/__banner/api/state", 15), ("hud", "/__coder-ui/api/hud", 10),
+               ("hud-history", "/__coder-ui/api/hud/history?range=1h", 10),
                ("cluster-usage", "/__coder-ui/api/cluster/usage", 3), ("acks", "/__coder-ui/api/acks", 15),
                ("quota", "/__coder-ui/api/quota", 30), ("scheduler", "/__coder-ui/api/scheduler", 30)]
 

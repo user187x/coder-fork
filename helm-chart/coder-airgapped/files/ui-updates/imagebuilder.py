@@ -450,7 +450,9 @@ class AptIndex:
                     for ext, opener in (("xz", lzma.open), ("gz", gzip.open)):
                         url = "%s/dists/%s/%s/binary-amd64/Packages.%s" % (uri, suite, comp, ext)
                         try:
-                            with urllib.request.urlopen(url, timeout=120) as r:
+                            # 20 s per socket operation: an unreachable source (an air gap with no mirror)
+                            # answers in seconds, not minutes; a big list still streams.
+                            with urllib.request.urlopen(url, timeout=20) as r:
                                 # streamed: the uncompressed lists are hundreds of MB
                                 with opener(r, "rt", encoding="utf-8", errors="replace") as lines:
                                     self._parse(lines, packages)

@@ -25,3 +25,4 @@ __pycache__/
 .DS_Store
 # ./make --deploy state: generated certificates, keys, client secret, answers
 /helm-chart/.deploy/
+/development/tools/airgap-e2e/inpod-out/

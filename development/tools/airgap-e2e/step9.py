@@ -42,15 +42,24 @@ def deb(name, version, files):
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as t:
             for path, content, mode in entries:
-                info = tarfile.TarInfo(path)
-                info.size, info.mode, info.mtime = len(content), mode, int(time.time())
-                t.addfile(info, io.BytesIO(content))
+                info = tarfile.TarInfo(path.rstrip("/") if content is None else path)
+                info.mode, info.mtime = mode, int(time.time())
+                if content is None:
+                    info.type = tarfile.DIRTYPE
+                    t.addfile(info)
+                else:
+                    info.size = len(content)
+                    t.addfile(info, io.BytesIO(content))
         return buf.getvalue()
+    # dpkg needs the directories as entries too (it does not create a file's parents).
+    parents = sorted({"/".join(p.split("/")[:i]) for p, _ in files for i in range(1, p.count("/") + 1)})
+    dirs = [("./" + d + "/", None, 0o755) for d in parents]
     control = ("Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: e2e <e2e@airgap.test>\n"
                "Description: air-gap e2e test package\n" % (name, version)).encode()
     members = [(b"debian-binary", b"2.0\n"), (b"control.tar.gz", tgz([("./control", control, 0o644)])),
-               (b"data.tar.gz", tgz([("./" + p, c, 0o644) for p, c in files]))]
-    out = io.BytesIO(b"!<arch>\n")
+               (b"data.tar.gz", tgz(dirs + [("./" + p, c, 0o644) for p, c in files]))]
+    out = io.BytesIO()
+    out.write(b"!<arch>\n")
     for n, c in members:
         out.write(b"%-16s%-12d%-6d%-6d%-8s%-10d`\n" % (n, int(time.time()), 0, 0, b"100644", len(c)))
         out.write(c + (b"\n" if len(c) % 2 else b""))

@@ -1,0 +1,2 @@
+users: 100 developers, 5 admins (speed x10 = about 1050 tabs), 8 minutes
+signing in load-dev-59: 429 b'{"message":"You\'ve been rate limited for sending more than 60 requests in 1m0s."}\n'
