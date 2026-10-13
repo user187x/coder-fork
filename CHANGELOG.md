@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.28.2 – 2026-10-13
+
+Coder `2.0.0-platform.25` (fork `c174bed4b`), workspace image `coder-workspace:1.8.1` (unchanged).
+
+* **Template Details, Parameter usage: number values without quotes.** A number parameter such as the home disk size
+  showed as `"20"`. The stored values were plain numbers: upstream's panel puts every value without options in
+  quotation marks, the mark of text, numbers included. Numbers now show as themselves; text values keep the quotes.
+
 ## 1.28.1 – 2026-10-13
 
 Coder `2.0.0-platform.24` (unchanged), workspace image `coder-workspace:1.8.1`.

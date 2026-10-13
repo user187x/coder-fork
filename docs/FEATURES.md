@@ -63,7 +63,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 
 | Feature | Where | Test |
 |---|---|---|
-| Template Overview: resources, Details (Coder's insights) and the README; Source Code with versions (squash ranges, Promote) | fork | vitest |
+| Template Overview: resources, Details (Coder's insights; number parameters shown without quotes) and the README; Source Code with versions (squash ranges, Promote) | fork | vitest |
 | Share menu (Embed) in place of the copy buttons | fork | vitest |
 | Templates › Images: an image builder in the cluster (BuildKit rootless): base, apt packages (checked as you type), uploaded .deb files, installations, removals, hardening, XFCE/GNOME/no desktop, dotfiles; review and Dockerfile; builds with progress | fork, service | step 9 |
 | Every build scanned offline: trivy (vulnerabilities, secrets), users/sudo/setuid checks, FIPS readiness; reports say what graded them | service | step 9 |
