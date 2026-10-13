@@ -77,7 +77,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 
 | Feature | Where | Test |
 |---|---|---|
-| HUD: live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users, failures) | fork, service | e2e step 8 |
+| HUD: live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users, failures) and Coder's System Uptime | fork, service | e2e step 8 |
 | Health view, monitoring and security posture (zero-trust checks, runtime signals) | fork, service | e2e step 8 |
 | Network and persistence maps | fork, service | vitest |
 | Inbox (the bell): Clear all (deletes the user's notifications, asks twice) beside an icon-only Mark all as read | fork, service | vitest |

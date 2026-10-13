@@ -98,6 +98,30 @@ class ImageBuilderOfflineTest(unittest.TestCase):
                 ib.base_ref_for(spec)
 
 
+class CoderUptimeTest(unittest.TestCase):
+    """The HUD's System Uptime: since the oldest ready Coder replica's coder container started."""
+
+    @staticmethod
+    def pod(started, ready=True, name="coder"):
+        return {"status": {"containerStatuses": [{"name": name, "ready": ready,
+                                                  "state": {"running": {"startedAt": started}}}]}}
+
+    def test_oldest_ready_replica(self):
+        items = [self.pod("2026-10-13T12:02:07Z"), self.pod("2026-10-12T08:00:00Z"),
+                 self.pod("2026-10-01T00:00:00Z", ready=False),       # not serving: does not count
+                 self.pod("2026-09-01T00:00:00Z", name="sidecar")]   # another container
+        with mock.patch.object(ui, "KUBE", mock.MagicMock(call=mock.MagicMock(return_value=(200, {"items": items})))):
+            self.assertEqual(ui.coder_uptime(), {"since": "2026-10-12T08:00:00Z", "replicas": 2})
+
+    def test_none_ready_or_no_answer(self):
+        with mock.patch.object(ui, "KUBE", mock.MagicMock(call=mock.MagicMock(return_value=(200, {"items": []})))):
+            self.assertEqual(ui.coder_uptime(), {"since": None, "replicas": 0})
+        with mock.patch.object(ui, "KUBE", mock.MagicMock(call=mock.MagicMock(return_value=(403, {})))):
+            self.assertIsNone(ui.coder_uptime())
+        with mock.patch.object(ui, "KUBE", mock.MagicMock(call=mock.MagicMock(side_effect=OSError("down")))):
+            self.assertIsNone(ui.coder_uptime())
+
+
 class TrackedWorkspaceImageTest(unittest.TestCase):
     """The workspace template's image as an entry of the Images view: made, kept to the deployed image, scanned when
     it is new or changed, and read-only."""

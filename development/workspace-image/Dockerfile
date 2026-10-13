@@ -140,6 +140,18 @@ RUN curl -fsSL -o /tmp/code-server.tgz \
 	&& ln -sf /usr/lib/code-server/bin/code-server /usr/bin/code-server \
 	&& rm -f /tmp/code-server.tgz \
 	&& code-server --version
+# CVE-2026-102422 (critical, arbitrary command execution): code-server 4.141.0, the newest, ships shell-quote 1.10.0
+# among VS Code's modules. Replaced by 1.12.0 (the newest; 1.11.0 fixed it), checked by its npm SHA-512; same API
+# (quote and parse give the same results). Drop this step once a code-server release carries a fixed shell-quote.
+ARG SHELL_QUOTE_VERSION=1.12.0
+ARG SHELL_QUOTE_SHA512=3dc072a8dc93ff7f05da40cd8b4d3a1c031125a50bb81ceafc53acc37a9d66f5ff180f56fe36a60da46c9201e3b9b1e27ed5cae6c205c4b364beb5d4c1ca1fe9
+RUN curl -fsSL -o /tmp/shell-quote.tgz "https://registry.npmjs.org/shell-quote/-/shell-quote-${SHELL_QUOTE_VERSION}.tgz" \
+	&& echo "${SHELL_QUOTE_SHA512}  /tmp/shell-quote.tgz" | sha512sum -c - \
+	&& d=/usr/lib/code-server/lib/vscode/node_modules/shell-quote \
+	&& test -d "$d" && rm -rf "$d" && install -d "$d" \
+	&& tar -xzf /tmp/shell-quote.tgz -C "$d" --strip-components=1 --no-same-owner \
+	&& rm -f /tmp/shell-quote.tgz \
+	&& /usr/lib/code-server/lib/node -e 'const q = require(process.argv[1]); if (require(process.argv[1] + "/package.json").version !== process.argv[2] || q.quote(["a b"]) !== "'"'"'a b'"'"'") process.exit(1)' "$d" "${SHELL_QUOTE_VERSION}"
 RUN curl -fsSL -o /tmp/filebrowser.tgz \
 		"https://github.com/filebrowser/filebrowser/releases/download/v${FILEBROWSER_VERSION}/linux-amd64-filebrowser.tar.gz" \
 	&& echo "${FILEBROWSER_SHA256}  /tmp/filebrowser.tgz" | sha256sum -c - \

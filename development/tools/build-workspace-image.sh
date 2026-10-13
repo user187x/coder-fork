@@ -4,10 +4,10 @@
 # into the delivery bundle (helm-chart/images/custom/), replacing the previous one. marimo/requirements.lock is re-pinned
 # first when marimo/requirements.in changed (needs internet, like the build itself). Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.8.2
+#   ./build-workspace-image.sh [TAG]       default 1.8.3
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.8.2}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.8.3}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 # Pin marimo's packages for the base image's Python, when the list changed.
 m="${dev}/workspace-image/marimo"
 if [[ "${m}/requirements.in" -nt "${m}/requirements.lock" ]]; then

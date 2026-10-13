@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.31.0 – 2026-10-13
+
+Coder `2.0.0-platform.29` (fork `d799ac97b`), workspace image `coder-workspace:1.8.3`.
+
+* **The workspace image's critical vulnerability is fixed** (CVE-2026-102422, arbitrary command execution in
+  `shell-quote`). code-server 4.141.0, the newest release, ships shell-quote 1.10.0 among VS Code's modules; the
+  image build replaces it with 1.12.0 (the newest; 1.11.0 fixed it), checked by its npm SHA-512. quote and parse give
+  the same results as before, and nothing in VS Code's own code loads it directly. The step goes once a code-server
+  release carries a fixed shell-quote. The Images entry of the workspace image scans 1.8.3 when it is deployed.
+* **The HUD shows System Uptime**, a small pill under Live: how long the Coder server has been up and online, since
+  its oldest ready replica started (from Kubernetes; a restart starts it again). It counts on between updates.
+* **The workspace page's eight metrics fit on one line** (Workspace: CPU, RAM, Load Avg, Disk; Cluster: CPU, RAM,
+  Disk, Load Avg) from 1280 px wide up, where they scrolled before: graphs 104 px wide (were 120), tighter gaps and
+  13 px values. The workspace Load Avg (1.29.0's `load` in `metadata.sh`) shows once a workspace is updated to a
+  template version from 1.29.0 on.
+
 ## 1.30.0 – 2026-10-13
 
 Coder `2.0.0-platform.28` (fork `4e31952b0`), workspace image `coder-workspace:1.8.2`.

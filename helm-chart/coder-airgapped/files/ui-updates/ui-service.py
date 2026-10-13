@@ -76,7 +76,7 @@
   Monitoring (admins; workspace pod logs streamed into the temporary Postgres coder-ui-logs-db, 5 MB per instance)
   GET  /__coder-ui/api/monitoring          users and their running workspaces
   GET  /__coder-ui/api/monitoring/posture  zero-trust checks and runtime signals (identity, exposure, pods, failures)
-  GET  /__coder-ui/api/hud                 admins: the HUD's metrics (totals, leaders, health), cached 5 seconds
+  GET  /__coder-ui/api/hud                 admins: the HUD's metrics (totals, leaders, health) and Coder's uptime, cached 5 seconds
   GET  /__coder-ui/api/hud/history?range=  admins: the HUD graphs (CPU, memory, latency), sampled every 15 s, kept 7 days
   /__coder-ui/api/workspace-icons, /__coder-ui/api/workspace-volumes/<id>   workspace icons, home backups and disk
                                            growth (owners and admins): see workspacevolumes.py
@@ -6419,9 +6419,31 @@ def hud_report(token):
         m("disconnected", "Agents disconnected", "health", disconnected, "", "running workspaces", "", _workspaces_href("status:running")),
         m("unhealthy-apps", "Unhealthy apps", "health", unhealthy, "", "in running workspaces", "", "/health/workspace-health"),
     ]
-    out = {"metrics": metrics, "generatedAt": now(), "live": metrics_live}
+    out = {"metrics": metrics, "generatedAt": now(), "live": metrics_live, "uptime": coder_uptime()}
     CACHE.put("hud:" + token[:16], out, 5)
     return out
+
+
+def coder_uptime():
+    """How long the Coder server has been up and online: since its oldest ready replica's coder container started
+    (a restart starts it again; during a rollout the replica still serving keeps it going). None when Kubernetes
+    cannot be asked."""
+    selector = "?labelSelector=" + urllib.parse.quote("app.kubernetes.io/name=coder")
+    try:
+        status, pods = KUBE.call("GET", "/api/v1/namespaces/%s/pods%s" % (CODER_NAMESPACE, selector))
+    except Exception:  # noqa: BLE001 - the HUD shows it without uptime
+        return None
+    if status != 200 or not isinstance(pods, dict):
+        return None
+    started = []
+    for pod in pods.get("items") or []:
+        for cs in (pod.get("status") or {}).get("containerStatuses") or []:
+            at = ((cs.get("state") or {}).get("running") or {}).get("startedAt")
+            if cs.get("name") == "coder" and cs.get("ready") and at:
+                started.append(at)
+    if not started:
+        return {"since": None, "replicas": 0}
+    return {"since": min(started), "replicas": len(started)}
 
 
 HUD_SAMPLE_EVERY = int(os.environ.get("HUD_SAMPLE_EVERY", "15"))
