@@ -1,0 +1,26 @@
+{"suite": "unit", "name": "platform service unit tests", "ok": true, "detail": "OK", "seconds": null}
+{"suite": "unit", "name": "go test ./cli", "ok": false, "detail": "------------------------------------------------------------------------ FAIL\tgithub.com/coder/coder/v2/cli\t40.982s FAIL ", "seconds": null}
+{"suite": "unit", "name": "go test ./cli/cliui", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/cli/cliui\t1.074s ", "seconds": null}
+{"suite": "unit", "name": "go test ./cli/cliutil", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/cli/cliutil\t0.014s ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd", "ok": false, "detail": "FAIL FAIL\tgithub.com/coder/coder/v2/coderd\t70.004s FAIL ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/agentapi", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/coderd/agentapi\t0.516s ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/apidoc", "ok": true, "detail": "", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/coderdtest", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/coderd/coderdtest\t0.615s ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/database", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/coderd/database\t3.300s ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/database/dbauthz", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/coderd/database/dbauthz\t5.067s ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/database/dbfake", "ok": true, "detail": "", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/database/dbmetrics", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/coderd/database/dbmetrics\t0.083s ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/database/dbmock", "ok": true, "detail": "", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/gitsshkey", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/coderd/gitsshkey\t0.213s ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/httpmw", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/coderd/httpmw\t0.797s ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/notifications", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/coderd/notifications\t2.840s ", "seconds": null}
+{"suite": "unit", "name": "go test ./coderd/provisionerdserver", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/coderd/provisionerdserver\t1.461s ", "seconds": null}
+{"suite": "unit", "name": "go test ./codersdk", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/codersdk\t0.037s ", "seconds": null}
+{"suite": "unit", "name": "go test ./enterprise/cli", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/enterprise/cli\t10.838s ", "seconds": null}
+{"suite": "unit", "name": "go test ./enterprise/coderd", "ok": false, "detail": "FAIL FAIL\tgithub.com/coder/coder/v2/enterprise/coderd\t96.237s FAIL ", "seconds": null}
+{"suite": "unit", "name": "go test ./scripts/typegen", "ok": true, "detail": "", "seconds": null}
+{"suite": "unit", "name": "go test ./site", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/site\t0.274s ", "seconds": null}
+{"suite": "unit", "name": "go test ./tailnet", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/tailnet\t15.538s ", "seconds": null}
+{"suite": "unit", "name": "go test ./tailnet/test/integration", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/tailnet/test/integration\t0.011s ", "seconds": null}
+{"suite": "unit", "name": "go test ./vpn", "ok": true, "detail": "ok  \tgithub.com/coder/coder/v2/vpn\t1.036s ", "seconds": null}
+{"suite": "unit", "name": "dashboard unit tests (vitest, upstream + fork)", "ok": false, "detail": "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 8 \u23af\u23af\u23af\u23af\u23af\u23af\u23af  Test Files 2 failed | 335 passed (337)  Tests 8 failed | 4672 passed | 2 skipped (4682) Tests closed successfully but something prevents the main process from exiting ", "seconds": null}

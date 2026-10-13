@@ -8,8 +8,13 @@ say "teardown"
 kubectl -n argocd delete application coder --ignore-not-found --wait=true >/dev/null
 kubectl -n argocd delete secret coder-airgapped-charts --ignore-not-found >/dev/null
 for j in $(kubectl -n coder get jobs -o name 2>/dev/null); do kubectl -n coder patch $j --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null; done
-kubectl delete ns coder --ignore-not-found --wait=true --timeout=300s >/dev/null   # operator still running: finalizers clear
+kubectl delete ns coder --ignore-not-found --wait=false >/dev/null   # operator still running: finalizers clear
+# The chart's metrics API (cluster-wide) outlives its Service: namespaces cannot finish terminating while it is stale.
+kubectl get apiservice v1beta1.metrics.k8s.io -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}' 2>/dev/null | grep -q metrics-server &&
+	kubectl delete apiservice v1beta1.metrics.k8s.io >/dev/null 2>&1
+kubectl wait ns/coder --for=delete --timeout=300s >/dev/null 2>&1
 helm -n cnpg-system uninstall cnpg >/dev/null 2>&1; kubectl delete ns cnpg-system --ignore-not-found --wait=true --timeout=120s >/dev/null
+for n in coder cnpg-system; do for _ in $(seq 120); do kubectl get ns $n >/dev/null 2>&1 || break; sleep 5; done; done   # gone, not terminating
 kubectl delete clusterrole,clusterrolebinding coder-ui-updates-coder --ignore-not-found >/dev/null
 kubectl -n argocd delete role,rolebinding coder-ui-updates --ignore-not-found >/dev/null
 docker rm -f airgap-registry >/dev/null; docker run -d --restart=no --name airgap-registry --tmpfs /var/lib/registry:size=24g -p 127.0.0.1:5001:5000 registry:2 >/dev/null

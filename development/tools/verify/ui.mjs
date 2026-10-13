@@ -42,7 +42,7 @@ page.on("pageerror", (e) => pageErrors.push(`${page.url().replace(URL_, "")}: ${
 
 await page.goto(`${URL_}/login`);
 const title = page.getByTestId("contour-title");
-check("sign-in page: the name as a traced outline", await title.isVisible().catch(() => false),
+check("sign-in page: the name as a traced outline", await title.waitFor({ timeout: 30000 }).then(() => true, () => false),
 	await title.getAttribute("aria-label").catch(() => ""));
 await page.getByLabel("Email").fill(args.email ?? "admin@admin.com");
 await page.getByLabel("Password").fill(args.password ?? "admin");

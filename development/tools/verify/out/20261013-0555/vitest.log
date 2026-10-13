@@ -1,0 +1,2302 @@
+│ ┌────────────────────────────────────────────────────────────────────────────┐
+│ │  Info: Found a setup file with "setProjectAnnotations".                    │
+│ │  Skipping automatic provisioning of preview annotations to avoid           │
+│ │  conflicts. Since Storybook 10.3, "@storybook/addon-vitest" applies these  │
+│ │   automatically.                                                           │
+│ │  You can safely remove the "setProjectAnnotations" call from your setup    │
+│ │  file, or remove the file entirely if you don't have custom code there.    │
+│ └────────────────────────────────────────────────────────────────────────────┘
+
+ RUN  v4.1.11 /home/xxx/workspace/coder/site
+
+ ❯ |unit| src/pages/AgentsPage/utils/timeGroups.test.ts (15 tests | 5 failed) 30ms
+     × returns "Today" for a date at start of today (midnight) 5ms
+     × returns "Yesterday" for exactly midnight of yesterday 2ms
+     × returns "Past 7 days" for exactly 7 days ago at midnight 1ms
+       × classifies exactly midnight as "Today" 1ms
+       × classifies 1 second after midnight as "Today" 1ms
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollTo() method
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: navigation to another Document
+stderr | src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx > keeps the retention bound while a filtered report is pending
+An update to Combobox inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx > keeps the retention bound while a filtered report is pending
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(Portal) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(FocusScope) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(DismissableLayer) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(PopperContent) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(PopperContent) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(PopperContent) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Popper inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(PopperContent) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(DismissableLayer) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx > keeps the retention bound while a filtered report is pending
+An update to ForwardRef(PopperContent) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx > keeps the retention bound while a filtered report is pending
+An update to Combobox inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to RouterProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Popper inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(PopperContent) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(FocusScope) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(DismissableLayer) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(PopperContent) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ❯ |unit| src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx (13 tests | 3 failed) 9574ms
+   × applies a date preset and resets pagination 1075ms
+   × keeps the retention bound while a filtered report is pending 761ms
+   × applies a second range from the keyboard after the first one resolves 3345ms
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx > applies a date preset and resets pagination
+TestingLibraryElementError: Unable to find an accessible element with the role "button" and name `/Feb 10.*Mar 12/`
+
+Here are the accessible roles:
+
+  heading:
+
+  Name "Spend":
+  [36m<h1[39m
+    [33mclass[39m=[32m"m-0 flex items-center gap-2 text-3xl font-semibold"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  alert:
+
+  Name "":
+  [36m<div[39m
+    [33mclass[39m=[32m"relative w-full rounded-lg border border-solid p-4 text-left border-border-default bg-surface-secondary"[39m
+    [33mrole[39m=[32m"alert"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  button:
+
+  Name "Organization My Organization":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Organization My Organization"[39m
+    [33mclass[39m=[32m"group inline-flex items-center whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg group w-full justify-start gap-2 font-normal basis-[150px] grow"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mdata-testid[39m=[32m"organization-autocomplete"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Select provider":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Select provider"[39m
+    [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg flex items-center justify-between shrink-0 grow gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mstyle[39m=[32m"flex-basis: 150px;"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Select model":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Select model"[39m
+    [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg flex items-center justify-between shrink-0 grow gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mstyle[39m=[32m"flex-basis: 150px;"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Select client":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Select client"[39m
+    [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg flex items-center justify-between shrink-0 grow gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mstyle[39m=[32m"flex-basis: 150px;"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Feb 9 - Mar 11":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg group gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Previous page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"Previous page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Current Page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"Current Page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border-none bg-surface-invert-primary font-semibold text-content-invert hover:bg-surface-invert-secondary disabled:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm min-w-8 w-auto"[39m
+    [33mname[39m=[32m"Page button"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "First Page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"First Page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm min-w-8 w-auto"[39m
+    [33mname[39m=[32m"Page button"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Current Page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"Current Page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border-none bg-surface-invert-primary font-semibold text-content-invert hover:bg-surface-invert-secondary disabled:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm min-w-8 w-auto"[39m
+    [33mname[39m=[32m"Page button"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Next page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"Next page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm"[39m
+    [33mdisabled[39m=[32m""[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  table:
+
+  Name "Spend by user":
+  [36m<table[39m
+    [33maria-label[39m=[32m"Spend by user"[39m
+    [33mclass[39m=[32m"w-full caption-bottom text-xs font-medium text-content-secondary border-separate border-spacing-0 table-fixed"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  rowgroup:
+
+  Name "":
+  [36m<thead[39m
+    [33mclass[39m=[32m"[&_td]:border-none"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<tbody[39m
+    [33mclass[39m=[32m"[&>tr:first-of-type>*]:border-t [&>tr>*:first-child]:border-l [&>tr:last-child>*]:border-b [&>tr>*:last-child]:border-r [&>tr:first-of-type>*:first-child]:rounded-tl-md [&>tr:first-of-type>*:last-child]:rounded-tr-md [&>tr:last-child>*:first-child]:rounded-bl-md [&>tr:last-child>*:last-child]:rounded-br-md [&>tr>*]:box-border [&>tr>*]:h-[72px]"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  row:
+
+  Name "User Providers Models Clients Spend":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 11@user11 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 12@user12 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  columnheader:
+
+  Name "User":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-36 @3xl:w-48"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  Name "Providers":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-28 @3xl:w-36"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  Name "Models":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-28 @3xl:w-36"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  Name "Clients":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-28 @3xl:w-36"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  Name "Spend":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-24 text-right @3xl:w-28"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  rowheader:
+
+  Name "US User 11@user11":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 12@user12":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  cell:
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  region:
+
+  Name "Notifications alt+T":
+  [36m<section[39m
+    [33maria-atomic[39m=[32m"false"[39m
+    [33maria-label[39m=[32m"Notifications alt+T"[39m
+    [33maria-live[39m=[32m"polite"[39m
+    [33maria-relevant[39m=[32m"additions text"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex max-w-[1100px] flex-col gap-4"[39m
+    [36m>[39m
+      [36m<hgroup[39m
+        [33mclass[39m=[32m"flex flex-col justify-between items-start gap-2 pb-6 sm:flex-row"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"text-sm flex flex-col gap-2 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-row gap-2 items-center"[39m
+          [36m>[39m
+            [36m<h1[39m
+              [33mclass[39m=[32m"m-0 flex items-center gap-2 text-3xl font-semibold"[39m
+            [36m>[39m
+              [0mSpend[0m
+            [36m</h1>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-border-purple bg-surface-purple text-highlight-purple shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs"[39m
+            [36m>[39m
+              [0mExperimental[0m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"m-0 text-content-secondary font-medium leading-6"[39m
+          [36m>[39m
+            [0mMonitor total and per-user AI Gateway spend for the selected organization.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+      [36m</hgroup>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"relative w-full rounded-lg border border-solid p-4 text-left border-border-default bg-surface-secondary"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"relative flex flex-col justify-between gap-4 text-sm"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex min-w-0 flex-1 flex-row items-start gap-3"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"lucide lucide-triangle-alert size-icon-sm mt-[3px] text-content-warning"[39m
+              [33mfill[39m=[32m"none"[39m
+              [33mheight[39m=[32m"24"[39m
+              [33mstroke[39m=[32m"currentColor"[39m
+              [33mstroke-linecap[39m=[32m"round"[39m
+              [33mstroke-linejoin[39m=[32m"round"[39m
+              [33mstroke-width[39m=[32m"2"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+              [33mwidth[39m=[32m"24"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 9v4"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 17h.01"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex min-w-0 flex-1 flex-col gap-4"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"min-w-0 flex-1"[39m
+              [36m>[39m
+                [0mThis page is experimental. Reports may load slowly on large deployments, and the page may change or be removed.[0m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex flex-wrap gap-2"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-expanded[39m=[32m"false"[39m
+          [33maria-haspopup[39m=[32m"dialog"[39m
+          [33maria-label[39m=[32m"Organization My Organization"[39m
+          [33mclass[39m=[32m"group inline-flex items-center whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg group w-full justify-start gap-2 font-normal basis-[150px] grow"[39m
+          [33mdata-state[39m=[32m"closed"[39m
+          [33mdata-testid[39m=[32m"organization-autocomplete"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"relative flex shrink-0 overflow-hidden rounded border border-solid bg-surface-secondary text-content-secondary size-(--avatar-sm) text-[8px]"[39m
+            [33mstyle[39m=[32m"padding: calc(var(--avatar-sm) * 0.2);"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"flex h-full w-full items-center justify-center rounded-full"[39m
+            [36m>[39m
+              [0mMY[0m
+            [36m</span>[39m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"truncate"[39m
+          [36m>[39m
+            [0mMy Organization[0m
+          [36m</span>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"lucide lucide-chevron-down transition-transform group-data-[state=open]:rotate-180 ml-auto size-icon-sm! shrink-0 text-content-secondary"[39m
+            [33mfill[39m=[32m"none"[39m
+            [33mheight[39m=[32m"24"[39m
+            [33mstroke[39m=[32m"currentColor"[39m
+            [33mstroke-linecap[39m=[32m"round"[39m
+            [33mstroke-linejoin[39m=[32m"round"[39m
+            [33mstroke-width[39m=[32m"2"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+            [33mwidth[39m=[32m"24"[39m
+            [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"m6 9 6 6 6-6"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-expanded[39m=[32m"false"[39m
+          [33maria-haspopup[39m=[32m"dialog"[39m
+          [33maria-label[39m=[32m"Select provider"[39m
+          [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:p...
+ ❯ Object.getElementError node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx:201:26
+    199|  const { router, spendSpy } = renderSpend(`${initialSearch}&page=2`);
+    200|  await screen.findByRole("table", { name: "Spend by user" });
+    201|  await user.click(screen.getByRole("button", { name: /Feb 10.*Mar 12/ …
+       |                          ^
+    202|  await user.click(await screen.findByRole("radio", { name: "Last 7 day…
+    203|  const window = {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/8]⎯
+
+ FAIL  |unit| src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx > keeps the retention bound while a filtered report is pending
+TestingLibraryElementError: Unable to find an accessible element with the role "button" and name `/Feb 10.*Mar 12/`
+
+Here are the accessible roles:
+
+  heading:
+
+  Name "Spend":
+  [36m<h1[39m
+    [33mclass[39m=[32m"m-0 flex items-center gap-2 text-3xl font-semibold"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  alert:
+
+  Name "":
+  [36m<div[39m
+    [33mclass[39m=[32m"relative w-full rounded-lg border border-solid p-4 text-left border-border-default bg-surface-secondary"[39m
+    [33mrole[39m=[32m"alert"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  button:
+
+  Name "Organization My Organization":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Organization My Organization"[39m
+    [33mclass[39m=[32m"group inline-flex items-center whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg group w-full justify-start gap-2 font-normal basis-[150px] grow"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mdata-testid[39m=[32m"organization-autocomplete"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Select provider":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Select provider"[39m
+    [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg flex items-center justify-between shrink-0 grow gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mstyle[39m=[32m"flex-basis: 150px;"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Select model":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Select model"[39m
+    [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg flex items-center justify-between shrink-0 grow gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mstyle[39m=[32m"flex-basis: 150px;"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Select client":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Select client"[39m
+    [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg flex items-center justify-between shrink-0 grow gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mstyle[39m=[32m"flex-basis: 150px;"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Feb 9 - Mar 11":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg group gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  img:
+
+  Name "":
+  [36m<img[39m
+    [33malt[39m=[32m""[39m
+    [33mclass[39m=[32m"size-icon-sm"[39m
+    [33msrc[39m=[32m"/icon/openai.svg"[39m
+    [33mstyle[39m=[32m"filter: grayscale(100%) contrast(0%) brightness(250%);"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  status:
+
+  Name "Loading spend":
+  [36m<div[39m
+    [33maria-label[39m=[32m"Loading spend"[39m
+    [33mclass[39m=[32m"flex min-h-60 items-center justify-center"[39m
+    [33mrole[39m=[32m"status"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  region:
+
+  Name "Notifications alt+T":
+  [36m<section[39m
+    [33maria-atomic[39m=[32m"false"[39m
+    [33maria-label[39m=[32m"Notifications alt+T"[39m
+    [33maria-live[39m=[32m"polite"[39m
+    [33maria-relevant[39m=[32m"additions text"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex max-w-[1100px] flex-col gap-4"[39m
+    [36m>[39m
+      [36m<hgroup[39m
+        [33mclass[39m=[32m"flex flex-col justify-between items-start gap-2 pb-6 sm:flex-row"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"text-sm flex flex-col gap-2 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-row gap-2 items-center"[39m
+          [36m>[39m
+            [36m<h1[39m
+              [33mclass[39m=[32m"m-0 flex items-center gap-2 text-3xl font-semibold"[39m
+            [36m>[39m
+              [0mSpend[0m
+            [36m</h1>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-border-purple bg-surface-purple text-highlight-purple shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs"[39m
+            [36m>[39m
+              [0mExperimental[0m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"m-0 text-content-secondary font-medium leading-6"[39m
+          [36m>[39m
+            [0mMonitor total and per-user AI Gateway spend for the selected organization.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+      [36m</hgroup>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"relative w-full rounded-lg border border-solid p-4 text-left border-border-default bg-surface-secondary"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"relative flex flex-col justify-between gap-4 text-sm"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex min-w-0 flex-1 flex-row items-start gap-3"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"lucide lucide-triangle-alert size-icon-sm mt-[3px] text-content-warning"[39m
+              [33mfill[39m=[32m"none"[39m
+              [33mheight[39m=[32m"24"[39m
+              [33mstroke[39m=[32m"currentColor"[39m
+              [33mstroke-linecap[39m=[32m"round"[39m
+              [33mstroke-linejoin[39m=[32m"round"[39m
+              [33mstroke-width[39m=[32m"2"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+              [33mwidth[39m=[32m"24"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 9v4"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 17h.01"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex min-w-0 flex-1 flex-col gap-4"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"min-w-0 flex-1"[39m
+              [36m>[39m
+                [0mThis page is experimental. Reports may load slowly on large deployments, and the page may change or be removed.[0m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex flex-wrap gap-2"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-expanded[39m=[32m"false"[39m
+          [33maria-haspopup[39m=[32m"dialog"[39m
+          [33maria-label[39m=[32m"Organization My Organization"[39m
+          [33mclass[39m=[32m"group inline-flex items-center whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg group w-full justify-start gap-2 font-normal basis-[150px] grow"[39m
+          [33mdata-state[39m=[32m"closed"[39m
+          [33mdata-testid[39m=[32m"organization-autocomplete"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"relative flex shrink-0 overflow-hidden rounded border border-solid bg-surface-secondary text-content-secondary size-(--avatar-sm) text-[8px]"[39m
+            [33mstyle[39m=[32m"padding: calc(var(--avatar-sm) * 0.2);"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"flex h-full w-full items-center justify-center rounded-full"[39m
+            [36m>[39m
+              [0mMY[0m
+            [36m</span>[39m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"truncate"[39m
+          [36m>[39m
+            [0mMy Organization[0m
+          [36m</span>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"lucide lucide-chevron-down transition-transform group-data-[state=open]:rotate-180 ml-auto size-icon-sm! shrink-0 text-content-secondary"[39m
+            [33mfill[39m=[32m"none"[39m
+            [33mheight[39m=[32m"24"[39m
+            [33mstroke[39m=[32m"currentColor"[39m
+            [33mstroke-linecap[39m=[32m"round"[39m
+            [33mstroke-linejoin[39m=[32m"round"[39m
+            [33mstroke-width[39m=[32m"2"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+            [33mwidth[39m=[32m"24"[39m
+            [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"m6 9 6 6 6-6"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-expanded[39m=[32m"false"[39m
+          [33maria-haspopup[39m=[32m"dialog"[39m
+          [33maria-label[39m=[32m"Select provider"[39m
+          [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:p...
+ ❯ Object.getElementError node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx:240:26
+    238|  // every preset it offers requests a period that starts within retent…
+    239|  const requestsBeforePicking = spendSpy.mock.calls.length;
+    240|  await user.click(screen.getByRole("button", { name: /Feb 10.*Mar 12/ …
+       |                          ^
+    241|  const offered = screen
+    242|   .getAllByRole("radio", { name: /^Last \d+ (days|hours)$/ })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/8]⎯
+
+ FAIL  |unit| src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx > applies a second range from the keyboard after the first one resolves
+TestingLibraryElementError: Unable to find an accessible element with the role "button" and name `/Feb 10.*Mar 12/`
+
+Here are the accessible roles:
+
+  heading:
+
+  Name "Spend":
+  [36m<h1[39m
+    [33mclass[39m=[32m"m-0 flex items-center gap-2 text-3xl font-semibold"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  alert:
+
+  Name "":
+  [36m<div[39m
+    [33mclass[39m=[32m"relative w-full rounded-lg border border-solid p-4 text-left border-border-default bg-surface-secondary"[39m
+    [33mrole[39m=[32m"alert"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  button:
+
+  Name "Organization My Organization":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Organization My Organization"[39m
+    [33mclass[39m=[32m"group inline-flex items-center whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg group w-full justify-start gap-2 font-normal basis-[150px] grow"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mdata-testid[39m=[32m"organization-autocomplete"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Select provider":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Select provider"[39m
+    [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg flex items-center justify-between shrink-0 grow gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mstyle[39m=[32m"flex-basis: 150px;"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Select model":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Select model"[39m
+    [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg flex items-center justify-between shrink-0 grow gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mstyle[39m=[32m"flex-basis: 150px;"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Select client":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33maria-label[39m=[32m"Select client"[39m
+    [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg flex items-center justify-between shrink-0 grow gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mstyle[39m=[32m"flex-basis: 150px;"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Feb 9 - Mar 11":
+  [36m<button[39m
+    [33maria-expanded[39m=[32m"false"[39m
+    [33maria-haspopup[39m=[32m"dialog"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg group gap-2 pr-1.5"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<button[39m
+    [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-surface-secondary bg-surface-secondary text-content-secondary shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs no-underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link hover:bg-surface-tertiary max-w-full"[39m
+    [33mdata-state[39m=[32m"closed"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Previous page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"Previous page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm"[39m
+    [33mdisabled[39m=[32m""[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Current Page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"Current Page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border-none bg-surface-invert-primary font-semibold text-content-invert hover:bg-surface-invert-secondary disabled:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm min-w-8 w-auto"[39m
+    [33mname[39m=[32m"Page button"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Current Page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"Current Page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border-none bg-surface-invert-primary font-semibold text-content-invert hover:bg-surface-invert-secondary disabled:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm min-w-8 w-auto"[39m
+    [33mname[39m=[32m"Page button"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Last Page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"Last Page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm min-w-8 w-auto"[39m
+    [33mname[39m=[32m"Page button"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Next page":
+  [36m<button[39m
+    [33maria-label[39m=[32m"Next page"[39m
+    [33mclass[39m=[32m"group inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary size-8 px-1.5 [&>svg]:size-icon-sm [&>img]:size-icon-sm"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  table:
+
+  Name "Spend by user":
+  [36m<table[39m
+    [33maria-label[39m=[32m"Spend by user"[39m
+    [33mclass[39m=[32m"w-full caption-bottom text-xs font-medium text-content-secondary border-separate border-spacing-0 table-fixed"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  rowgroup:
+
+  Name "":
+  [36m<thead[39m
+    [33mclass[39m=[32m"[&_td]:border-none"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<tbody[39m
+    [33mclass[39m=[32m"[&>tr:first-of-type>*]:border-t [&>tr>*:first-child]:border-l [&>tr:last-child>*]:border-b [&>tr>*:last-child]:border-r [&>tr:first-of-type>*:first-child]:rounded-tl-md [&>tr:first-of-type>*:last-child]:rounded-tr-md [&>tr:last-child>*:first-child]:rounded-bl-md [&>tr:last-child>*:last-child]:rounded-br-md [&>tr>*]:box-border [&>tr>*]:h-[72px]"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  row:
+
+  Name "User Providers Models Clients Spend":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 1@user01 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 2@user02 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 3@user03 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 4@user04 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 5@user05 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 6@user06 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 7@user07 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 8@user08 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 9@user09 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  Name "US User 10@user10 2 providers 2 models 2 clients $2.50":
+  [36m<tr[39m
+    [33mclass[39m=[32m"border-0 border-b border-solid border-border transition-colors data-[state=selected]:bg-surface-secondary"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  columnheader:
+
+  Name "User":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-36 @3xl:w-48"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  Name "Providers":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-28 @3xl:w-36"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  Name "Models":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-28 @3xl:w-36"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  Name "Clients":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-28 @3xl:w-36"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  Name "Spend":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] w-24 text-right @3xl:w-28"[39m
+    [33mscope[39m=[32m"col"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  rowheader:
+
+  Name "US User 1@user01":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 2@user02":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 3@user03":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 4@user04":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 5@user05":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 6@user06":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 7@user07":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 8@user08":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 9@user09":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  Name "US User 10@user10":
+  [36m<th[39m
+    [33mclass[39m=[32m"p-3 text-left align-middle font-semibold has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] border-0 border-t border-border border-solid"[39m
+    [33mscope[39m=[32m"row"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  cell:
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  Name "2 providers":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 models":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "2 clients":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px]"[39m
+  [36m/>[39m
+
+  Name "$2.50":
+  [36m<td[39m
+    [33mclass[39m=[32m"border-0 border-t border-border border-solid p-3 align-middle has-[[role=checkbox]]:pr-0 *:[[role=checkbox]]:translate-y-[2px] text-right"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  region:
+
+  Name "Notifications alt+T":
+  [36m<section[39m
+    [33maria-atomic[39m=[32m"false"[39m
+    [33maria-label[39m=[32m"Notifications alt+T"[39m
+    [33maria-live[39m=[32m"polite"[39m
+    [33maria-relevant[39m=[32m"additions text"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex max-w-[1100px] flex-col gap-4"[39m
+    [36m>[39m
+      [36m<hgroup[39m
+        [33mclass[39m=[32m"flex flex-col justify-between items-start gap-2 pb-6 sm:flex-row"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"text-sm flex flex-col gap-2 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-row gap-2 items-center"[39m
+          [36m>[39m
+            [36m<h1[39m
+              [33mclass[39m=[32m"m-0 flex items-center gap-2 text-3xl font-semibold"[39m
+            [36m>[39m
+              [0mSpend[0m
+            [36m</h1>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"inline-flex items-center gap-1 rounded-md border px-1.5 text-nowrap transition-colors [&_svg]:py-0.5 border-solid [&_svg]:pointer-events-none border-border-purple bg-surface-purple text-highlight-purple shadow-sm text-xs font-normal py-1 [&_svg]:size-icon-xs"[39m
+            [36m>[39m
+              [0mExperimental[0m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"m-0 text-content-secondary font-medium leading-6"[39m
+          [36m>[39m
+            [0mMonitor total and per-user AI Gateway spend for the selected organization.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+      [36m</hgroup>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"relative w-full rounded-lg border border-solid p-4 text-left border-border-default bg-surface-secondary"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"relative flex flex-col justify-between gap-4 text-sm"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex min-w-0 flex-1 flex-row items-start gap-3"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"lucide lucide-triangle-alert size-icon-sm mt-[3px] text-content-warning"[39m
+              [33mfill[39m=[32m"none"[39m
+              [33mheight[39m=[32m"24"[39m
+              [33mstroke[39m=[32m"currentColor"[39m
+              [33mstroke-linecap[39m=[32m"round"[39m
+              [33mstroke-linejoin[39m=[32m"round"[39m
+              [33mstroke-width[39m=[32m"2"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+              [33mwidth[39m=[32m"24"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 9v4"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 17h.01"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex min-w-0 flex-1 flex-col gap-4"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"min-w-0 flex-1"[39m
+              [36m>[39m
+                [0mThis page is experimental. Reports may load slowly on large deployments, and the page may change or be removed.[0m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex flex-wrap gap-2"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-expanded[39m=[32m"false"[39m
+          [33maria-haspopup[39m=[32m"dialog"[39m
+          [33maria-label[39m=[32m"Organization My Organization"[39m
+          [33mclass[39m=[32m"group inline-flex items-center whitespace-nowrap font-sans border-solid rounded-md transition-colors shrink-0 text-sm cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg]:p-0.5 [&>img]:pointer-events-none [&>img]:shrink-0 [&>img]:p-0.5 border border-border-default bg-transparent text-content-primary hover:bg-surface-secondary min-w-20 h-10 px-3 py-2 [&>svg]:size-icon-lg [&>img]:size-icon-lg group w-full justify-start gap-2 font-normal basis-[150px] grow"[39m
+          [33mdata-state[39m=[32m"closed"[39m
+          [33mdata-testid[39m=[32m"organization-autocomplete"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"relative flex shrink-0 overflow-hidden rounded border border-solid bg-surface-secondary text-content-secondary size-(--avatar-sm) text-[8px]"[39m
+            [33mstyle[39m=[32m"padding: calc(var(--avatar-sm) * 0.2);"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"flex h-full w-full items-center justify-center rounded-full"[39m
+            [36m>[39m
+              [0mMY[0m
+            [36m</span>[39m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"truncate"[39m
+          [36m>[39m
+            [0mMy Organization[0m
+          [36m</span>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"lucide lucide-chevron-down transition-transform group-data-[state=open]:rotate-180 ml-auto size-icon-sm! shrink-0 text-content-secondary"[39m
+            [33mfill[39m=[32m"none"[39m
+            [33mheight[39m=[32m"24"[39m
+            [33mstroke[39m=[32m"currentColor"[39m
+            [33mstroke-linecap[39m=[32m"round"[39m
+            [33mstroke-linejoin[39m=[32m"round"[39m
+            [33mstroke-width[39m=[32m"2"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+            [33mwidth[39m=[32m"24"[39m
+            [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"m6 9 6 6 6-6"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-expanded[39m=[32m"false"[39m
+          [33maria-haspopup[39m=[32m"dialog"[39m
+          [33maria-label[39m=[32m"Select provider"[39m
+          [33mclass[39m=[32m"group whitespace-nowrap font-sans border-solid rounded-md transition-colors text-sm font-medium cursor-pointer no-underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-content-link disabled:pointer-events-none disabled:text-content-disabled [&:is(a):not([href])]:pointer-events-none [&:is(a):not([href])]:text-content-disabled [&>svg]:p...
+ ❯ Object.getElementError node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/.pnpm/@testing-library+dom@9.3.3/node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/pages/AISettingsPage/SpendPage/SpendPage.test.tsx:274:26
+    272|  await screen.findByRole("table", { name: "Spend by user" });
+    273|
+    274|  await user.click(screen.getByRole("button", { name: /Feb 10.*Mar 12/ …
+       |                          ^
+    275|  await user.click(await screen.findByRole("radio", { name: "Last 7 day…
+    276|  await waitFor(() =>
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/8]⎯
+
+ FAIL  |unit| src/pages/AgentsPage/utils/timeGroups.test.ts > getTimeGroup > returns "Today" for a date at start of today (midnight)
+AssertionError: expected 'Yesterday' to be 'Today' // Object.is equality
+
+Expected: "Today"
+Received: "Yesterday"
+
+ ❯ src/pages/AgentsPage/utils/timeGroups.test.ts:25:52
+     23|
+     24|  it('returns "Today" for a date at start of today (midnight)', () => {
+     25|   expect(getTimeGroup("2025-07-15T00:00:00.000Z")).toBe("Today");
+       |                                                    ^
+     26|  });
+     27|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/8]⎯
+
+ FAIL  |unit| src/pages/AgentsPage/utils/timeGroups.test.ts > getTimeGroup > returns "Yesterday" for exactly midnight of yesterday
+AssertionError: expected 'Past 7 days' to be 'Yesterday' // Object.is equality
+
+Expected: "Yesterday"
+Received: "Past 7 days"
+
+ ❯ src/pages/AgentsPage/utils/timeGroups.test.ts:37:52
+     35|
+     36|  it('returns "Yesterday" for exactly midnight of yesterday', () => {
+     37|   expect(getTimeGroup("2025-07-14T00:00:00.000Z")).toBe("Yesterday");
+       |                                                    ^
+     38|  });
+     39|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/8]⎯
+
+ FAIL  |unit| src/pages/AgentsPage/utils/timeGroups.test.ts > getTimeGroup > returns "Past 7 days" for exactly 7 days ago at midnight
+AssertionError: expected 'Older' to be 'Past 7 days' // Object.is equality
+
+Expected: "Past 7 days"
+Received: "Older"
+
+ ❯ src/pages/AgentsPage/utils/timeGroups.test.ts:52:52
+     50|   // A date at exactly that boundary should be "Past 7 days"
+     51|   // because the comparison is date >= weekAgo.
+     52|   expect(getTimeGroup("2025-07-08T00:00:00.000Z")).toBe("Past 7 days");
+       |                                                    ^
+     53|  });
+     54|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/8]⎯
+
+ FAIL  |unit| src/pages/AgentsPage/utils/timeGroups.test.ts > getTimeGroup > midnight boundary edge cases > classifies exactly midnight as "Today"
+AssertionError: expected 'Yesterday' to be 'Today' // Object.is equality
+
+Expected: "Today"
+Received: "Yesterday"
+
+ ❯ src/pages/AgentsPage/utils/timeGroups.test.ts:74:53
+     72|
+     73|   it('classifies exactly midnight as "Today"', () => {
+     74|    expect(getTimeGroup("2025-07-15T00:00:00.000Z")).toBe("Today");
+       |                                                     ^
+     75|   });
+     76|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/8]⎯
+
+ FAIL  |unit| src/pages/AgentsPage/utils/timeGroups.test.ts > getTimeGroup > midnight boundary edge cases > classifies 1 second after midnight as "Today"
+AssertionError: expected 'Yesterday' to be 'Today' // Object.is equality
+
+Expected: "Today"
+Received: "Yesterday"
+
+ ❯ src/pages/AgentsPage/utils/timeGroups.test.ts:78:53
+     76|
+     77|   it('classifies 1 second after midnight as "Today"', () => {
+     78|    expect(getTimeGroup("2025-07-15T00:00:01.000Z")).toBe("Today");
+       |                                                     ^
+     79|   });
+     80|  });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/8]⎯
+
+
+ Test Files  2 failed | 335 passed (337)
+      Tests  8 failed | 4672 passed | 2 skipped (4682)
+   Start at  02:01:38
+   Duration  67.17s (transform 163.09s, setup 191.08s, import 515.70s, tests 371.67s, environment 160.60s)
+
+close timed out after 1000ms
+Tests closed successfully but something prevents the main process from exiting
+You can try to identify the cause by enabling "hanging-process" reporter. See https://vitest.dev/guide/reporters.html#hanging-process-reporter

@@ -1,0 +1,441 @@
+--- FAIL: TestGetUsersFilter (0.14s)
+    t.go:111: 2026-10-13 05:57:00.785 [debu]  pubsub: pubsub dialing postgres  network=tcp  address=127.0.0.1:5432  timeout_ms=0
+    t.go:111: 2026-10-13 05:57:00.785 [debu]  pubsub: pubsub postgres TCP connection established  network=tcp  address=127.0.0.1:5432  timeout_ms=0  elapsed_ms=0
+    t.go:111: 2026-10-13 05:57:00.787 [debu]  pubsub: pubsub connected to postgres
+    t.go:111: 2026-10-13 05:57:00.787 [debu]  pubsub: pubsub has started
+    t.go:111: 2026-10-13 05:57:00.787 [debu]  pubsub.latency-measurer: performing measurement  msg="11517e1f-d02b-4dac-b69d-c802cdd33891"
+    t.go:111: 2026-10-13 05:57:00.787 [debu]  pubsub: started listening to event channel  event=latency-measure:a2d14e4d-78a0-4133-9665-7e8e7c616b30.1
+    t.go:111: 2026-10-13 05:57:00.787 [debu]  pubsub: publish  event=latency-measure:a2d14e4d-78a0-4133-9665-7e8e7c616b30.1  message_len=36
+    t.go:111: 2026-10-13 05:57:00.789 [debu]  pubsub: removing queueSet  event=latency-measure:a2d14e4d-78a0-4133-9665-7e8e7c616b30.1
+    t.go:111: 2026-10-13 05:57:00.789 [debu]  pubsub: stopped listening to event channel  event=latency-measure:a2d14e4d-78a0-4133-9665-7e8e7c616b30.1
+    t.go:111: 2026-10-13 05:57:00.812 [debu]  coderd: embedded nats server started  client_url=nats://127.0.0.1:46565
+    t.go:111: 2026-10-13 05:57:00.813 [debu]  coderd.latency-measurer: performing measurement  msg="47aa5214-8afb-4f52-8e61-147e25272a78"
+    t.go:111: 2026-10-13 05:57:00.813 [debu]  coderd: subscribing on nats  event=latency-measure:6fe87cfc-c627-4e38-8e60-017ad1c44612.1
+    t.go:111: 2026-10-13 05:57:00.813 [debu]  coderd: closing local sub  event=latency-measure:6fe87cfc-c627-4e38-8e60-017ad1c44612.1
+    t.go:111: 2026-10-13 05:57:00.813 [debu]  coderd: removed local sub from group  event=latency-measure:6fe87cfc-c627-4e38-8e60-017ad1c44612.1  group_size=0
+    t.go:111: 2026-10-13 05:57:00.813 [debu]  coderd: unsubscribing group subscription from nats  event=latency-measure:6fe87cfc-c627-4e38-8e60-017ad1c44612.1
+    coderdtest.go:700: coderdtest server listening on 127.0.0.1:41703
+    coderdtest.go:700: coderdtest server started on http://127.0.0.1:41703
+    t.go:111: 2026-10-13 05:57:00.819 [debu]  coderd.dbrollup: rolling up data
+    t.go:111: 2026-10-13 05:57:00.819 [debu]  coderd.oidc_convert_keycache.oidc_convert_signing_keycache: created new key cache  feature=oidc_convert
+    t.go:111: 2026-10-13 05:57:00.819 [debu]  coderd.oidc_convert_keycache.oidc_convert_signing_keycache: fetching crypto keys  feature=oidc_convert
+    t.go:111: 2026-10-13 05:57:00.820 [debu]  coderd.oidc_convert_keycache.oidc_convert_signing_keycache: crypto key fetch complete  feature=oidc_convert
+    t.go:111: 2026-10-13 05:57:00.820 [debu]  coderd.chat_file_token_keycache.chat_files_token_signing_keycache: created new key cache  feature=chat_files_token
+    t.go:111: 2026-10-13 05:57:00.820 [debu]  coderd.chat_file_token_keycache.chat_files_token_signing_keycache: fetching crypto keys  feature=chat_files_token
+    t.go:111: 2026-10-13 05:57:00.821 [debu]  coderd.chat_file_token_keycache.chat_files_token_signing_keycache: crypto key fetch complete  feature=chat_files_token
+    t.go:111: 2026-10-13 05:57:00.821 [debu]  coderd.app_signing_keycache.workspace_apps_token_signing_keycache: created new key cache  feature=workspace_apps_token
+    t.go:111: 2026-10-13 05:57:00.821 [debu]  coderd.app_signing_keycache.workspace_apps_token_signing_keycache: fetching crypto keys  feature=workspace_apps_token
+    t.go:111: 2026-10-13 05:57:00.821 [debu]  coderd.app_signing_keycache.workspace_apps_token_signing_keycache: crypto key fetch complete  feature=workspace_apps_token
+    t.go:111: 2026-10-13 05:57:00.821 [debu]  coderd.workspace_apps_api_key_encryption_keycache: created new key cache  feature=workspace_apps_api_key
+    t.go:111: 2026-10-13 05:57:00.821 [debu]  coderd.workspace_apps_api_key_encryption_keycache: fetching crypto keys  feature=workspace_apps_api_key
+    t.go:111: 2026-10-13 05:57:00.821 [debu]  coderd.workspace_apps_api_key_encryption_keycache: crypto key fetch complete  feature=workspace_apps_api_key
+    t.go:111: 2026-10-13 05:57:00.822 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=workspace_apps_token
+    t.go:111: 2026-10-13 05:57:00.823 [debu]  coderd.keyrotator: inserted new key for feature  feature=workspace_apps_token  sequence=1
+    t.go:111: 2026-10-13 05:57:00.823 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=workspace_apps_api_key
+    t.go:111: 2026-10-13 05:57:00.824 [debu]  coderd.keyrotator: inserted new key for feature  feature=workspace_apps_api_key  sequence=1
+    t.go:111: 2026-10-13 05:57:00.824 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=oidc_convert
+    t.go:111: 2026-10-13 05:57:00.824 [debu]  coderd.keyrotator: inserted new key for feature  feature=oidc_convert  sequence=1
+    t.go:111: 2026-10-13 05:57:00.824 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=chat_files_token
+    t.go:111: 2026-10-13 05:57:00.825 [debu]  coderd.keyrotator: inserted new key for feature  feature=chat_files_token  sequence=1
+    t.go:111: 2026-10-13 05:57:00.825 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=tailnet_resume
+    t.go:111: 2026-10-13 05:57:00.825 [debu]  coderd.keyrotator: inserted new key for feature  feature=tailnet_resume  sequence=1
+    t.go:111: 2026-10-13 05:57:00.825 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=nats_ca
+    t.go:111: 2026-10-13 05:57:00.826 [debu]  coderd.metrics_cache: metrics refreshed  name="deployment stats"  interval=5m0s  took=7.161229ms
+    t.go:111: 2026-10-13 05:57:00.826 [debu]  coderd.keyrotator: inserted new key for feature  feature=nats_ca  sequence=1
+    t.go:111: 2026-10-13 05:57:00.827 [debu]  coderd.nats_ca_cache.nats_ca_signing_keycache: created new key cache  feature=nats_ca
+    t.go:111: 2026-10-13 05:57:00.827 [debu]  coderd.nats_ca_cache.nats_ca_signing_keycache: fetching crypto keys  feature=nats_ca
+    t.go:111: 2026-10-13 05:57:00.827 [debu]  coderd.nats_ca_cache.nats_ca_signing_keycache: crypto key fetch complete  feature=nats_ca
+    t.go:111: 2026-10-13 05:57:00.827 [debu]  coderd.dbrollup: rolled up data  took=8.064909ms  event={"template_usage_stats":true}
+    t.go:111: 2026-10-13 05:57:00.827 [debu]  coderd.dbrollup: next rollup at  next="2026-10-13 02:00:00 -0400 EDT"
+    t.go:111: 2026-10-13 05:57:00.828 [debu]  coderd.metrics_cache: metrics refreshed  name="template build times"  interval=1h0m0s  took=9.082199ms
+    t.go:111: 2026-10-13 05:57:00.840 [debu]  coderd: subscribing on nats  event=provisioner_job_posted
+    t.go:111: 2026-10-13 05:57:00.840 [debu]  coderd.acquirer: subscribed to job postings
+    t.go:111: 2026-10-13 05:57:00.841 [warn]  coderd.site: could not parse install.sh, it will be unavailable  error="open install.sh: file does not exist"
+    t.go:111: 2026-10-13 05:57:00.841 [debu]  coderd.servertailnet: network isolation configuration  use_netns=false
+    t.go:111: 2026-10-13 05:57:00.841 [debu]  coderd.servertailnet.net.wgengine: [v1] using fake (no-op) tun device
+    t.go:111: 2026-10-13 05:57:00.841 [debu]  coderd.servertailnet.net.wgengine: [v1] using fake (no-op) OS network configurator
+    t.go:111: 2026-10-13 05:57:00.841 [debu]  coderd.servertailnet.net.wgengine: [v1] using fake (no-op) DNS configurator
+    t.go:111: 2026-10-13 05:57:00.841 [debu]  coderd.servertailnet.net.wgengine: dns: using dns.noopManager
+    t.go:111: 2026-10-13 05:57:00.841 [debu]  coderd.servertailnet.net.wgengine: link state: interfaces.State{defaultRoute=wlp5s0 ifs={br-3302d477e486:[192.168.49.1/24] br-3b5bf289867f:[192.168.58.1/24] br-dadb7c7a69e2:[172.18.0.1/16 fc00:f853:ccd:e793::1/64] docker0:[172.17.0.1/16] virbr0:[192.168.122.1/24] wlp5s0:[192.168.50.209/24]} v4=true v6=true}
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: magicsock: [warning] failed to force-set UDP read buffer size to 7340032: operation not permitted; using kernel default values (impacts throughput only)
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: magicsock: [warning] failed to force-set UDP write buffer size to 7340032: operation not permitted; using kernel default values (impacts throughput only)
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: magicsock: dontfrag: success on [::]:52639
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: magicsock: [warning] failed to force-set UDP read buffer size to 7340032: operation not permitted; using kernel default values (impacts throughput only)
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: magicsock: [warning] failed to force-set UDP write buffer size to 7340032: operation not permitted; using kernel default values (impacts throughput only)
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: magicsock: dontfrag: success on 0.0.0.0:41729
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: [v1] couldn't create raw v4 disco listener, using regular listener instead: raw disco listening disabled, SO_MARK unavailable
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: [v1] couldn't create raw v6 disco listener, using regular listener instead: raw disco listening disabled, SO_MARK unavailable
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: magicsock: disco key = d:a1b597462f95a66b
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: Creating WireGuard device...
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: Bringing WireGuard device up...
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] UDP bind has been updated
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Interface state was Down, requested Up, now Up
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: Bringing router up...
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming mkReceiveFunc - started
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming receiveDERP - started
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming mkReceiveFunc - started
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: [v1] warning: fakeRouter.Up: not implemented.
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: Clearing router settings...
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: [v1] warning: fakeRouter.Set: not implemented.
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: Starting network monitor...
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: Engine created.
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet: magicsock debug logging disabled, use CODER_MAGICSOCK_DEBUG_LOGGING=true to enable
+    t.go:111: 2026-10-13 05:57:00.842 [debu]  coderd.servertailnet.net.wgengine: magicsock: SetPrivateKey called (init)
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet: skipped sending node; no node callback
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet: updating engine network map  network_map="netmap: self: [FktdY] auth=machine-unknown u=? [fd7a:115c:a1e0:4a3d:ab58:49f:19b1:d8e7/128]\n"
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: [v1] magicsock: got updated network map; 0 peers
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd: subscribing on nats  event=chat:config_change
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.netstack: [v2] netstack: registered IP fd7a:115c:a1e0:4a3d:ab58:49f:19b1:d8e7/128
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: wgengine: Reconfig: configuring userspace WireGuard config (with 0/0 peers)
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd: subscribing on nats  event=ai_providers_changed
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.coord: initPeer  peer_id=b5e6e5c6-5fe8-482e-9a50-bb6575680d0d  peer_name=inmemoryb5e6e5c6-5fe8-482e-9a50-bb6575680d0d
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.coord: initial tunnel peers  peer_id=b5e6e5c6-5fe8-482e-9a50-bb6575680d0d  peer_name=inmemoryb5e6e5c6-5fe8-482e-9a50-bb6575680d0d  tunnel_peers=[]
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] UAPI: Updating private key
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet: obtained tailnet API v2+ client
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd: subscribing on nats  event=chat:ownership
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet: serving coordinator
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet: got new DERP Map  derp_map="&{HomeParams:<nil> Regions:map[999:0x2d1ac8c84820 1000:0x2d1ac8c849b0] OmitDefaultRegions:false}"
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet: skipped sending node; no PreferredDERP  node="&{ID:nodeid:29dd98435ae86b6b AsOf:2026-10-13 05:57:00.843498 +0000 UTC Key:nodekey:164b5d60a10e060e4477a86ffff47c8e8fa9c66c2daeb8088e1ead7e0af5b31f DiscoKey:discokey:a1b597462f95a66baabc428a1585e90620481fa931149c0aafd3ea638da16d1e PreferredDERP:0 DERPLatency:map[] DERPForcedWebsocket:map[] Addresses:[fd7a:115c:a1e0:4a3d:ab58:49f:19b1:d8e7/128] AllowedIPs:[fd7a:115c:a1e0:4a3d:ab58:49f:19b1:d8e7/128] Endpoints:[]}"
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: wgengine: Reconfig: configuring router
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: [v1] warning: fakeRouter.Set: not implemented.
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: wgengine: Reconfig: configuring DNS
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: dns: Set: {DefaultResolvers:[] Routes:{} SearchDomains:[] Hosts:0}
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: dns: Resolvercfg: {Routes:{} Hosts:0 LocalDomains:[]}
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd: subscribing on nats  event=workspace_build_orchestrations:wake
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: dns: OScfg: {Nameservers:[] SearchDomains:[] MatchDomains:[] Hosts:[]}
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: [v1] wgengine: Reconfig done
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.workspace_build_orchestrator: subscribed to wake channel
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.workspaceapps.stats_collector: workspace app stats collector started
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet: updating engine filter  filter="&{logf:0x3470600 local:0x2d1a77d79698 logIPs:0x2d1a77d796b0 matches4:[{IPProto:[6 17 1 58 132] Srcs:[{ip:{addr:{hi:0 lo:281470681743360} z:{value:0x2d1a74b3e5a0}} bitsPlusOne:1}] Dsts:[{Net:{ip:{addr:{hi:0 lo:281470681743360} z:{value:0x2d1a74b3e5a0}} bitsPlusOne:1} Ports:{First:0 Last:65535}}] Caps:[]}] matches6:[{IPProto:[6 17 1 58 132] Srcs:[{ip:{addr:{hi:0 lo:0} z:{value:0x2d1a74b3e5b8}} bitsPlusOne:1}] Dsts:[{Net:{ip:{addr:{hi:0 lo:0} z:{value:0x2d1a74b3e5b8}} bitsPlusOne:1} Ports:{First:0 Last:65535}}] Caps:[]}] cap4:[] cap6:[] state:0x2d1a75d89de0 shieldsUp:false}"
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet: updating engine DERP map  derp_map="{\"Regions\":{\"1000\":{\"EmbeddedRelay\":false,\"RegionID\":1000,\"RegionCode\":\"coder_stun_1000\",\"RegionName\":\"Coder STUN 1000\",\"Nodes\":[{\"Name\":\"1000stun0\",\"RegionID\":1000,\"HostName\":\"127.0.0.1\",\"STUNPort\":52157,\"STUNOnly\":true}]},\"999\":{\"EmbeddedRelay\":true,\"RegionID\":999,\"RegionCode\":\"coder\",\"RegionName\":\"Coder Embedded Relay\",\"Nodes\":[{\"Name\":\"999b\",\"RegionID\":999,\"HostName\":\"\",\"IPv4\":\"127.0.0.1\",\"IPv6\":\"none\",\"STUNPort\":-1,\"DERPPort\":41703,\"InsecureForTests\":true,\"ForceHTTP\":true}]}}}"
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: named node "1000stun0" has no address
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: named node "1000stun0" has no address
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: named node "1000stun0" has no address
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: got STUN response for 1000stun0 from 127.0.0.1:41729 (f5831014ef9d15540c41f72d) in 79.673µs
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: got STUN response for 1000stun0 from 127.0.0.1:41729 (b5119d5288d565ed66fadcae) in 90.77µs
+    t.go:111: 2026-10-13 05:57:00.843 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: got STUN response for 1000stun0 from 127.0.0.1:41729 (d1dc62c9d89a75cd83f127bf) in 105.008µs
+    t.go:111: 2026-10-13 05:57:00.844 [debu]  coderd.provisionerd: dialing coderd
+    t.go:111: 2026-10-13 05:57:00.846 [debu]  coderd: starting in-memory provisioner daemon  name=test-daemon
+    t.go:111: 2026-10-13 05:57:00.846 [debu]  coderd.provisionerd: successfully connected to coderd
+    t.go:111: 2026-10-13 05:57:00.846 [debu]  coderd.provisionerd: start of acquireAndRunOne
+    t.go:111: 2026-10-13 05:57:00.846 [debu]  coderd.acquirer: acquiring job  organization_id=bc3a67a9-6388-40be-acd8-6587c09a7399  worker_id=38464e34-8624-4940-8d3a-224d9684f966  provisioner_types=[echo]  tags={"owner":"","scope":"organization"}
+    t.go:111: 2026-10-13 05:57:00.846 [debu]  coderd.acquirer: got clearance to call database  organization_id=bc3a67a9-6388-40be-acd8-6587c09a7399  worker_id=38464e34-8624-4940-8d3a-224d9684f966  provisioner_types=[echo]  tags={"owner":"","scope":"organization"}
+    t.go:111: 2026-10-13 05:57:00.848 [debu]  coderd.acquirer: no job available  organization_id=bc3a67a9-6388-40be-acd8-6587c09a7399  worker_id=38464e34-8624-4940-8d3a-224d9684f966  provisioner_types=[echo]  tags={"owner":"","scope":"organization"}
+    t.go:111: 2026-10-13 05:57:00.856 [debu]  coderd: entitlements will not be refreshed  request_id=253c4471-e877-44bb-b507-30f7524adb9a
+    t.go:111: 2026-10-13 05:57:00.857 [debu]  coderd: POST  user_agent=Go-http-client/1.1  host=127.0.0.1:41703  received_host=127.0.0.1:41703  path=/api/v2/users/first  proto=HTTP/1.1  remote_addr=127.0.0.1  start="2026-10-13 01:57:00.846998502 -0400 EDT m=+6.522120552"  requestor_name=System  took=10.014059ms  status_code=201  latency_ms=10  request_id=253c4471-e877-44bb-b507-30f7524adb9a
+    t.go:111: 2026-10-13 05:57:00.861 [debu]  coderd: POST  user_agent=Go-http-client/1.1  host=127.0.0.1:41703  received_host=127.0.0.1:41703  path=/api/v2/users/login  proto=HTTP/1.1  remote_addr=127.0.0.1  start="2026-10-13 01:57:00.857249727 -0400 EDT m=+6.532371777"  requestor_id=1c806aac-c5ac-44a5-a082-40cac5083187  requestor_name=testuser  requestor_email=testuser@coder.com  took=4.098987ms  status_code=201  latency_ms=4  request_id=3abc9c12-e428-499b-88b4-184040789526
+    t.go:111: 2026-10-13 05:57:00.865 [debu]  coderd: GET  user_agent=Go-http-client/1.1  host=127.0.0.1:41703  received_host=127.0.0.1:41703  path=/api/v2/users/me  proto=HTTP/1.1  remote_addr=127.0.0.1  start="2026-10-13 01:57:00.86156266 -0400 EDT m=+6.536684710"  api_key_id=jLPiqhS6pR  requestor_id=1c806aac-c5ac-44a5-a082-40cac5083187  requestor_name=testuser  requestor_email=testuser@coder.com  took=4.297225ms  status_code=200  latency_ms=4  params_user=me  request_id=d83a6b34-59ed-4b95-92ec-847e3bb530f8
+    t.go:111: 2026-10-13 05:57:00.867 [debu]  coderd: POST  user_agent=Go-http-client/1.1  host=127.0.0.1:41703  received_host=127.0.0.1:41703  path=/api/v2/users  proto=HTTP/1.1  remote_addr=127.0.0.1  start="2026-10-13 01:57:00.866099241 -0400 EDT m=+6.541221278"  api_key_id=jLPiqhS6pR  requestor_id=1c806aac-c5ac-44a5-a082-40cac5083187  requestor_name=testuser  requestor_email=testuser@coder.com  took=1.779194ms  status_code=400  latency_ms=1  request_id=e764baba-4082-4ba1-9dc0-f3fc537a485d
+    coderdtest.go:992: 
+        	Error Trace:	/home/xxx/workspace/coder/coderd/coderdtest/coderdtest.go:992
+        	            				/home/xxx/workspace/coder/coderd/coderdtest/coderdtest.go:878
+        	            				/home/xxx/workspace/coder/coderd/coderdtest/users.go:169
+        	            				/home/xxx/workspace/coder/coderd/users_test.go:2042
+        	Error:      	Received unexpected error:
+        	            	POST http://127.0.0.1:41703/api/v2/users: unexpected status code 400: Unsupported login type "github" for manually creating new users.
+        	Test:       	TestGetUsersFilter
+    t.go:111: 2026-10-13 05:57:00.868 [info]  coderd.provisionerd: attempting graceful shutdown
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.provisionerd: sending acquire job cancel
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.acquirer: acquiring job canceled  organization_id=bc3a67a9-6388-40be-acd8-6587c09a7399  worker_id=38464e34-8624-4940-8d3a-224d9684f966  provisioner_types=[echo]  tags={"owner":"","scope":"organization"}  error="context canceled"
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.inmem-provisionerd-test-daemon: successful cancel
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.inmem-provisionerd-test-daemon: closed stream  error=<nil>
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.provisionerd: graceful acquire done  job_id=""  error=<nil>
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.provisionerd: acquire job successfully canceled
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.provisionerd: exiting acquire; provisionerd is shutting down
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.provisionerd: acquire loop exited
+    t.go:111: 2026-10-13 05:57:00.868 [info]  coderd.provisionerd: gracefully shutdown
+    t.go:111: 2026-10-13 05:57:00.868 [info]  coderd.provisionerd: closing provisionerd
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.provisionerd: waiting for goroutines to exit
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.provisionerd: connect loop exited
+    t.go:111: 2026-10-13 05:57:00.868 [info]  coderd.inmem-provisionerd-test-daemon: provisioner daemon disconnected ...
+        error= fasthttputil: inmemorylistener is already closed: use of closed network connection
+               	storj.io/drpc/drpcserver.(*Server).Serve:152
+               	github.com/coder/coder/v2/coderd.(*API).CreateInMemoryTaggedProvisionerDaemon.func3:2564
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.provisionerd: closing server with error  error=<nil>
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.inmem-provisionerd-test-daemon: heartbeat loop canceled
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: closing local sub  event=chat:config_change
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: main context canceled; do graceful disconnect
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.metadata_batcher: context done, flushing before exit
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: removed local sub from group  event=chat:config_change  group_size=0
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: failed to receive DERP message  error="context canceled"
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.keyrotator: stopping key rotation  error="context canceled"
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: sent disconnect  connect_type=server_to_agent  disconnect_expected=true  disconnect_reason=graceful  disconnect_initiator=server
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.coord: peerReadLoop got request  peer_id=b5e6e5c6-5fe8-482e-9a50-bb6575680d0d  peer_name=inmemoryb5e6e5c6-5fe8-482e-9a50-bb6575680d0d
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: stopped expiring old agents
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: polling DERPMap exited
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: closing local sub  event=ai_providers_changed
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.coord: got tunnel peers  peer_id=b5e6e5c6-5fe8-482e-9a50-bb6575680d0d  tunnel_peers=[]
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: unsubscribing group subscription from nats  event=chat:config_change
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: removed local sub from group  event=ai_providers_changed  group_size=0
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: failed to read from protocol  error=EOF
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: closing local sub  event=chat:ownership
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: removed local sub from group  event=chat:ownership  group_size=0
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.coord: peerReadLoop channel closed  peer_id=b5e6e5c6-5fe8-482e-9a50-bb6575680d0d  peer_name=inmemoryb5e6e5c6-5fe8-482e-9a50-bb6575680d0d
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.coord: lostPeer  peer_id=b5e6e5c6-5fe8-482e-9a50-bb6575680d0d
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: unsubscribing group subscription from nats  event=ai_providers_changed
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: closing local sub  event=provisioner_job_posted
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: unsubscribing group subscription from nats  event=chat:ownership
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: responses closed after disconnect  connect_type=server_to_agent  disconnect_expected=true  disconnect_reason=graceful  disconnect_initiator=server
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: removed local sub from group  event=provisioner_job_posted  group_size=0
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: tailnet API v2+ connection lost
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: closing local sub  event=workspace_build_orchestrations:wake
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.workspaceapps.stats_collector: flushing workspace app stats
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: unsubscribing group subscription from nats  event=provisioner_job_posted
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.workspaceapps.stats_collector: flushed workspace app stats
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.workspaceapps.stats_collector: workspace app stats collector stopped
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: removed local sub from group  event=workspace_build_orchestrations:wake  group_size=0
+    t.go:111: 2026-10-13 05:57:00.868 [info]  coderd.servertailnet: closing server tailnet
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd: unsubscribing group subscription from nats  event=workspace_build_orchestrations:wake
+    t.go:111: 2026-10-13 05:57:00.868 [info]  coderd.servertailnet: closing tailnet Conn
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: closing configMaps configLoop
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: closing nodeUpdater updateLoop
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet: closed netstack
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming mkReceiveFunc - stopped
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming mkReceiveFunc - stopped
+    t.go:111: 2026-10-13 05:57:00.868 [debu]  coderd.servertailnet.net.wgengine: portmapper: createOrGetMapping: read udp4 0.0.0.0:42446: use of closed network connection
+    t.go:111: 2026-10-13 05:57:00.893 [debu]  coderd.servertailnet.net.wgengine: netcheck: [v1] report: udp=true v6=false v6os=true mapvarydest=false portmap= v4a=127.0.0.1:41729 derp=0
+    t.go:111: 2026-10-13 05:57:00.893 [debu]  coderd.servertailnet.net.wgengine: magicsock: home is now derp-999 (coder)
+    t.go:111: 2026-10-13 05:57:00.893 [debu]  coderd.servertailnet: new preferred DERP  preferred_derp=999
+    t.go:111: 2026-10-13 05:57:00.894 [debu]  coderd.servertailnet.net.wgengine: magicsock: endpoints changed: 127.0.0.1:41729 (stun), 172.17.0.1:41729 (local), 172.18.0.1:41729 (local), 192.168.49.1:41729 (local), 192.168.50.209:41729 (local), 192.168.58.1:41729 (local), 192.168.122.1:41729 (local)
+    t.go:111: 2026-10-13 05:57:00.894 [debu]  coderd.servertailnet: wireguard status  status=<nil>  error="engine closing; no status"
+    t.go:111: 2026-10-13 05:57:00.894 [debu]  coderd.servertailnet.net.wgengine: [v1] warning: fakeRouter.Close: not implemented.
+    t.go:111: 2026-10-13 05:57:00.894 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Device closing
+    t.go:111: 2026-10-13 05:57:00.894 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming receiveDERP - stopped
+    t.go:111: 2026-10-13 05:57:00.894 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Device closed
+    t.go:111: 2026-10-13 05:57:00.894 [debu]  coderd.servertailnet: server tailnet close complete
+    t.go:111: 2026-10-13 05:57:00.894 [debu]  coderd.workspace_usage_tracker: workspace usage tracker loop exited
+    stuntest.go:63: STUN server shutdown
+    coderdtest.go:519: closing coderdtest server on 127.0.0.1:41703
+    coderdtest.go:521: closed coderdtest server on 127.0.0.1:41703
+    t.go:111: 2026-10-13 05:57:00.895 [debu]  coderd: closing pubsub
+    t.go:111: 2026-10-13 05:57:00.895 [debu]  coderd: closed all local subscriptions
+    t.go:111: 2026-10-13 05:57:00.895 [debu]  coderd: unsubscribe routines done
+    t.go:111: 2026-10-13 05:57:00.895 [debu]  coderd: subscribe pool connections closed
+    t.go:111: 2026-10-13 05:57:00.895 [debu]  coderd: publish pool connections closed
+    t.go:111: 2026-10-13 05:57:00.895 [info]  coderd: nats server shut down
+    t.go:111: 2026-10-13 05:57:00.895 [info]  pubsub: pubsub is closing
+    t.go:111: 2026-10-13 05:57:00.895 [info]  pubsub: pubsub listen stopped receiving notify
+    t.go:111: 2026-10-13 05:57:00.895 [debu]  pubsub: pubsub closed
+--- FAIL: TestGetOrgMembersFilter (0.15s)
+    t.go:111: 2026-10-13 05:57:02.616 [debu]  pubsub: pubsub dialing postgres  network=tcp  address=127.0.0.1:5432  timeout_ms=0
+    t.go:111: 2026-10-13 05:57:02.616 [debu]  pubsub: pubsub postgres TCP connection established  network=tcp  address=127.0.0.1:5432  timeout_ms=0  elapsed_ms=0
+    t.go:111: 2026-10-13 05:57:02.618 [debu]  pubsub: pubsub connected to postgres
+    t.go:111: 2026-10-13 05:57:02.618 [debu]  pubsub: pubsub has started
+    t.go:111: 2026-10-13 05:57:02.618 [debu]  pubsub.latency-measurer: performing measurement  msg="576ca119-1e35-4713-9e29-cedd2bfa2ae5"
+    t.go:111: 2026-10-13 05:57:02.618 [debu]  pubsub: started listening to event channel  event=latency-measure:9468382c-641a-4cdd-a15a-de916632c3b0.1
+    t.go:111: 2026-10-13 05:57:02.618 [debu]  pubsub: publish  event=latency-measure:9468382c-641a-4cdd-a15a-de916632c3b0.1  message_len=36
+    t.go:111: 2026-10-13 05:57:02.620 [debu]  pubsub: removing queueSet  event=latency-measure:9468382c-641a-4cdd-a15a-de916632c3b0.1
+    t.go:111: 2026-10-13 05:57:02.620 [debu]  pubsub: stopped listening to event channel  event=latency-measure:9468382c-641a-4cdd-a15a-de916632c3b0.1
+    t.go:111: 2026-10-13 05:57:02.643 [debu]  coderd: embedded nats server started  client_url=nats://127.0.0.1:33671
+    t.go:111: 2026-10-13 05:57:02.644 [debu]  coderd.latency-measurer: performing measurement  msg="7e6b438e-a88e-43bf-bea9-2d6cf7b0b3c3"
+    t.go:111: 2026-10-13 05:57:02.644 [debu]  coderd: subscribing on nats  event=latency-measure:f678b537-36bd-4859-bb55-f1918be7e673.1
+    t.go:111: 2026-10-13 05:57:02.644 [debu]  coderd: closing local sub  event=latency-measure:f678b537-36bd-4859-bb55-f1918be7e673.1
+    t.go:111: 2026-10-13 05:57:02.644 [debu]  coderd: removed local sub from group  event=latency-measure:f678b537-36bd-4859-bb55-f1918be7e673.1  group_size=0
+    t.go:111: 2026-10-13 05:57:02.644 [debu]  coderd: unsubscribing group subscription from nats  event=latency-measure:f678b537-36bd-4859-bb55-f1918be7e673.1
+    coderdtest.go:700: coderdtest server listening on 127.0.0.1:35627
+    coderdtest.go:700: coderdtest server started on http://127.0.0.1:35627
+    t.go:111: 2026-10-13 05:57:02.650 [debu]  coderd.dbrollup: rolling up data
+    t.go:111: 2026-10-13 05:57:02.650 [debu]  coderd.oidc_convert_keycache.oidc_convert_signing_keycache: created new key cache  feature=oidc_convert
+    t.go:111: 2026-10-13 05:57:02.650 [debu]  coderd.oidc_convert_keycache.oidc_convert_signing_keycache: fetching crypto keys  feature=oidc_convert
+    t.go:111: 2026-10-13 05:57:02.651 [debu]  coderd.oidc_convert_keycache.oidc_convert_signing_keycache: crypto key fetch complete  feature=oidc_convert
+    t.go:111: 2026-10-13 05:57:02.651 [debu]  coderd.chat_file_token_keycache.chat_files_token_signing_keycache: created new key cache  feature=chat_files_token
+    t.go:111: 2026-10-13 05:57:02.651 [debu]  coderd.chat_file_token_keycache.chat_files_token_signing_keycache: fetching crypto keys  feature=chat_files_token
+    t.go:111: 2026-10-13 05:57:02.651 [debu]  coderd.chat_file_token_keycache.chat_files_token_signing_keycache: crypto key fetch complete  feature=chat_files_token
+    t.go:111: 2026-10-13 05:57:02.651 [debu]  coderd.app_signing_keycache.workspace_apps_token_signing_keycache: created new key cache  feature=workspace_apps_token
+    t.go:111: 2026-10-13 05:57:02.651 [debu]  coderd.app_signing_keycache.workspace_apps_token_signing_keycache: fetching crypto keys  feature=workspace_apps_token
+    t.go:111: 2026-10-13 05:57:02.665 [debu]  coderd.app_signing_keycache.workspace_apps_token_signing_keycache: crypto key fetch complete  feature=workspace_apps_token
+    t.go:111: 2026-10-13 05:57:02.665 [debu]  coderd.workspace_apps_api_key_encryption_keycache: created new key cache  feature=workspace_apps_api_key
+    t.go:111: 2026-10-13 05:57:02.665 [debu]  coderd.workspace_apps_api_key_encryption_keycache: fetching crypto keys  feature=workspace_apps_api_key
+    t.go:111: 2026-10-13 05:57:02.665 [debu]  coderd.workspace_apps_api_key_encryption_keycache: crypto key fetch complete  feature=workspace_apps_api_key
+    t.go:111: 2026-10-13 05:57:02.666 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=oidc_convert
+    t.go:111: 2026-10-13 05:57:02.667 [debu]  coderd.keyrotator: inserted new key for feature  feature=oidc_convert  sequence=1
+    t.go:111: 2026-10-13 05:57:02.667 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=chat_files_token
+    t.go:111: 2026-10-13 05:57:02.667 [debu]  coderd.keyrotator: inserted new key for feature  feature=chat_files_token  sequence=1
+    t.go:111: 2026-10-13 05:57:02.667 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=tailnet_resume
+    t.go:111: 2026-10-13 05:57:02.668 [debu]  coderd.keyrotator: inserted new key for feature  feature=tailnet_resume  sequence=1
+    t.go:111: 2026-10-13 05:57:02.668 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=nats_ca
+    t.go:111: 2026-10-13 05:57:02.669 [debu]  coderd.keyrotator: inserted new key for feature  feature=nats_ca  sequence=1
+    t.go:111: 2026-10-13 05:57:02.669 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=workspace_apps_token
+    t.go:111: 2026-10-13 05:57:02.670 [debu]  coderd.metrics_cache: metrics refreshed  name="deployment stats"  interval=5m0s  took=20.390503ms
+    t.go:111: 2026-10-13 05:57:02.670 [debu]  coderd.keyrotator: inserted new key for feature  feature=workspace_apps_token  sequence=1
+    t.go:111: 2026-10-13 05:57:02.670 [debu]  coderd.keyrotator: no valid keys detected, inserting new key  feature=workspace_apps_api_key
+    t.go:111: 2026-10-13 05:57:02.670 [debu]  coderd.dbrollup: rolled up data  took=20.663471ms  event={"template_usage_stats":true}
+    t.go:111: 2026-10-13 05:57:02.670 [debu]  coderd.dbrollup: next rollup at  next="2026-10-13 02:00:00 -0400 EDT"
+    t.go:111: 2026-10-13 05:57:02.671 [debu]  coderd.keyrotator: inserted new key for feature  feature=workspace_apps_api_key  sequence=1
+    t.go:111: 2026-10-13 05:57:02.671 [debu]  coderd.nats_ca_cache.nats_ca_signing_keycache: created new key cache  feature=nats_ca
+    t.go:111: 2026-10-13 05:57:02.671 [debu]  coderd.nats_ca_cache.nats_ca_signing_keycache: fetching crypto keys  feature=nats_ca
+    t.go:111: 2026-10-13 05:57:02.671 [debu]  coderd.metrics_cache: metrics refreshed  name="template build times"  interval=1h0m0s  took=21.735267ms
+    t.go:111: 2026-10-13 05:57:02.672 [debu]  coderd.nats_ca_cache.nats_ca_signing_keycache: crypto key fetch complete  feature=nats_ca
+    t.go:111: 2026-10-13 05:57:02.689 [debu]  coderd: subscribing on nats  event=provisioner_job_posted
+    t.go:111: 2026-10-13 05:57:02.690 [debu]  coderd.acquirer: subscribed to job postings
+    t.go:111: 2026-10-13 05:57:02.690 [warn]  coderd.site: could not parse install.sh, it will be unavailable  error="open install.sh: file does not exist"
+    t.go:111: 2026-10-13 05:57:02.690 [debu]  coderd.servertailnet: network isolation configuration  use_netns=false
+    t.go:111: 2026-10-13 05:57:02.690 [debu]  coderd.servertailnet.net.wgengine: [v1] using fake (no-op) tun device
+    t.go:111: 2026-10-13 05:57:02.690 [debu]  coderd.servertailnet.net.wgengine: [v1] using fake (no-op) OS network configurator
+    t.go:111: 2026-10-13 05:57:02.690 [debu]  coderd.servertailnet.net.wgengine: [v1] using fake (no-op) DNS configurator
+    t.go:111: 2026-10-13 05:57:02.690 [debu]  coderd.servertailnet.net.wgengine: dns: using dns.noopManager
+    t.go:111: 2026-10-13 05:57:02.690 [debu]  coderd.servertailnet.net.wgengine: link state: interfaces.State{defaultRoute=wlp5s0 ifs={br-3302d477e486:[192.168.49.1/24] br-3b5bf289867f:[192.168.58.1/24] br-dadb7c7a69e2:[172.18.0.1/16 fc00:f853:ccd:e793::1/64] docker0:[172.17.0.1/16] virbr0:[192.168.122.1/24] wlp5s0:[192.168.50.209/24]} v4=true v6=true}
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: magicsock: [warning] failed to force-set UDP read buffer size to 7340032: operation not permitted; using kernel default values (impacts throughput only)
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: magicsock: [warning] failed to force-set UDP write buffer size to 7340032: operation not permitted; using kernel default values (impacts throughput only)
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: magicsock: dontfrag: success on [::]:41891
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: magicsock: [warning] failed to force-set UDP read buffer size to 7340032: operation not permitted; using kernel default values (impacts throughput only)
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: magicsock: [warning] failed to force-set UDP write buffer size to 7340032: operation not permitted; using kernel default values (impacts throughput only)
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: magicsock: dontfrag: success on 0.0.0.0:39110
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: [v1] couldn't create raw v4 disco listener, using regular listener instead: raw disco listening disabled, SO_MARK unavailable
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: [v1] couldn't create raw v6 disco listener, using regular listener instead: raw disco listening disabled, SO_MARK unavailable
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: magicsock: disco key = d:edf440cf94a71057
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: Creating WireGuard device...
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: Bringing WireGuard device up...
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] UDP bind has been updated
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Interface state was Down, requested Up, now Up
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming mkReceiveFunc - started
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: Bringing router up...
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: [v1] warning: fakeRouter.Up: not implemented.
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: Clearing router settings...
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: [v1] warning: fakeRouter.Set: not implemented.
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: Starting network monitor...
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming receiveDERP - started
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: Engine created.
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet: magicsock debug logging disabled, use CODER_MAGICSOCK_DEBUG_LOGGING=true to enable
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: magicsock: SetPrivateKey called (init)
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming mkReceiveFunc - started
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet: skipped sending node; no node callback
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd: subscribing on nats  event=chat:config_change
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet: updating engine network map  network_map="netmap: self: [ObsCn] auth=machine-unknown u=? [fd7a:115c:a1e0:431b:8e16:23a3:408d:8b3a/128]\n"
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: [v1] magicsock: got updated network map; 0 peers
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd: subscribing on nats  event=ai_providers_changed
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.netstack: [v2] netstack: registered IP fd7a:115c:a1e0:431b:8e16:23a3:408d:8b3a/128
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.coord: initPeer  peer_id=b3e0b4c2-c604-4c9a-a87d-97871f7e2b01  peer_name=inmemoryb3e0b4c2-c604-4c9a-a87d-97871f7e2b01
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd: subscribing on nats  event=chat:ownership
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.coord: initial tunnel peers  peer_id=b3e0b4c2-c604-4c9a-a87d-97871f7e2b01  peer_name=inmemoryb3e0b4c2-c604-4c9a-a87d-97871f7e2b01  tunnel_peers=[]
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: wgengine: Reconfig: configuring userspace WireGuard config (with 0/0 peers)
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet: obtained tailnet API v2+ client
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet: serving coordinator
+    t.go:111: 2026-10-13 05:57:02.691 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] UAPI: Updating private key
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet: got new DERP Map  derp_map="&{HomeParams:<nil> Regions:map[999:0x2d1b4b03c500 1000:0x2d1b4b03c550] OmitDefaultRegions:false}"
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet: skipped sending node; no PreferredDERP  node="&{ID:nodeid:4fab5428127f6f27 AsOf:2026-10-13 05:57:02.692011 +0000 UTC Key:nodekey:39bb029fd3ee7facfee3e073498f7d799024b66630f4622bcea9277328d30811 DiscoKey:discokey:edf440cf94a710573bca63e073de51825dc420ef92a8d6cd8dc961b89d2a1e04 PreferredDERP:0 DERPLatency:map[] DERPForcedWebsocket:map[] Addresses:[fd7a:115c:a1e0:431b:8e16:23a3:408d:8b3a/128] AllowedIPs:[fd7a:115c:a1e0:431b:8e16:23a3:408d:8b3a/128] Endpoints:[]}"
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.workspaceapps.stats_collector: workspace app stats collector started
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: wgengine: Reconfig: configuring router
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: [v1] warning: fakeRouter.Set: not implemented.
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: wgengine: Reconfig: configuring DNS
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd: subscribing on nats  event=workspace_build_orchestrations:wake
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: dns: Set: {DefaultResolvers:[] Routes:{} SearchDomains:[] Hosts:0}
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: dns: Resolvercfg: {Routes:{} Hosts:0 LocalDomains:[]}
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: dns: OScfg: {Nameservers:[] SearchDomains:[] MatchDomains:[] Hosts:[]}
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: [v1] wgengine: Reconfig done
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet: updating engine filter  filter="&{logf:0x3470600 local:0x2d1b501461e0 logIPs:0x2d1b501461f8 matches4:[{IPProto:[6 17 1 58 132] Srcs:[{ip:{addr:{hi:0 lo:281470681743360} z:{value:0x2d1a74b3e5a0}} bitsPlusOne:1}] Dsts:[{Net:{ip:{addr:{hi:0 lo:281470681743360} z:{value:0x2d1a74b3e5a0}} bitsPlusOne:1} Ports:{First:0 Last:65535}}] Caps:[]}] matches6:[{IPProto:[6 17 1 58 132] Srcs:[{ip:{addr:{hi:0 lo:0} z:{value:0x2d1a74b3e5b8}} bitsPlusOne:1}] Dsts:[{Net:{ip:{addr:{hi:0 lo:0} z:{value:0x2d1a74b3e5b8}} bitsPlusOne:1} Ports:{First:0 Last:65535}}] Caps:[]}] cap4:[] cap6:[] state:0x2d1b50141a70 shieldsUp:false}"
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.workspace_build_orchestrator: subscribed to wake channel
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet: updating engine DERP map  derp_map="{\"Regions\":{\"1000\":{\"EmbeddedRelay\":false,\"RegionID\":1000,\"RegionCode\":\"coder_stun_1000\",\"RegionName\":\"Coder STUN 1000\",\"Nodes\":[{\"Name\":\"1000stun0\",\"RegionID\":1000,\"HostName\":\"127.0.0.1\",\"STUNPort\":55709,\"STUNOnly\":true}]},\"999\":{\"EmbeddedRelay\":true,\"RegionID\":999,\"RegionCode\":\"coder\",\"RegionName\":\"Coder Embedded Relay\",\"Nodes\":[{\"Name\":\"999b\",\"RegionID\":999,\"HostName\":\"\",\"IPv4\":\"127.0.0.1\",\"IPv6\":\"none\",\"STUNPort\":-1,\"DERPPort\":35627,\"InsecureForTests\":true,\"ForceHTTP\":true}]}}}"
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: named node "1000stun0" has no address
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: named node "1000stun0" has no address
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: named node "1000stun0" has no address
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: got STUN response for 1000stun0 from 127.0.0.1:39110 (88bf16852f26573a078add05) in 75.209µs
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: got STUN response for 1000stun0 from 127.0.0.1:39110 (3e6b9b8c9641725362d180ee) in 97.914µs
+    t.go:111: 2026-10-13 05:57:02.692 [debu]  coderd.servertailnet.net.wgengine: netcheck: netcheck.runProbe: got STUN response for 1000stun0 from 127.0.0.1:39110 (03a71cf4f35fe69486479a59) in 107.376µs
+    t.go:111: 2026-10-13 05:57:02.693 [debu]  coderd.provisionerd: dialing coderd
+    t.go:111: 2026-10-13 05:57:02.695 [debu]  coderd: starting in-memory provisioner daemon  name=test-daemon
+    t.go:111: 2026-10-13 05:57:02.695 [debu]  coderd.provisionerd: successfully connected to coderd
+    t.go:111: 2026-10-13 05:57:02.695 [debu]  coderd.provisionerd: start of acquireAndRunOne
+    t.go:111: 2026-10-13 05:57:02.695 [debu]  coderd.acquirer: acquiring job  organization_id=bc3a67a9-6388-40be-acd8-6587c09a7399  worker_id=e35e6798-baa1-477c-9fa7-b60aa96e033a  provisioner_types=[echo]  tags={"owner":"","scope":"organization"}
+    t.go:111: 2026-10-13 05:57:02.695 [debu]  coderd.acquirer: got clearance to call database  organization_id=bc3a67a9-6388-40be-acd8-6587c09a7399  worker_id=e35e6798-baa1-477c-9fa7-b60aa96e033a  provisioner_types=[echo]  tags={"owner":"","scope":"organization"}
+    t.go:111: 2026-10-13 05:57:02.697 [debu]  coderd.acquirer: no job available  organization_id=bc3a67a9-6388-40be-acd8-6587c09a7399  worker_id=e35e6798-baa1-477c-9fa7-b60aa96e033a  provisioner_types=[echo]  tags={"owner":"","scope":"organization"}
+    t.go:111: 2026-10-13 05:57:02.707 [debu]  coderd: entitlements will not be refreshed  request_id=ed5f8436-7ed6-4d54-b412-2edadf5c5bc6
+    t.go:111: 2026-10-13 05:57:02.707 [debu]  coderd: POST  user_agent=Go-http-client/1.1  host=127.0.0.1:35627  received_host=127.0.0.1:35627  path=/api/v2/users/first  proto=HTTP/1.1  remote_addr=127.0.0.1  start="2026-10-13 01:57:02.695481575 -0400 EDT m=+8.370603633"  requestor_name=System  took=12.406405ms  status_code=201  latency_ms=12  request_id=ed5f8436-7ed6-4d54-b412-2edadf5c5bc6
+    t.go:111: 2026-10-13 05:57:02.711 [debu]  coderd: POST  user_agent=Go-http-client/1.1  host=127.0.0.1:35627  received_host=127.0.0.1:35627  path=/api/v2/users/login  proto=HTTP/1.1  remote_addr=127.0.0.1  start="2026-10-13 01:57:02.708172187 -0400 EDT m=+8.383294237"  requestor_id=3a5d75be-9295-43f7-a8f9-b5d63b630692  requestor_name=testuser  requestor_email=testuser@coder.com  took=3.444853ms  status_code=201  latency_ms=3  request_id=131e848d-307c-48a8-af86-6d660b7a6d72
+    t.go:111: 2026-10-13 05:57:02.716 [debu]  coderd: GET  user_agent=Go-http-client/1.1  host=127.0.0.1:35627  received_host=127.0.0.1:35627  path=/api/v2/users/me  proto=HTTP/1.1  remote_addr=127.0.0.1  start="2026-10-13 01:57:02.711814551 -0400 EDT m=+8.386936592"  api_key_id=GATSaXw0d6  requestor_id=3a5d75be-9295-43f7-a8f9-b5d63b630692  requestor_name=testuser  requestor_email=testuser@coder.com  took=4.17994ms  status_code=200  latency_ms=4  params_user=me  request_id=72783e51-72ae-4415-bc50-e73d391d7036
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: POST  user_agent=Go-http-client/1.1  host=127.0.0.1:35627  received_host=127.0.0.1:35627  path=/api/v2/users  proto=HTTP/1.1  remote_addr=127.0.0.1  start="2026-10-13 01:57:02.716244514 -0400 EDT m=+8.391366552"  api_key_id=GATSaXw0d6  requestor_id=3a5d75be-9295-43f7-a8f9-b5d63b630692  requestor_name=testuser  requestor_email=testuser@coder.com  took=1.780569ms  status_code=400  latency_ms=1  request_id=277ecd8a-440b-47d0-9c7f-f8f6a7960d62
+    coderdtest.go:992: 
+        	Error Trace:	/home/xxx/workspace/coder/coderd/coderdtest/coderdtest.go:992
+        	            				/home/xxx/workspace/coder/coderd/coderdtest/coderdtest.go:878
+        	            				/home/xxx/workspace/coder/coderd/coderdtest/users.go:169
+        	            				/home/xxx/workspace/coder/coderd/members_test.go:151
+        	Error:      	Received unexpected error:
+        	            	POST http://127.0.0.1:35627/api/v2/users: unexpected status code 400: Unsupported login type "github" for manually creating new users.
+        	Test:       	TestGetOrgMembersFilter
+    t.go:111: 2026-10-13 05:57:02.718 [info]  coderd.provisionerd: attempting graceful shutdown
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.provisionerd: sending acquire job cancel
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.acquirer: acquiring job canceled  organization_id=bc3a67a9-6388-40be-acd8-6587c09a7399  worker_id=e35e6798-baa1-477c-9fa7-b60aa96e033a  provisioner_types=[echo]  tags={"owner":"","scope":"organization"}  error="context canceled"
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.inmem-provisionerd-test-daemon: successful cancel
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.inmem-provisionerd-test-daemon: closed stream  error=<nil>
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.provisionerd: graceful acquire done  job_id=""  error=<nil>
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.provisionerd: acquire job successfully canceled
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.provisionerd: exiting acquire; provisionerd is shutting down
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.provisionerd: acquire loop exited
+    t.go:111: 2026-10-13 05:57:02.718 [info]  coderd.provisionerd: gracefully shutdown
+    t.go:111: 2026-10-13 05:57:02.718 [info]  coderd.provisionerd: closing provisionerd
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.provisionerd: waiting for goroutines to exit
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.provisionerd: connect loop exited
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.provisionerd: closing server with error  error=<nil>
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.inmem-provisionerd-test-daemon: heartbeat loop canceled
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.keyrotator: stopping key rotation  error="context canceled"
+    t.go:111: 2026-10-13 05:57:02.718 [info]  coderd.inmem-provisionerd-test-daemon: provisioner daemon disconnected ...
+        error= fasthttputil: inmemorylistener is already closed: use of closed network connection
+               	storj.io/drpc/drpcserver.(*Server).Serve:152
+               	github.com/coder/coder/v2/coderd.(*API).CreateInMemoryTaggedProvisionerDaemon.func3:2564
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: failed to receive DERP message  error="context canceled"
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: closing local sub  event=workspace_build_orchestrations:wake
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.metadata_batcher: context done, flushing before exit
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: stopped expiring old agents
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: polling DERPMap exited
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: removed local sub from group  event=workspace_build_orchestrations:wake  group_size=0
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: main context canceled; do graceful disconnect
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: closing local sub  event=provisioner_job_posted
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: unsubscribing group subscription from nats  event=workspace_build_orchestrations:wake
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: sent disconnect  connect_type=server_to_agent  disconnect_expected=true  disconnect_reason=graceful  disconnect_initiator=server
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: removed local sub from group  event=provisioner_job_posted  group_size=0
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.coord: peerReadLoop got request  peer_id=b3e0b4c2-c604-4c9a-a87d-97871f7e2b01  peer_name=inmemoryb3e0b4c2-c604-4c9a-a87d-97871f7e2b01
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: closing local sub  event=chat:config_change
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: removed local sub from group  event=chat:config_change  group_size=0
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: closing local sub  event=ai_providers_changed
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.coord: got tunnel peers  peer_id=b3e0b4c2-c604-4c9a-a87d-97871f7e2b01  tunnel_peers=[]
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: unsubscribing group subscription from nats  event=provisioner_job_posted
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: unsubscribing group subscription from nats  event=chat:config_change
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: removed local sub from group  event=ai_providers_changed  group_size=0
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: failed to read from protocol  error=EOF
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: closing local sub  event=chat:ownership
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.coord: peerReadLoop channel closed  peer_id=b3e0b4c2-c604-4c9a-a87d-97871f7e2b01  peer_name=inmemoryb3e0b4c2-c604-4c9a-a87d-97871f7e2b01
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: removed local sub from group  event=chat:ownership  group_size=0
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.coord: lostPeer  peer_id=b3e0b4c2-c604-4c9a-a87d-97871f7e2b01
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: unsubscribing group subscription from nats  event=ai_providers_changed
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: responses closed after disconnect  connect_type=server_to_agent  disconnect_expected=true  disconnect_reason=graceful  disconnect_initiator=server
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd: unsubscribing group subscription from nats  event=chat:ownership
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: tailnet API v2+ connection lost
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.workspaceapps.stats_collector: flushing workspace app stats
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.workspaceapps.stats_collector: flushed workspace app stats
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.workspaceapps.stats_collector: workspace app stats collector stopped
+    t.go:111: 2026-10-13 05:57:02.718 [info]  coderd.servertailnet: closing server tailnet
+    t.go:111: 2026-10-13 05:57:02.718 [info]  coderd.servertailnet: closing tailnet Conn
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: closing configMaps configLoop
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: closing nodeUpdater updateLoop
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet: closed netstack
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming mkReceiveFunc - stopped
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet.net.wgengine: portmapper: createOrGetMapping: read udp4 0.0.0.0:48219: use of closed network connection
+    t.go:111: 2026-10-13 05:57:02.718 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming mkReceiveFunc - stopped
+    t.go:111: 2026-10-13 05:57:02.742 [debu]  coderd.servertailnet.net.wgengine: netcheck: [v1] report: udp=true v6=false v6os=true mapvarydest=false portmap= v4a=127.0.0.1:39110 derp=0
+    t.go:111: 2026-10-13 05:57:02.742 [debu]  coderd.servertailnet.net.wgengine: magicsock: home is now derp-999 (coder)
+    t.go:111: 2026-10-13 05:57:02.742 [debu]  coderd.servertailnet: new preferred DERP  preferred_derp=999
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd.servertailnet.net.wgengine: magicsock: endpoints changed: 127.0.0.1:39110 (stun), 172.17.0.1:39110 (local), 172.18.0.1:39110 (local), 192.168.49.1:39110 (local), 192.168.50.209:39110 (local), 192.168.58.1:39110 (local), 192.168.122.1:39110 (local)
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd.servertailnet: wireguard status  status=<nil>  error="engine closing; no status"
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd.servertailnet.net.wgengine: [v1] warning: fakeRouter.Close: not implemented.
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Device closing
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Routine: receive incoming receiveDERP - stopped
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd.servertailnet.net.wgengine: wg: [v2] Device closed
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd.servertailnet: server tailnet close complete
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd.workspace_usage_tracker: workspace usage tracker loop exited
+    stuntest.go:63: STUN server shutdown
+    coderdtest.go:519: closing coderdtest server on 127.0.0.1:35627
+    coderdtest.go:521: closed coderdtest server on 127.0.0.1:35627
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd: closing pubsub
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd: closed all local subscriptions
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd: unsubscribe routines done
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd: subscribe pool connections closed
+    t.go:111: 2026-10-13 05:57:02.743 [debu]  coderd: publish pool connections closed
+    t.go:111: 2026-10-13 05:57:02.743 [info]  coderd: nats server shut down
+    t.go:111: 2026-10-13 05:57:02.743 [info]  pubsub: pubsub is closing
+    t.go:111: 2026-10-13 05:57:02.744 [info]  pubsub: pubsub listen stopped receiving notify
+    t.go:111: 2026-10-13 05:57:02.744 [debu]  pubsub: pubsub closed
+cookie: csrf_token=zx+oJrmykBh+kLTrcGVYhDDRmJSzaAGV9qSx10rXcYk=
+cookie: coder_oauth_convert_jwt=eyJhbGciOiJIUzUxMiJ9.eyJpc3MiOiIwZDgwZjZkMC0zNjk5LTRkYmMtODI1Zi0xMjlhYWZkMTZhMjQiLCJzdWIiOiJjb252ZXJ0LVloRklyelFKMHZXclJDUHhqeHRBZmFZem9oUVNGd0RhIiwiYXVkIjoiN2Y4NjU1MDctODAxNy00ZWI0LWJlNGYtNDdlYjI1Yjk1YmZiIiwiZXhwIjoxNzkxODcxMzM3LCJuYmYiOjE3OTE4NzEwMzYsImlhdCI6MTc5MTg3MTAzNywianRpIjoiNjVjNmYzZGYtZDg1Yi00YjlmLWIzMjEtZTY5OGUxOTcxNDJmIiwidXNlcl9pZCI6IjdmODY1NTA3LTgwMTctNGViNC1iZTRmLTQ3ZWIyNWI5NWJmYiIsInN0YXRlIjoiY29udmVydC1ZaEZJcnpRSjB2V3JSQ1B4anh0QWZhWXpvaFFTRndEYSIsImZyb21fbG9naW5fdHlwZSI6InBhc3N3b3JkIiwidG9fbG9naW5fdHlwZSI6Im9pZGMifQ.kZDotoeDdlwmV_0KxxgXHmERFIVqIqhVziWesYQDOde1jIzgYXUqXoUXgLv1LafONUn2DElJpk-9A99bkw_amg
+FAIL
+FAIL	github.com/coder/coder/v2/coderd	70.004s
+FAIL
