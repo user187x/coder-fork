@@ -22,12 +22,15 @@ charge); true always, false never. As upstream components.yaml v0.8.1, in the re
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  # Argo CD wave 5: after the bootstrap (wave 3), so an unready metrics API never holds up the first admin
+  annotations: {argocd.argoproj.io/sync-wave: "5"}
   name: metrics-server
   labels: {app.kubernetes.io/name: metrics-server}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
+  annotations: {argocd.argoproj.io/sync-wave: "5"}
   name: system:aggregated-metrics-reader
   labels:
     app.kubernetes.io/name: metrics-server
@@ -42,6 +45,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
+  annotations: {argocd.argoproj.io/sync-wave: "5"}
   name: system:metrics-server
   labels: {app.kubernetes.io/name: metrics-server}
 rules:
@@ -55,6 +59,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
+  annotations: {argocd.argoproj.io/sync-wave: "5"}
   name: metrics-server-auth-reader
   namespace: kube-system
   labels: {app.kubernetes.io/name: metrics-server}
@@ -68,6 +73,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
+  annotations: {argocd.argoproj.io/sync-wave: "5"}
   name: metrics-server:system:auth-delegator
   labels: {app.kubernetes.io/name: metrics-server}
 roleRef:
@@ -80,6 +86,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
+  annotations: {argocd.argoproj.io/sync-wave: "5"}
   name: system:metrics-server
   labels: {app.kubernetes.io/name: metrics-server}
 roleRef:
@@ -92,6 +99,7 @@ subjects:
 apiVersion: v1
 kind: Service
 metadata:
+  annotations: {argocd.argoproj.io/sync-wave: "5"}
   name: metrics-server
   labels: {app.kubernetes.io/name: metrics-server}
 spec:
@@ -102,6 +110,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  annotations: {argocd.argoproj.io/sync-wave: "5"}
   name: metrics-server
   labels: {app.kubernetes.io/name: metrics-server}
 spec:
@@ -162,6 +171,7 @@ spec:
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
+  annotations: {argocd.argoproj.io/sync-wave: "5"}
   name: v1beta1.metrics.k8s.io
   labels: {app.kubernetes.io/name: metrics-server}
 spec:

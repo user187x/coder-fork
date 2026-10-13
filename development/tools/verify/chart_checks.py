@@ -109,6 +109,14 @@ def main():
           re.search(r"name: keycloaking-coder-oidc\s*\n\s*optional: true", r) and
           re.search(r"secretName: keycloaking-coder-ca\s*\n\s*optional: true|optional: true\s*\n\s*secretName: keycloaking-coder-ca", r),
           "client-secret and CA mounts")
+    check("the first owner is the installer's (OIDC sign-ins refused until it exists)",
+          re.search(r"CODER_PLATFORM_FIRST_OWNER\s*\n\s*value: \"?bootstrap", r), "")
+    waves = {m.group(1): int(m.group(2)) for m in re.finditer(
+        r"name: (\S*(?:bootstrap-first-user|push-template))\n(?:.*\n){0,25}?\s*argocd.argoproj.io/sync-wave: \"(\d+)\"", r)}
+    ms = re.search(r'argocd.argoproj.io/sync-wave: "(\d+)"\}?\n\s*name: metrics-server', r) or \
+        re.search(r'argocd.argoproj.io/sync-wave: "(\d+)"', r[r.find("kind: APIService"):] if "kind: APIService" in r else "")
+    check("Argo CD: the bootstrap and template push run before metrics-server (its health cannot hold them up)",
+          len(waves) == 2 and (not ms or max(waves.values()) < int(ms.group(1))), "%s, metrics-server %s" % (waves, ms.group(1) if ms else "-"))
     check("telemetry and update check off", "CODER_TELEMETRY_ENABLE" not in r or re.search(r"CODER_TELEMETRY_ENABLE\s*\n\s*value: \"?false", r),
           "")
     main_tf = open(os.path.join(chart, "charts/coder-workspace/files/main.tf")).read()

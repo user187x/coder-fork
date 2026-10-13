@@ -14,6 +14,15 @@ it found. The report is [`docs/READINESS.md`](docs/READINESS.md).
     password sign-in only and restarts itself cleanly once the provider answers.
   * The Keycloak Secrets (`keycloaking-coder-oidc`, `keycloaking-coder-ca`) are optional, so the Coder pod starts
     before they exist; `install.sh` says so instead of warning that Coder won't start.
+* **The first owner is always the installer's, and an Argo CD install always gets it.**
+  * Upstream makes whoever signs in first with Keycloak the owner. Under Argo CD the bootstrap Job ran as a
+    PostSync hook, which waits for every resource to be healthy. Where metrics-server cannot reach the kubelets, its
+    APIService never became ready, so the bootstrap never ran: no admin, no template, and the first person to sign
+    in with Keycloak became the owner. Found by the air-gapped end-to-end test on 1.27.2.
+  * Now the bootstrap and the template push are Sync hooks in waves 3 and 4, once Coder and its database are
+    healthy. metrics-server is in wave 5, after them.
+  * Coder refuses Keycloak sign-ins while it has no user at all (`CODER_PLATFORM_FIRST_OWNER=bootstrap`: "Coder is
+    being set up, try again in a minute").
 * **Workspaces need nothing from the internet.**
   * Workspace image 1.8.0 has code-server 4.139.1 and File Browser 2.63.23 preinstalled, pinned by SHA-256 and
     checked offline when the image is built. The template used to download both at every workspace start, which

@@ -9,6 +9,10 @@ metadata:
     "helm.sh/hook": post-install,post-upgrade
     # Removed once it has pushed the template; a failed run stays for its logs until the next install, or an hour.
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # Argo CD: right after the bootstrap (wave 3), which writes the token this uses.
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
 spec:
   ttlSecondsAfterFinished: 3600
   backoffLimit: 1

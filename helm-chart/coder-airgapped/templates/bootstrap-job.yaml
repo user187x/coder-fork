@@ -67,6 +67,11 @@ metadata:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # Argo CD: a Sync hook in wave 3, once Coder and its database (wave 0) are healthy, not a PostSync hook that waits
+    # for every resource (an unready metrics-server, wave 5, held it up: no admin, no template).
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
 spec:
   ttlSecondsAfterFinished: 3600
   backoffLimit: 2
