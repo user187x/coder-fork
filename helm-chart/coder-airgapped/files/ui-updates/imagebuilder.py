@@ -51,6 +51,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import securitydata  # noqa: E402  (next to this file: the vulnerability databases and FIPS rules)
+
 ENABLED = os.environ.get("IMAGE_BUILDER", "") == "true"
 NAMESPACE = os.environ.get("BUILDER_NAMESPACE", "coder")
 FILES = os.environ.get("BUILDER_FILES", "/builder")
@@ -594,24 +596,24 @@ def hardening_script(spec):
     return lines
 
 
-FIPS_CIPHERS = "aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
-FIPS_MACS = "hmac-sha2-512,hmac-sha2-256"
-FIPS_KEX = "ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group14-sha256"
-
-
 def fips_script():
-    """FIPS-aligned settings: SSH limited to FIPS-approved algorithms; OpenSSL's FIPS provider made the default when a
-    validated module is installed (e.g. Ubuntu Pro's openssl-fips-module from your mirror), else TLS 1.2+ only."""
+    """FIPS-aligned settings, from the FIPS rules in force (securitydata): SSH limited to their approved algorithms;
+    OpenSSL's FIPS provider made the default when a validated module is installed (e.g. Ubuntu Pro's
+    openssl-fips-module from your mirror); TLS at their minimum version."""
+    rules = securitydata.rules()
+    ssh = rules["ssh"]
+    ciphers, macs, kex = (",".join(ssh[k]) for k in ("ciphers", "macs", "kex"))
+    tls_min = rules["tls"]["minProtocol"]
     return [
         "mkdir -p /etc/ssh/ssh_config.d /etc/ssh/sshd_config.d",
-        "printf '%s\\n' 'Ciphers " + FIPS_CIPHERS + "' 'MACs " + FIPS_MACS + "' 'KexAlgorithms " + FIPS_KEX
+        "printf '%s\\n' 'Ciphers " + ciphers + "' 'MACs " + macs + "' 'KexAlgorithms " + kex
         + "' > /etc/ssh/ssh_config.d/coder-fips.conf",
         "cp /etc/ssh/ssh_config.d/coder-fips.conf /etc/ssh/sshd_config.d/coder-fips.conf",
         "mod=$(ls /usr/lib/*/ossl-modules/fips.so 2>/dev/null | head -n1 || true)",
         "if [ -n \"$mod\" ]; then openssl fipsinstall -out /etc/ssl/fipsmodule.cnf -module \"$mod\" >/dev/null 2>&1 "
         "|| true; printf '%s\\n' '' '# Image builder: FIPS provider by default' '.include /etc/ssl/fipsmodule.cnf' "
         "'[coder_fips_sect]' 'default_properties = fips=yes' >> /etc/ssl/openssl.cnf; fi",
-        "printf '%s\\n' '' '# Image builder: FIPS-aligned TLS' '[system_default_sect]' 'MinProtocol = TLSv1.2' "
+        "printf '%s\\n' '' '# Image builder: FIPS-aligned TLS' '[system_default_sect]' 'MinProtocol = " + tls_min + "' "
         "'CipherString = DEFAULT:@SECLEVEL=2' >> /etc/ssl/openssl.cnf",
         "mkdir -p /etc/coder-image && echo fips > /etc/coder-image/fips",
     ]
@@ -1008,14 +1010,17 @@ def job_name(kind, image_id, build_id):
     return ("coder-image-%s-%s-%d" % (kind, image_id, build_id))[:63].rstrip("-")
 
 
+# What Jobs that run this file need of the service's code (imagebuilder imports securitydata, which reads the rules).
+CODE_ITEMS = [{"key": k, "path": k} for k in ("imagebuilder.py", "securitydata.py", "fips-rules.json")]
+
+
 def pod_spec(containers, init=None, unconfined=False):
     spec = {
         "restartPolicy": "Never",
         "securityContext": {"runAsNonRoot": True, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000,
                             "seccompProfile": {"type": "Unconfined" if unconfined else "RuntimeDefault"}},
         "containers": containers,
-        "volumes": [{"name": "code", "configMap": {"name": "coder-ui-updates", "items": [
-            {"key": "imagebuilder.py", "path": "imagebuilder.py"}]}}],
+        "volumes": [{"name": "code", "configMap": {"name": "coder-ui-updates", "items": CODE_ITEMS}}],
     }
     if unconfined:
         spec["securityContext"]["appArmorProfile"] = {"type": "Unconfined"}
@@ -1066,8 +1071,21 @@ def scan_job(image_id, build_id, version, token):
          "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "2", "memory": "4Gi"}},
          "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
          "volumeMounts": [{"name": "code", "mountPath": "/app"}, {"name": "tmp", "mountPath": "/tmp"}]}
-    spec = pod_spec([c])
+    init = None
+    if securitydata.active_bundle():
+        # the uploaded security data (vulnerability and Java databases, FIPS rules), fetched from the service
+        url = "%s%s/internal/builds/%s/security-data.tar.gz" % (SERVICE_URL, BASE, token)
+        init = [{"name": "security-data", "image": TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent",
+                 "command": ["python3", "/app/securitydata.py", "fetch", url, "/sec"],
+                 "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+                 "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"memory": "1Gi"}},
+                 "volumeMounts": [{"name": "sec", "mountPath": "/sec"}, {"name": "code", "mountPath": "/app"}]}]
+        c["env"].append({"name": "SECURITY_DIR", "value": "/sec"})
+        c["volumeMounts"].append({"name": "sec", "mountPath": "/sec", "readOnly": True})
+    spec = pod_spec([c], init=init)
     spec["volumes"].append({"name": "tmp", "emptyDir": {"sizeLimit": "8Gi"}})
+    if init:
+        spec["volumes"].append({"name": "sec", "emptyDir": {"sizeLimit": "8Gi"}})
     return name, job_body(name, image_id, build_id, "scan", spec)
 
 
@@ -1280,25 +1298,7 @@ class Build(threading.Thread):
         _, digest = manifest(repo, str(self.version))
         size = image_size(repo, str(self.version))
         # the scan
-        self.advance("scan")
-        STORE.update_build(self.build_id, status="scanning")
-        name, body = scan_job(self.image_id, self.build_id, self.version, self.token)
-        self._job(body)
-        deadline = time.time() + 1800
-        while time.time() < deadline and not self.cancelled:
-            b = STORE.build(self.build_id)
-            if b.get("stage") == "checks-done":
-                break
-            code, _ = self._exit_code_quick(name)
-            if code not in (None, 0):
-                STORE.append_log(self.build_id, "\n[scan] the scan Job failed (exit %s); the image is kept, without a "
-                                 "report.\n" % code)
-                break
-            if code == 0 and STORE.build(self.build_id).get("stage") != "checks-done":
-                time.sleep(3)
-                break
-            time.sleep(3)
-        report = (STORE.setting("report-%d" % self.build_id) or None)
+        report = self._scan()
         STORE.set(self.image_id, status="ready", version=self.version, ref="%s/%s:%d" % (REGISTRY, repo, self.version),
                   digest=digest, size=size, builtAt=now(), builtBy=self.user, report=report)
         self.done = {k for k, _ in self.plan}
@@ -1315,9 +1315,39 @@ class Build(threading.Thread):
                 if LOG:
                     LOG(event="image-s3-backup-failed", image=self.image_id, error=str(e)[:300])
 
+    def _scan(self):
+        """The scan Job (trivy and the image checks, with the security data in force): the report, or None."""
+        self.advance("scan")
+        STORE.update_build(self.build_id, status="scanning")
+        name, body = scan_job(self.image_id, self.build_id, self.version, self.token)
+        self._job(body)
+        deadline = time.time() + 1800
+        while time.time() < deadline and not self.cancelled:
+            b = STORE.build(self.build_id)
+            if b.get("stage") == "checks-done":
+                break
+            code, reason = self._exit_code_quick(name)
+            if code not in (None, 0):
+                STORE.append_log(self.build_id, "\n[scan] the scan Job failed (exit %s%s); the image is kept, without a "
+                                 "report.\n" % (code, ", " + reason if reason else ""))
+                break
+            if code == 0 and STORE.build(self.build_id).get("stage") != "checks-done":
+                time.sleep(3)
+                break
+            time.sleep(3)
+        return STORE.setting("report-%d" % self.build_id) or None
+
     def _exit_code_quick(self, job):
         pod = self._pod(job)
-        for cs in ((pod or {}).get("status") or {}).get("containerStatuses") or []:
+        st = (pod or {}).get("status") or {}
+        # a failed init container (the security data fetch) fails the pod before the scan runs
+        for cs in st.get("initContainerStatuses") or []:
+            t = (cs.get("state") or {}).get("terminated")
+            if t and t.get("exitCode", 0) != 0:
+                return t.get("exitCode", 1), "%s: %s" % (cs.get("name"), t.get("reason") or "failed")
+        if st.get("phase") == "Failed" and not st.get("containerStatuses"):
+            return 1, "the pod failed"
+        for cs in st.get("containerStatuses") or []:
             t = cs["state"].get("terminated")
             if t:
                 return t.get("exitCode", 1), t.get("reason")
@@ -1345,6 +1375,78 @@ def start_build(image_id, user):
     BUILDS[build_id] = b
     b.start()
     return build_id
+
+
+class Rescan(Build):
+    """A built image scanned again, with the security data in force (after new data is loaded): a new report for its
+    current version, nothing rebuilt. It shows as a build of that version with only the scan steps."""
+
+    def __init__(self, image_id, build_id, version, token, spec, user):
+        super().__init__(image_id, build_id, version, token, spec, user)
+        self.plan = [("scan", "Scanning it for vulnerabilities and secrets"),
+                     ("checks", "Checking its security and FIPS readiness")]
+        self.current = "scan"
+
+    def _run(self):
+        data = securitydata.stamp()
+        STORE.update_build(self.build_id, status="scanning", steps=self.steps(),
+                           message="Rescanning with the vulnerability database of %s" % (
+                               (data.get("vulnerabilityDbUpdatedAt") or "?")[:10]))
+        report = self._scan()
+        if self.cancelled:
+            raise RuntimeError("cancelled")
+        if not report:
+            raise RuntimeError("The scan gave no report. See the log.")
+        STORE.set(self.image_id, report=report)
+        self.done = {k for k, _ in self.plan}
+        STORE.update_build(self.build_id, status="ready", progress=1.0, stage="done", finished_at=now(),
+                           message="Rescanned: grade %s" % ((report_summary(report) or {}).get("grade") or "?"),
+                           steps=self.steps())
+        if LOG:
+            LOG(event="image-rescanned", image=self.image_id, build=self.build_id, version=self.version,
+                grade=(report_summary(report) or {}).get("grade"), data=data)
+
+
+def start_rescan(image_id, user):
+    img = STORE.image(image_id)
+    if not img or not img.get("ref"):
+        raise ValueError("Only a built image can be rescanned.")
+    if STORE.active_build(image_id):
+        raise ValueError("This image is being built or scanned already.")
+    build_id, token = STORE.new_build(image_id, img["version"], img["spec"], user)
+    b = Rescan(image_id, build_id, img["version"], token, img["spec"], user)
+    STORE.update_build(build_id, steps=b.steps(), status="scanning")
+    BUILDS[build_id] = b
+    b.start()
+    return build_id
+
+
+RESCAN_ALL = {"running": False, "queued": [], "done": [], "failed": [], "startedAt": None}
+
+
+def rescan_all(user):
+    """Every built image scanned again, one after another (each scan can take a few GB of memory)."""
+    if RESCAN_ALL["running"]:
+        raise ValueError("A rescan of every image is running already.")
+    ids = [i["id"] for i in STORE.images() if i.get("pullRef") and not STORE.active_build(i["id"])]
+    RESCAN_ALL.update(running=True, queued=list(ids), done=[], failed=[], startedAt=now())
+
+    def run():
+        try:
+            for image_id in ids:
+                try:
+                    build_id = start_rescan(image_id, user)
+                    BUILDS[build_id].join()
+                    ok = (STORE.build(build_id) or {}).get("status") == "ready"
+                    RESCAN_ALL["done" if ok else "failed"].append(image_id)
+                except Exception:  # noqa: BLE001 - the next image is still scanned
+                    RESCAN_ALL["failed"].append(image_id)
+                RESCAN_ALL["queued"].remove(image_id)
+        finally:
+            RESCAN_ALL["running"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+    return ids
 
 
 def cancel_build(image_id, build_id):
@@ -1485,14 +1587,16 @@ def image_checks(config, files, contents):
     return checks, pkgs
 
 
-def fips_checks(files, contents, pkgs):
+def fips_checks(files, contents, pkgs, rules=None):
+    """The image's part of FIPS 140 readiness, graded against the FIPS rules in force (securitydata)."""
+    rules = rules or securitydata.rules()
     out = []
 
     def add(cid, title, status, detail):
         out.append({"id": cid, "title": title, "status": status, "detail": detail})
 
-    module = sorted(p for p in files if re.match(r"usr/lib/[^/]+/ossl-modules/fips\.so$", p))
-    validated = [p for p in pkgs if p in ("openssl-fips-module-3", "ubuntu-fips", "libssl3-fips", "fips-initramfs")]
+    module = sorted(p for p in files if re.match(rules["providerPath"], p))
+    validated = [p for p in pkgs if p in rules["validatedPackages"]]
     add("module", "A FIPS 140 validated OpenSSL module is installed",
         "pass" if module and validated else "warn" if module else "fail",
         ("Ubuntu Pro FIPS packages: %s." % ", ".join(validated)) if validated
@@ -1504,16 +1608,18 @@ def fips_checks(files, contents, pkgs):
         "pass" if re.search(r"default_properties\s*=\s*fips\s*=\s*yes", cnf) and "fipsmodule.cnf" in cnf else "fail",
         "openssl.cnf makes fips=yes the default." if "fips=yes" in cnf.replace(" ", "") else
         "openssl.cnf does not select the FIPS provider (FIPS-aligned crypto, in the builder, does once a module is there).")
-    tls = re.search(r"MinProtocol\s*=\s*TLSv1\.[23]", cnf)
-    add("tls", "TLS 1.2 or later only", "pass" if tls else "warn",
+    floor = rules["tls"]["minProtocol"]
+    allowed = r"TLSv1\.[23]" if floor == "TLSv1.2" else r"TLSv1\.3"
+    tls = re.search(r"MinProtocol\s*=\s*" + allowed, cnf)
+    add("tls", "TLS %s or later only" % floor.replace("TLSv", ""), "pass" if tls else "warn",
         "openssl.cnf sets MinProtocol." if tls else "Older TLS versions are allowed by OpenSSL's defaults.")
     ssh = "\n".join(v for k, v in contents.items() if k.startswith("etc/ssh/ssh_config"))
     ciphers = re.findall(r"^\s*Ciphers\s+(\S+)", ssh, re.M | re.I)
-    approved = set(FIPS_CIPHERS.split(","))
+    approved = set(rules["ssh"]["ciphers"])
     ok = ciphers and all(set(c.split(",")) <= approved for c in ciphers)
     add("ssh", "SSH uses FIPS-approved ciphers", "pass" if ok else "warn",
         "Ciphers: %s." % ciphers[-1] if ciphers else "SSH's defaults include ciphers FIPS does not approve (chacha20).")
-    gnutls = [p for p in pkgs if p.startswith("libgnutls")]
+    gnutls = [p for p in pkgs if any(p.startswith(x) for x in rules["nonFipsLibraries"])]
     add("other-libs", "Other crypto libraries", "warn" if gnutls else "pass",
         "GnuTLS / libgcrypt run in FIPS mode only when the host kernel does: %s." % ", ".join(gnutls[:4]) if gnutls
         else "Only OpenSSL.")
@@ -1528,6 +1634,8 @@ def fips_checks(files, contents, pkgs):
     else:
         status = "partial"
     return {"status": status, "checks": out,
+            "rules": {"version": rules.get("version"), "published": rules.get("published"),
+                      "standard": rules.get("standard")},
             "note": "An image cannot be FIPS certified on its own: it needs a validated module, FIPS mode on its "
                     "nodes, and applications that use them. This checks the image's part."}
 
@@ -1541,11 +1649,16 @@ def scan(ref, report_url):
 
     post({"progress": "scan"})
     report = {"ref": ref, "scannedAt": now()}
-    # Java archives need trivy's separate Java database, which the air-gapped bundle doesn't carry: not analysed.
-    p = subprocess.run(["trivy", "image", "--insecure", "--cache-backend", "memory", "--scanners", "vuln,secret",
-                        "--skip-files", "**/*.jar", "--skip-files", "**/*.war", "--skip-files", "**/*.ear",
-                        "--format", "json", "--quiet", "--timeout", "25m", ref],
-                       capture_output=True, timeout=1800)
+    # the security data in force: fetched by the init container (an uploaded set), else the bundled
+    data = securitydata.job_stamp(os.environ.get("SECURITY_DIR"))
+    report["data"] = data["stamp"]
+    cmd = ["trivy", "image", "--insecure", "--cache-backend", "memory", "--cache-dir", data["cacheDir"],
+           "--skip-db-update", "--skip-java-db-update", "--scanners", "vuln,secret",
+           "--format", "json", "--quiet", "--timeout", "25m"]
+    if not data["java"]:
+        # Java archives need trivy's Java database: without one (the bundled data), they are not analysed
+        cmd += ["--skip-files", "**/*.jar", "--skip-files", "**/*.war", "--skip-files", "**/*.ear"]
+    p = subprocess.run(cmd + [ref], capture_output=True, timeout=1800)
     try:
         t = json.loads(p.stdout or b"{}")
     except ValueError:
@@ -1567,19 +1680,16 @@ def scan(ref, report_url):
     report["vulnerabilities"] = {"counts": counts, "total": len(vulns), "fixable": sum(1 for v in vulns if v["fixed"]),
                                  "top": vulns[:200], "scanned": not report.get("error"),
                                  "os": (t.get("Metadata") or {}).get("OS"),
-                                 "note": "Java archives (.jar) are not checked: their vulnerability database is not "
-                                         "in the bundle."}
+                                 "javaScanned": data["java"],
+                                 "note": "" if data["java"] else "Java archives (.jar) are not checked: load security "
+                                         "data with the Java database (Images > Settings) to check them."}
     report["secrets"] = secrets_[:50]
-    d = subprocess.run(["trivy", "--version", "--format", "json"], capture_output=True)
-    try:
-        report["dbUpdatedAt"] = (json.loads(d.stdout).get("VulnerabilityDB") or {}).get("UpdatedAt")
-    except ValueError:
-        report["dbUpdatedAt"] = None
+    report["dbUpdatedAt"] = data["stamp"]["vulnerabilityDbUpdatedAt"]
     post({"progress": "checks"})
     config, files, contents = walk_image(ref)
     checks, pkgs = image_checks(config, files, contents)
     report["checks"] = checks
-    report["fips"] = fips_checks(files, contents, pkgs)
+    report["fips"] = fips_checks(files, contents, pkgs, data["rules"] or None)
     release = contents.get("etc/os-release") or contents.get("usr/lib/os-release") or ""
     report["os"] = (re.search(r'^PRETTY_NAME="?([^"\n]+)', release, re.M) or [None, None])[1]
     report["grade"] = grade(report)
@@ -1599,7 +1709,7 @@ def can_edit(user, admin_roles):
 
 def handle_internal(h, method, path):
     """Build and scan Jobs: token-protected, no user."""
-    m = re.match(r"^%s/internal/builds/([A-Za-z0-9_-]{20,})/(context\.tar|report)$" % BASE, path)
+    m = re.match(r"^%s/internal/builds/([A-Za-z0-9_-]{20,})/(context\.tar|report|security-data\.tar\.gz)$" % BASE, path)
     if not m or not STORE:
         return False
     b = STORE.build(token=m.group(1))
@@ -1614,6 +1724,20 @@ def handle_internal(h, method, path):
         h.end_headers()
         h.close_connection = True
         context_tar(spec, b["image_id"], b["version"], base_ref_for(spec), h.wfile)
+        return True
+    if m.group(2) == "security-data.tar.gz" and method == "GET":
+        bundle = securitydata.active_bundle()
+        if not bundle:
+            h.send(404, "no uploaded security data\n")
+            return True
+        h.send_response(200)
+        h.send_header("Content-Type", "application/gzip")
+        h.send_header("Content-Length", str(os.path.getsize(bundle)))
+        h.send_header("Connection", "close")
+        h.end_headers()
+        h.close_connection = True
+        with open(bundle, "rb") as f:
+            shutil.copyfileobj(f, h.wfile, 1024 * 1024)
         return True
     if m.group(2) == "report" and method == "POST":
         n = int(h.headers.get("Content-Length") or 0)
@@ -1692,6 +1816,8 @@ def route(h, method, rest, query, user, editor, admin):
             image_id = str(body.get("name") or "").strip().lower()
             if not NAME_RE.match(image_id):
                 raise ValueError("A name of 3-40 lowercase letters, digits and dashes (it becomes the image's name).")
+            if image_id in RESERVED_NAMES:
+                raise ValueError("'%s' is a name the Images view uses itself: pick another." % image_id)
             if STORE.image(image_id, full=False):
                 raise ValueError("There is an image called '%s' already." % image_id)
             spec = clean_spec(dict(empty_spec(), base=body.get("base") or {"kind": "workspace"}), image_id)
@@ -1723,6 +1849,23 @@ def route(h, method, rest, query, user, editor, admin):
             return h.send_json(200, {"dockerfile": dockerfile(spec, image_id, (STORE.image(image_id, full=False) or
                                                                                 {"version": 0})["version"] + 1, base),
                                      "steps": [{"key": k, "label": l} for k, l in build_plan(spec)]}) or True
+        if rest == "/security-data" and method == "GET":
+            return h.send_json(200, dict(securitydata.status(), canChange=admin, rescan=RESCAN_ALL)) or True
+        if rest == "/security-data" and method == "PUT":
+            if not admin:
+                return h.send_json(403, {"error": "Only admins load security data."}) or True
+            return upload_security_data(h, (q_.get("name") or ["security-data.tar.gz"])[0], user) or True
+        if rest == "/security-data/activate" and method == "POST":
+            if not admin:
+                return h.send_json(403, {"error": "Only admins load security data."}) or True
+            sid = read_json(h).get("id") or None
+            securitydata.activate(str(sid) if sid else None)
+            LOG(event="security-data-activated", id=sid or "bundled", by=user["username"])
+            return h.send_json(200, securitydata.status()) or True
+        if rest == "/rescan-all" and method == "POST":
+            need(editor)
+            ids = rescan_all(user["username"])
+            return h.send_json(200, {"images": ids}) or True
         if rest == "/settings":
             if method == "GET":
                 return h.send_json(200, {"aptSources": APT.sources(), "defaultAptSources": DEFAULT_APT_SOURCES,
@@ -1788,6 +1931,9 @@ def route(h, method, rest, query, user, editor, admin):
             STORE.delete(image_id)
             LOG(event="image-deleted", image=image_id, by=user["username"], tags=removed)
             return h.send_json(200, {"ok": True}) or True
+        if sub == "/rescan" and method == "POST":
+            need(editor)
+            return h.send_json(200, {"build": start_rescan(image_id, user["username"])}) or True
         if sub == "/build" and method == "POST":
             need(editor)
             build_id = start_build(image_id, user["username"])
@@ -1864,6 +2010,38 @@ def _quiet(fn, *args):
             LOG(event="image-s3-backup-failed", error=str(e)[:300])
 
 
+RESERVED_NAMES = {"security-data", "rescan-all", "settings", "apt-check", "apt-search", "apt-refresh", "lint", "format",
+                  "dockerfile"}
+
+
+def upload_security_data(h, name, user):
+    """A security data file (build-security-data.sh), streamed to the builder volume, verified, made active."""
+    n = int(h.headers.get("Content-Length") or -1)
+    if n < 0:
+        raise ValueError("The upload needs a Content-Length.")
+    if n > securitydata.MAX_BUNDLE:
+        raise ValueError("A security data file is at most %d GB." % (securitydata.MAX_BUNDLE // 1024 ** 3))
+    if shutil.disk_usage(FILES).free < n * 1.2:
+        raise ValueError("Not enough room on the image builder's volume for this file.")
+    tmp = os.path.join(securitydata.ROOT, secrets.token_hex(8) + ".upload")
+    try:
+        with open(tmp, "wb") as f:
+            left = n
+            while left > 0:
+                chunk = h.rfile.read(min(1024 * 1024, left))
+                if not chunk:
+                    raise ValueError("The upload stopped before the end.")
+                f.write(chunk)
+                left -= len(chunk)
+        info = securitydata.install(tmp, user["username"], re.sub(r"[^A-Za-z0-9._-]", "-", name)[:120])
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    LOG(event="security-data-installed", id=info["id"], by=user["username"], size=info["size"],
+        db=(info.get("db") or {}).get("UpdatedAt"), java=bool(info.get("javaDb")))
+    h.send_json(200, securitydata.status())
+
+
 def upload(h, image_id, kind, name, install):
     """A file streamed to the builder volume (up to 2 GB): a .deb, an installation's file or a dotfile."""
     if not FILE_NAME_RE.match(name):
@@ -1907,6 +2085,7 @@ def start():
     global STORE
     if ENABLED:
         STORE = DB(os.path.join(FILES, "images.sqlite"))
+        securitydata.setup(FILES)
 
 
 if __name__ == "__main__":

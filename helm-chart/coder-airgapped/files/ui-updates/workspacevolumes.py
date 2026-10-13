@@ -228,8 +228,7 @@ def workspace_node(wid):
 
 def job_body(name, op_id, containers, volumes, root=False, node=None):
     code = {"name": "code", "configMap": {"name": "coder-ui-updates", "items": [
-        {"key": "workspacevolumes.py", "path": "workspacevolumes.py"},
-        {"key": "imagebuilder.py", "path": "imagebuilder.py"}]}}
+        {"key": "workspacevolumes.py", "path": "workspacevolumes.py"}] + ib.CODE_ITEMS}}
     ctx = ({"runAsUser": 0, "runAsGroup": 0, "seccompProfile": {"type": "RuntimeDefault"}} if root else
            {"runAsNonRoot": True, "runAsUser": 1000, "runAsGroup": 1000, "seccompProfile": {"type": "RuntimeDefault"}})
     spec = {"restartPolicy": "Never", "securityContext": ctx, "containers": containers, "volumes": volumes + [code]}

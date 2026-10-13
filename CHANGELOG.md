@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.27.0 – 2026-10-12
+
+Coder `2.0.0-platform.23` (rebuilt: `51f57ff3b`).
+
+* **Security data that can be kept current in an air gap.** The image builder grades images with trivy's
+  vulnerability database, its Java database and the FIPS rules. Until now these were fixed at the bundle's date.
+  * **`development/tools/build-security-data.sh`**, run on a machine with internet access, makes a dated
+    `coder-security-data-<date>.tar.gz`. It holds both databases, downloaded by the bundle's own trivy so the schema
+    matches, the FIPS rules, and a manifest with every file's sha256. `--no-java` makes it about 100 MB instead of
+    about 1.1 GB.
+  * **Templates › Images › Settings › Security data** (admins): load the file, which is checked file by file against
+    its manifest and against trivy's database schema before it becomes active. The previous set is kept, and the
+    bundled data is one click away. It shows when the vulnerability database, the Java database and the FIPS rules
+    were last updated, and how old each is (ageing after 14 days, out of date after 30).
+  * **A "Security data" badge on the Images page** with the vulnerability database's date, green, amber or red.
+  * **Rescan**: one image (its page) or all built images (Settings), scanned again with the data in force. Nothing
+    is rebuilt; each image gets a new report for its current version.
+  * **Java archives (.jar, .war, .ear) are scanned** whenever the Java database is loaded (the bundle skipped them).
+  * **The FIPS rules are a versioned, dated file** (`files/ui-updates/fips-rules.json`: FIPS 140-3, the NIST SP
+    800-140C / 800-131A / 800-52 guidance, Canonical's validated modules). The FIPS check grades against them, and
+    FIPS-aligned crypto in new builds applies them (SSH algorithms, the TLS floor).
+  * **Every report says what graded it:** the vulnerability database's date (and its age when scanned), the Java
+    database, the FIPS rules' version and date, trivy's version. When newer data is loaded, the report says so and
+    offers a rescan.
+* Fixes found along the way:
+  * the platform service reads the databases' dates from their metadata instead of running trivy (which took it
+    past its memory limit);
+  * the scan Job's fetch of the data flushes to disk as it goes (it ran out of memory);
+  * a scan pod that fails in its init container ends the scan at once with the reason, instead of after 30 minutes.
+
 ## 1.26.3 – 2026-10-12
 
 Coder `2.0.0-platform.23` (rebuilt: `285a02453`).

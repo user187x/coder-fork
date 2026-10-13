@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.26.3.tar.gz && cd coder-airgapped-1.26.3
+tar -xzf coder-airgapped-1.27.0.tar.gz && cd coder-airgapped-1.27.0
 ./make --deploy
 ```
 
@@ -73,8 +73,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.26.3.tar.gz
-cd coder-airgapped-1.26.3
+tar -xzf coder-airgapped-1.27.0.tar.gz
+cd coder-airgapped-1.27.0
 ./mirror-images.sh list
 ```
 
@@ -85,14 +85,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.26.3` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.27.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.26.3
+cd coder-airgapped-1.27.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -254,6 +254,30 @@ bundled. Set S3 backups (bucket, region, keys, or an S3-compatible endpoint such
 
 On EKS with your own registry (`global.registry`), images start from the workspace image in that registry. On
 Minikube, `./make --deploy` seeds the built-in registry with it.
+
+## Keeping the security data current (air gap)
+
+The image builder grades every image with trivy's vulnerability database and Java database, and with the FIPS rules.
+In an air gap these age: trivy publishes a new vulnerability database every few hours, but the bundle carries the one
+from the day it was made. Templates › Images shows their dates (the "Security data" badge, and Images › Settings). It
+marks them ageing after 14 days and out of date after 30, and every report says which data graded it.
+
+To update them:
+
+1. On a machine with internet access and Docker, in this repository:
+   `development/tools/build-security-data.sh`. It writes `dist/coder-security-data-<date>.tar.gz` (about 1.1 GB;
+   `--no-java` leaves out the Java database: about 100 MB, but .jar / .war / .ear are then not scanned) and its
+   `.sha256`. It uses the bundle's own trivy (`coder-image-tools`), so the database schema matches.
+2. Carry the file across the air gap and check it: `sha256sum -c coder-security-data-<date>.tar.gz.sha256`.
+3. In Coder, as an admin: Templates › Images › Settings › Security data › **Load security data…**. The service
+   checks every file against the file's manifest and the database's schema before switching to it. The previous set
+   is kept, and **Use the bundled data** goes back to the bundle's own.
+4. **Rescan all built images**: each built image is scanned again with the new data, one after another. Nothing is
+   rebuilt and versions stay; each image gets a new report.
+
+The FIPS rules are `helm-chart/coder-airgapped/files/ui-updates/fips-rules.json`: versioned and dated, with the
+standards they follow. Edit it (or pass `--fips-rules FILE`) when the rules change, and make a new file. FIPS-aligned
+crypto in new builds uses the rules in force too. A scan needs up to 8 Gi of scratch space with the Java database.
 
 ## metrics-server (live CPU and memory)
 
