@@ -52,14 +52,23 @@ def ensure_users(c, admin, prefix, n, owner, password):
     for i in range(n):
         name = "%s-%d" % (prefix, i)
         email = "%s@load.test" % name
-        s, _ = c.call("/api/v2/users", {"email": email, "username": name, "password": password,
-                                        "login_type": "password", "organization_ids": [org]}, token=admin)
+        for _ in range(30):
+            s, _ = c.call("/api/v2/users", {"email": email, "username": name, "password": password,
+                                            "login_type": "password", "organization_ids": [org]}, token=admin)
+            if s != 429:
+                break
+            time.sleep(5)
         if s not in (201, 409, 400):
             raise SystemExit("creating %s: %s" % (name, s))
         if owner:
             s, me = c.call("/api/v2/users/%s" % name, token=admin)
             c.call("/api/v2/users/%s/roles" % name, {"roles": ["owner"]}, method="PUT", token=admin)
-        s, b = c.call("/api/v2/users/login", {"email": email, "password": password})
+        # Coder limits sign-ins per address (60 a minute): every simulated user signs in from this one, so wait.
+        for _ in range(30):
+            s, b = c.call("/api/v2/users/login", {"email": email, "password": password})
+            if s != 429:
+                break
+            time.sleep(5)
         if s != 201:
             raise SystemExit("signing in %s: %s %s" % (name, s, b[:200]))
         tokens.append(json.loads(b)["session_token"])
