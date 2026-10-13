@@ -2,8 +2,12 @@
 
 ## 1.31.0 – 2026-10-13
 
-Coder `2.0.0-platform.29` (fork `d799ac97b`), workspace image `coder-workspace:1.8.3`.
+Coder `2.0.0-platform.30` (fork `025b37162`), workspace image `coder-workspace:1.8.3`.
 
+* **The Inbox's buttons show what they do.** Both worked, but looked broken: Mark all as read stayed clickable with
+  nothing unread (and then changed nothing), and Clear all's first click only turned its icon red. Now Mark all as
+  read is disabled when nothing is unread ("Nothing unread") and says how many it marked; Clear all's first click
+  opens it into a labelled "Clear all?" for 4 seconds, and it says how many notifications it deleted.
 * **The workspace image's critical vulnerability is fixed** (CVE-2026-102422, arbitrary command execution in
   `shell-quote`). code-server 4.141.0, the newest release, ships shell-quote 1.10.0 among VS Code's modules; the
   image build replaces it with 1.12.0 (the newest; 1.11.0 fixed it), checked by its npm SHA-512. quote and parse give
