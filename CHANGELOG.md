@@ -2,7 +2,7 @@
 
 ## 1.28.0 – 2026-10-13
 
-Coder `2.0.0-platform.24` (fork `40db301bf`), workspace image `coder-workspace:1.8.0`. Release-readiness work: a
+Coder `2.0.0-platform.24` (fork `114c252b3`), workspace image `coder-workspace:1.8.0`. Release-readiness work: a
 full check of the published 1.27.2 against an air gap, Keycloak outages, EKS, rollback and load, with fixes for what
 it found. The report is [`docs/READINESS.md`](docs/READINESS.md).
 

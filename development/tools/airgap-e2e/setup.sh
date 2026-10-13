@@ -12,7 +12,7 @@ say() { printf '\n=== %s\n' "$*"; }
 
 say "kind cluster"
 kind get clusters 2>/dev/null | grep -qx airgap-test || kind create cluster --config "$W/kind.yaml" --kubeconfig "$KUBECONFIG"
-docker inspect airgap-registry >/dev/null 2>&1 || docker run -d --restart=no --name airgap-registry -p 127.0.0.1:5001:5000 registry:2 >/dev/null
+docker inspect airgap-registry >/dev/null 2>&1 || docker run -d --restart=no --name airgap-registry --tmpfs /var/lib/registry:size=24g -p 127.0.0.1:5001:5000 registry:2 >/dev/null
 docker network connect kind airgap-registry 2>/dev/null || true
 docker exec airgap-test-control-plane sh -c 'for h in localhost:5001 airgap-registry:5000; do mkdir -p /etc/containerd/certs.d/$h; printf "[host.\"http://airgap-registry:5000\"]\n" > /etc/containerd/certs.d/$h/hosts.toml; done'
 

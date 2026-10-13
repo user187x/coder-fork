@@ -12,7 +12,7 @@ kubectl delete ns coder --ignore-not-found --wait=true --timeout=300s >/dev/null
 helm -n cnpg-system uninstall cnpg >/dev/null 2>&1; kubectl delete ns cnpg-system --ignore-not-found --wait=true --timeout=120s >/dev/null
 kubectl delete clusterrole,clusterrolebinding coder-ui-updates-coder --ignore-not-found >/dev/null
 kubectl -n argocd delete role,rolebinding coder-ui-updates --ignore-not-found >/dev/null
-docker rm -f airgap-registry >/dev/null; docker run -d --restart=no --name airgap-registry -p 127.0.0.1:5001:5000 registry:2 >/dev/null
+docker rm -f airgap-registry >/dev/null; docker run -d --restart=no --name airgap-registry --tmpfs /var/lib/registry:size=24g -p 127.0.0.1:5001:5000 registry:2 >/dev/null
 docker network connect kind airgap-registry
 RIP=$(docker inspect airgap-registry -f '{{(index .NetworkSettings.Networks "kind").IPAddress}}')
 kubectl -n default patch endpointslice airgap-registry-1 --type=json -p "[{\"op\":\"replace\",\"path\":\"/endpoints/0/addresses/0\",\"value\":\"$RIP\"}]" >/dev/null
@@ -26,7 +26,7 @@ say "Step 1"; (cd $B && ./mirror-images.sh verify && ./mirror-images.sh list) > 
 tail -n 15 $W/s1.log; grep -q ' absent ' $W/s1.log && { echo "FAILED: images missing from the bundle"; exit 1; }
 say "Step 2"; cp -r $B $W/airgap/; A=$W/airgap/$(basename $B)
 say "Step 3"   # in a docker with no images at all: everything must come from images/
-docker rm -f e2e-dind >/dev/null 2>&1
+docker rm -f e2e-dind >/dev/null 2>&1; while docker inspect e2e-dind >/dev/null 2>&1; do sleep 1; done   # removal can lag
 # Own network namespace on the kind network (never --network host: its dockerd would take over the host's docker0).
 docker run -d --privileged --network kind --name e2e-dind -v $A:/bundle:ro docker:29-dind \
   dockerd --host=unix:///var/run/docker.sock --insecure-registry=airgap-registry:5000 >/dev/null

@@ -116,7 +116,9 @@ push)
 			aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1 ||
 				aws ecr create-repository --repository-name "$repo" >/dev/null
 		fi
-		echo "$img -> $dst"; docker tag "$img" "$dst"; docker push -q "$dst"
+		echo "$img -> $dst"; docker tag "$img" "$dst"
+		# A registry on slow storage can time out on a large layer: try again (pushed layers are not sent twice).
+		for try in 1 2 3; do docker push -q "$dst" && break; ((try < 3)) || exit 1; echo "push failed, retrying ($try/3)"; sleep 10; done
 	done
 	;;
 verify)
