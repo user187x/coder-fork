@@ -13,7 +13,7 @@ coder:
   internalUrl: ""
 
 # Image of the template-push Job's coder CLI.
-cliImage: "ghcr.io/user187x/coder-platform:2.0.0-platform.32-airgap"
+cliImage: "ghcr.io/user187x/coder-platform:2.0.0-platform.33-airgap"
 # Any image with python3: signs in with coder-init-auth when there is no token Secret.
 loginImage: "docker.io/library/python:3.13-alpine"
 

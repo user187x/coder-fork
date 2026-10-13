@@ -113,7 +113,8 @@ The full feature list, with where each piece lives and how it is tested, is
   live bar graphs coloured by magnitude, a gauge and a percentage chip, with a Metrics Interval menu (1 s to 5 min, or
   off). The workspace's own load average is computed the kernel's way from its own threads.
 - **Network lights:** RX ↓ (green) and TX ↑ (blue) by the workspace's name, lighting up like a network card's LEDs
-  when it receives or sends data.
+  when it receives or sends data. Hovering over them shows a live graph of the last minute, received and sent side
+  by side, with the axis scaled from B/s up to GB/s.
 - **Terminal:** tmux with btop, a pop-out window, text size, a custom command, JetBrains Mono Nerd Font.
 - **Per-user quotas** and a **global workspace scheduler** (required start/stop schedules, enforced).
 - **Home volumes:** backups (S3 or download) and disk growth (in place, or a copy to a bigger volume).

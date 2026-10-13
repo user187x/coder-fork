@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.33.0 – 2026-10-13
+
+Coder `2.0.0-platform.33` (fork `599afe8ed`), workspace image `coder-workspace:1.8.3` (unchanged).
+
+* **The network lights' live graph:** hovering the workspace's RX / TX lights (or focusing them from the keyboard: the
+  oval is a button now) shows its traffic over the last minute: for each reading, a bar for what it received (green)
+  and one for what it sent (blue), side by side across the seconds the reading covers. The time axis follows the
+  readings' own times (the agent batches its metadata, so they arrive every few seconds although the template asks
+  for one a second). The Y axis scales with the busiest reading shown, to a round top in B/s, KB/s, MB/s or GB/s
+  (0 / 25 / 50 MB/s, not raw bytes), and the legend gives the current rates. The readings are kept from when the
+  page opened, so the graph already has them when it opens; it updates live while it is open.
+
 ## 1.32.0 – 2026-10-13
 
 Coder `2.0.0-platform.32` (fork `716ec4dec`), workspace image `coder-workspace:1.8.3` (unchanged).
