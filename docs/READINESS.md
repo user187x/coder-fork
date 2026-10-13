@@ -1,7 +1,7 @@
 # Release readiness: coder-fork 1.27.2 → 1.28.0
 
 What was checked, against the version on GitHub (release **v1.27.2**, published 2026-10-13 with its bundle), what was
-found, what 1.28.0 (branch `release-readiness`) fixes, and what is left open.
+found, what 1.28.0 fixes (on `main` since; the readiness branch is merged and gone), and what is left open.
 
 **Method:**
 1. The 1.27.2 bundle was downloaded from the GitHub release into an empty directory. Its checksums matched, and its
