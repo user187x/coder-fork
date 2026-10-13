@@ -418,6 +418,8 @@ coder-workspace:
     initAuth: '{{ .Values.global.secretNames.initAuth }}'
   template:
     name: ubuntu-vnc-desktop
+    displayName: UBUNTU      # where the template has none (one set in the dashboard is kept)
+    icon: /icon/ubuntu.svg
   icons:
     host: ""
     # Served by the platform service (coder-ui-updates); Traefik routes /__icons/ there. No separate web server.

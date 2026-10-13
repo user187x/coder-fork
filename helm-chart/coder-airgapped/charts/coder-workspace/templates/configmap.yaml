@@ -7,7 +7,6 @@ metadata:
 data:
   # The workspace template. files/main.tf is the template as pushed to Coder; files/certificates.tf installs each
   # user's PKCS#12 certificate (Coder > Settings > Certificates) as ~/.cert/<username>.p12 when a workspace starts.
-  # Source of certificates.tf: ../coder-ui-updates/resources/workspace-certificates.tf (keep the copy in step).
   main.tf: |
 {{ .Files.Get "files/main.tf" | replace "codercom/enterprise-base:ubuntu" .Values.workspaceImage | replace "secret_name = \"tls-ca\"" (printf "secret_name = %q" .Values.secrets.tlsCa) | indent 4 }}
   certificates.tf: |
@@ -17,4 +16,13 @@ data:
   # forwards it to coder-ui-updates for Observability > Agent Activity.
   agent-audit.tf: |
 {{ .Files.Get "files/agent-audit.tf" | indent 4 }}
+  {{- end }}
+  # The template's scripts (files/scripts/, read by the .tf files with file() / templatefile()): the push Job puts
+  # them in scripts/ next to the .tf files.
+  {{- range $path, $_ := .Files.Glob "files/scripts/*.sh" }}
+  {{- $name := base $path }}
+  {{- if or $.Values.agentAudit (ne $name "agent-audit.sh") }}
+  {{ $name }}: |
+{{ $.Files.Get $path | indent 4 }}
+  {{- end }}
   {{- end }}

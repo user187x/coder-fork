@@ -119,7 +119,24 @@ def main():
           len(waves) == 2 and (not ms or max(waves.values()) < int(ms.group(1))), "%s, metrics-server %s" % (waves, ms.group(1) if ms else "-"))
     check("telemetry and update check off", "CODER_TELEMETRY_ENABLE" not in r or re.search(r"CODER_TELEMETRY_ENABLE\s*\n\s*value: \"?false", r),
           "")
-    main_tf = open(os.path.join(chart, "charts/coder-workspace/files/main.tf")).read()
+    tf_dir = os.path.join(chart, "charts/coder-workspace/files")
+    scripts = sorted(glob.glob(os.path.join(tf_dir, "scripts", "*.sh")))
+    tf = {n: open(os.path.join(tf_dir, n)).read() for n in ("main.tf", "certificates.tf", "agent-audit.tf")}
+    refs = sorted({m for n in ("main.tf", "certificates.tf") for m in re.findall(r'file\("\$\{path\.module\}/scripts/([^"]+)"', tf[n])})
+    shipped = re.findall(r"^  ([\w.-]+\.sh): \|$", r, re.M)
+    check("template: every script the .tf files read is in files/scripts/ and in the push's ConfigMap",
+          refs and all(os.path.isfile(os.path.join(tf_dir, "scripts", s)) and s in shipped for s in refs),
+          "read: %s; shipped: %s" % (refs, shipped))
+    check("template: no script left inline in the .tf files (heredocs)", not any("<<" in t for t in tf.values()),
+          [n for n, t in tf.items() if "<<" in t])
+    if subprocess.run(["sh", "-c", "command -v shfmt"], capture_output=True).returncode == 0:
+        rc, out, err = run(["shfmt", "-i", "1", "-d"] + scripts)
+        check("template scripts: formatted (shfmt -i 1)", rc == 0, (out + err).strip()[:300] or "%d scripts" % len(scripts))
+    else:
+        check("template scripts: formatted (shfmt -i 1; shfmt not installed: skipped)", True, "skipped")
+    bad = [os.path.basename(s) for s in scripts if run(["bash", "-n", s])[0] != 0]
+    check("template scripts: shell syntax (bash -n)", not bad, bad or "%d scripts" % len(scripts))
+    main_tf = tf["main.tf"] + "".join(open(s).read() for s in scripts)
     downloads = re.findall(r"curl[^\n]*https://[^\s|'\"]+", main_tf)
     tools = {"code-server": "code-server", "filebrowser": "filebrowser"}
     unguarded = [d for d in downloads

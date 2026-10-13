@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.29.0 – 2026-10-13
+
+Coder `2.0.0-platform.25` (unchanged), workspace image `coder-workspace:1.8.1` (unchanged).
+
+* **The workspace template's scripts are files of their own,** in `charts/coder-workspace/files/scripts/`: the
+  startup script, the certificate install, the agent activity monitor and the five metadata scripts (RAM, disk,
+  load). The `.tf` files read them with `file()`, or `templatefile()` where they need the template's values;
+  `main.tf` went from 967 lines to 530. Formatted with `shfmt -i 1`; the static checks keep them formatted,
+  `bash -n` clean and in the push's ConfigMap, and no script back inline.
+  * `startup.sh` gets the template's values once, as shell variables at its top (`OWNER_NAME`, `CLUSTER_ADMIN`, …),
+    instead of Terraform references throughout.
+  * Checked by rendering the template with Terraform (offline): extracted as they were, every script came out byte
+    for byte the same; after formatting, they differ only in layout, comments and those variables.
+  * **The agent activity monitor's forwarder starts** (`agentAudit`, off by default). The end marker of its
+    `forward.py` heredoc was indented, so bash never found it: the heredoc ran to the end of the script, which
+    left the forwarder unstarted. As a file, the Python sits in column 0 and needs no `sed` to un-indent it.
+* **The template is shown as UBUNTU, with the Ubuntu icon** (`coder-workspace.template.displayName` / `icon`). Its
+  name, and so its URL and the CLI's `ubuntu-vnc-desktop`, stay. They are set where the template has none (a new
+  install, or one that never had them): a display name or icon set in the dashboard is kept.
+
 ## 1.28.2 – 2026-10-13
 
 Coder `2.0.0-platform.25` (fork `c174bed4b`), workspace image `coder-workspace:1.8.1` (unchanged).

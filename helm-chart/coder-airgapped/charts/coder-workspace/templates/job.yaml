@@ -56,6 +56,7 @@ spec:
               def get(path):
                   r = urllib.request.Request(base + path, headers={"Coder-Session-Token": token})
                   return json.load(urllib.request.urlopen(r, timeout=30, context=ctx))
+              templates = None
               try:
                   templates = get("/api/v2/templates")
                   if not any(t["name"] == name for t in templates):
@@ -70,11 +71,23 @@ spec:
               except Exception as e:
                   print(f"Could not look for a renamed template ({e}): pushing to {name}.")
               open("/shared/template", "w").write(name)
+
+              # The display name and icon (template.displayName / template.icon): set on a new template, and on one
+              # that has none yet. One set in the dashboard is kept. Left alone when the templates could not be read.
+              current = next((t for t in templates if t["name"] == name), {}) if templates is not None else None
+              for field, key, path in (("display_name", "TEMPLATE_DISPLAY_NAME", "/shared/display-name"),
+                                       ("icon", "TEMPLATE_ICON", "/shared/icon")):
+                  value = os.environ.get(key, "") if current is not None and not current.get(field) else ""
+                  open(path, "w").write(value)
           env:
             - name: CODER_URL
               value: {{ $url | quote }}
             - name: TEMPLATE_NAME
               value: {{ .Values.template.name | quote }}
+            - name: TEMPLATE_DISPLAY_NAME
+              value: {{ .Values.template.displayName | default "" | quote }}
+            - name: TEMPLATE_ICON
+              value: {{ .Values.template.icon | default "" | quote }}
             - name: PUSH_MESSAGE
               value: {{ printf "Deployed via Helm release %s" .Release.Name | quote }}
             - name: CODER_SESSION_TOKEN
@@ -119,8 +132,10 @@ spec:
               # Create the target workspace directory
               mkdir -p "${WORKSPACE}"
 
-              # Copy the ConfigMap's files (main.tf, certificates.tf, agent-audit.tf) as physical files
+              # Copy the ConfigMap's files as physical files: the .tf files, and their scripts in scripts/
               cp /tmp/tf-code/*.tf "${WORKSPACE}"/
+              mkdir -p "${WORKSPACE}/scripts"
+              cp /tmp/tf-code/*.sh "${WORKSPACE}/scripts"/
 
               # Push the physical directory
               # The configured name, or the template it was renamed to (the login step looks it up)
@@ -136,6 +151,16 @@ spec:
                 --variable cluster_admin_roles="{{ .adminRoles }}" \
                 {{- end }}{{ end }}
                 --yes
+
+              # The display name and icon, where the template has none yet (the login step decided).
+              DISPLAY_NAME="$(cat /shared/display-name)"
+              ICON="$(cat /shared/icon)"
+              set --
+              if [ -n "${DISPLAY_NAME}" ]; then set -- "$@" --display-name "${DISPLAY_NAME}"; fi
+              if [ -n "${ICON}" ]; then set -- "$@" --icon "${ICON}"; fi
+              if [ "$#" -gt 0 ]; then
+                coder templates edit "${TEMPLATE}" "$@" --yes
+              fi
           volumeMounts:
             - name: shared
               mountPath: /shared

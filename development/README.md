@@ -15,7 +15,7 @@ Everything needed to keep developing the coder-airgapped deliverable, other than
 | First user / template-push bootstrap | `../helm-chart/coder-airgapped/files/bootstrap/bootstrap.py`, `templates/bootstrap-job.yaml` |
 | Workspace image (desktop, fonts, tmux, preinstalled tools) | `workspace-image/` (then `tools/build-workspace-image.sh`) |
 | marimo's Python packages (all preinstalled: workspaces have no package index) | `workspace-image/marimo/requirements.in` (the build re-pins `requirements.lock`) |
-| Workspace template `ubuntu-vnc-desktop` | `../helm-chart/coder-airgapped/charts/coder-workspace/files/*.tf` |
+| Workspace template `ubuntu-vnc-desktop` (shown as UBUNTU) | `../helm-chart/coder-airgapped/charts/coder-workspace/files/*.tf`, its scripts in `files/scripts/` (format: `shfmt -i 1 -w files/scripts/*.sh`) |
 | Announcement banner | `../helm-chart/coder-airgapped/charts/coder-banner/` |
 | The Coder server itself (UI, API) | the fork, `~/workspace/coder` – see `coder-fork/FORK.md` |
 | Images that are shipped | `../helm-chart/images.txt` (+ `mirror-images.sh save`, or `tools/build-airgap-image.sh` for the custom one) |

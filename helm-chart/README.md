@@ -1,4 +1,4 @@
-# coder-airgapped 1.28.2: portable Helm chart of the live Coder fork
+# coder-airgapped 1.29.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -148,8 +148,8 @@ to Keycloak by email. Every run it mints a 30-minute API token into Secret `code
 * **`agent-audit.tf` is off by default** (`coder-workspace.agentAudit`). The live active template version (Sep 28)
   is `main.tf` + `certificates.tf`, byte-identical to the chart's. `agent-audit.tf` was added later and never went
   live: its `%{...}` snoopy format strings are Terraform template directives, so `terraform init` failed. The
-  release's Oct 2 push never produced a template version. The strings are now escaped (`%%{`), so it can be
-  switched on.
+  release's Oct 2 push never produced a template version. The strings are now escaped (`%%{`), and since 1.29.0 its
+  forwarder starts (its script's heredoc end marker was indented, so bash never found it), so it can be switched on.
 * **Push Job sign-in (fixed, coder-workspace 0.1.1).** 0.1.0 signs in with `curl`/`jq`, but neither the `coder`
   image (`latest` or `v2.37.3`) contains them. Live only worked because `install-workspace-chart` pre-created a token
   Secret. A python3 init container now does the sign-in. The push goes to the in-cluster Service

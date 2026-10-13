@@ -11,7 +11,7 @@ provisioners, the agent, apps, SSH, port forwarding, audit, insights) are all ke
   `/__coder-ui/` and `/__banner/`;
 - **chart:** the Helm chart and its installers (`helm-chart/`);
 - **image:** the workspace image (`development/workspace-image/`) and template
-  (`helm-chart/coder-airgapped/charts/coder-workspace/files/main.tf`).
+  (`helm-chart/coder-airgapped/charts/coder-workspace/files/main.tf`, its scripts in `files/scripts/`).
 
 **Test:** where the feature is checked. `vitest` and `go test` are the fork's unit tests; `step8`/`step9` are the
 air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the live suite
@@ -29,6 +29,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | No telemetry, update check, trial or premium funnel, STUN servers or GitHub/GitLab default login: Coder contacts nothing outside the network | fork | `go test ./cli` (OIDC), egress crawl |
 | Coder starts and password sign-in works before Keycloak is set up or while it is down (Keycloak's standard endpoints; other OIDC providers: password-only, then a restart once they answer). Keycloak's Secrets optional | fork, chart | `go test ./cli -run OIDC`, verify |
 | Workspace image with everything preinstalled: desktop (XFCE, noVNC), Firefox, code-server, File Browser, marimo with a data stack, tmux, btop, k9s, kubectl, kubelogin, JetBrains Mono Nerd Font | image | image build checks (offline), e2e step 8 |
+| Workspace template UBUNTU (`ubuntu-vnc-desktop`, Ubuntu icon): its scripts as files (`files/scripts/`, `shfmt -i 1`), read with `file()` / `templatefile()` | chart | chart checks, step8 |
 | Pure upstream Coder at the fork's base, as a rollback image in the bundle (`coder-upstream:2.38.0-main.70bc2e554-airgap`) | chart | verify rollback |
 | Prerequisites in the bundle: Gateway API CRDs, Traefik, CloudNativePG; Argo CD and Keycloak images for reference | chart | e2e |
 

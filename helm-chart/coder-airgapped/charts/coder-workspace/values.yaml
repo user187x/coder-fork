@@ -30,7 +30,11 @@ secrets:
   initAuth: coder-init-auth  # keys email, password: the push Job's sign-in when there is no token Secret
 
 template:
-  name: "ubuntu-vnc-desktop"
+  name: "ubuntu-vnc-desktop"      # the template's name (its URL: /templates/<name>); a rename in the dashboard is followed
+  # Shown in the dashboard instead of the name, and its icon (one of Coder's, /icon/*.svg). Set when the template has
+  # none: on a new install, or on a template that never had one. A display name or icon set in the dashboard is kept.
+  displayName: "UBUNTU"
+  icon: "/icon/ubuntu.svg"
 
 # Add files/agent-audit.tf (Observability > Agent Activity: every command run in a workspace) to the template.
 # Off by default: the reference cluster's active template is main.tf + certificates.tf only.
