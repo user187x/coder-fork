@@ -564,17 +564,21 @@ MARIMO_DARK
   EOT
 
   metadata {
-    display_name = "CPU Usage"
+    display_name = "CPU"
     key          = "0_cpu_usage"
     script       = "coder stat cpu"
     interval     = 10
     timeout      = 1
   }
 
+  # Memory in GB (10^9 bytes) like the disks, not coder stat's GiB: its JSON (indented, so joined into one line for
+  # awk) gives the bytes (the workspace's: its cgroup's usage and limit; with --host, the node's).
   metadata {
-    display_name = "RAM Usage"
+    display_name = "RAM"
     key          = "1_ram_usage"
-    script       = "coder stat mem"
+    script       = <<EOT
+      coder stat mem -o json | tr -d " \n" | awk '{ u = $0; sub(/.*"used":/, "", u); t = $0; sub(/.*"total":/, "", t); u += 0; t += 0; if (t > 0) printf "%.2f/%.2f GB (%.0f%%)", u / 1e9, t / 1e9, u * 100 / t; else printf "%.2f GB", u / 1e9 }'
+    EOT
     interval     = 10
     timeout      = 1
   }
@@ -600,7 +604,7 @@ MARIMO_DARK
   }
 
   metadata {
-    display_name = "CPU Usage"
+    display_name = "CPU"
     key          = "4_cpu_usage_host"
     script       = "coder stat cpu --host"
     interval     = 10
@@ -608,9 +612,11 @@ MARIMO_DARK
   }
 
   metadata {
-    display_name = "Memory Usage"
+    display_name = "RAM"
     key          = "5_mem_usage_host"
-    script       = "coder stat mem --host"
+    script       = <<EOT
+      coder stat mem --host -o json | tr -d " \n" | awk '{ u = $0; sub(/.*"used":/, "", u); t = $0; sub(/.*"total":/, "", t); u += 0; t += 0; if (t > 0) printf "%.2f/%.2f GB (%.0f%%)", u / 1e9, t / 1e9, u * 100 / t; else printf "%.2f GB", u / 1e9 }'
+    EOT
     interval     = 10
     timeout      = 1
   }
@@ -632,7 +638,7 @@ MARIMO_DARK
   # cores (getconf), not by nproc (in the container: the workspace's CPU limit, which made 6 / 6 cores read as fully
   # loaded on a 24-core host).
   metadata {
-    display_name = "Load Average"
+    display_name = "Load Avg"
     key          = "7_load_host"
     script       = <<EOT
       awk -v n="$(getconf _NPROCESSORS_ONLN 2>/dev/null || grep -c ^processor /proc/cpuinfo)" '{ printf "%.2f / %d cores (%.0f%%)", $1, n, $1 * 100 / n }' /proc/loadavg

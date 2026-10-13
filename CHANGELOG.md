@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.27.1 – 2026-10-12
+
+Coder `2.0.0-platform.23` (rebuilt: `9185891af`).
+
+* **Memory in GB:** the workspace's RAM Usage and the cluster's Memory Usage read in GB (10^9 bytes), like the disks,
+  instead of `coder stat`'s GiB. The template takes the bytes from `coder stat mem -o json` (the workspace's cgroup;
+  with `--host`, the node's), e.g. "0.51/2.15 GB (24%)".
+* **Each metric's percentage sits in a chip to the right of its name,** above the gauge, tinted like the graph (green,
+  yellow-green, yellow, orange, red). The value below the graph drops it: "CPU Usage [ 9% ]", then "2.24/24 cores".
+* **The workspace's apps are in a squircle** (File Browser, code-server, marimo, the terminal, ...) like the metrics'
+  Workspace and Cluster squircles. Its left and right edges line up with the metrics row below it: both sit in one
+  centred block as wide as the metrics, and the apps wrap within it. Without metrics, it takes the card's width.
+* **A smaller "+" tab** above the Logs/Terminal panels (an 18 px button in a 24 px tab), with more room above it, so
+  it no longer crowds the metrics' squircles.
+* **The running workspace's border pulse is more obvious and follows the theme:** a 3 px border that glows as it
+  pulses and two rings spreading 18 px, the second half a beat behind. Its colour is the selected theme's success
+  colour: green in Light and Dark, blue in the colour-blind themes.
+* **The sign-in page's name is a traced outline:** "Coder" (or the name set in Appearance), faintly filled, with a
+  dashed cyan stroke endlessly tracing its letters (after the "Wireframe" effect given), in the bundled JetBrains
+  Mono. It is what signing out lands on too. The light themes get a darker cyan; with the Animations switch off or
+  reduced motion, the outline is whole and still.
+* **Shorter metric names:** CPU Usage → CPU, RAM Usage and Memory Usage → RAM, Load Average → Load Avg (in both the
+  Workspace and Cluster groups).
+* Running workspaces show the memory in GB and the new names after their next update (the template's metrics come
+  with the build).
+
 ## 1.27.0 – 2026-10-12
 
 Coder `2.0.0-platform.23` (rebuilt: `52a871d12`).
