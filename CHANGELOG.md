@@ -2,7 +2,7 @@
 
 ## 1.27.0 – 2026-10-12
 
-Coder `2.0.0-platform.23` (rebuilt: `51f57ff3b`).
+Coder `2.0.0-platform.23` (rebuilt: `52a871d12`).
 
 * **Security data that can be kept current in an air gap.** The image builder grades images with trivy's
   vulnerability database, its Java database and the FIPS rules. Until now these were fixed at the bundle's date.
@@ -24,6 +24,17 @@ Coder `2.0.0-platform.23` (rebuilt: `51f57ff3b`).
   * **Every report says what graded it:** the vulnerability database's date (and its age when scanned), the Java
     database, the FIPS rules' version and date, trivy's version. When newer data is loaded, the report says so and
     offers a rescan.
+* **The running workspace's border pulses** instead of a comet of light running round it. The agent card gets a 2 px
+  green border (#27c45e) with a soft ring that expands 12 px and fades every 2 s, as in the example given. It pauses
+  while the pointer is on the card, and stays still with the Animations switch off or reduced motion.
+* **The agent's Update pill shows whenever the workspace should be updated.** Before, it showed only for an agent of
+  an older version (semver), so it never showed for an agent from another build of the same version (only the
+  build metadata differs: Coder rebuilt under the same version). Now it shows for:
+  * an older agent or API, as before;
+  * an agent from another build of the server's version;
+  * a workspace whose template has a newer version.
+
+  Its popover says which, with "Update workspace".
 * Fixes found along the way:
   * the platform service reads the databases' dates from their metadata instead of running trivy (which took it
     past its memory limit);
