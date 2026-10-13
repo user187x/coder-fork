@@ -227,6 +227,16 @@ resource "coder_agent" "main" {
     interval     = 60
     timeout      = 1
   }
+
+  # The workspace's network traffic (bytes received and sent so far), every second: not a metric display, the
+  # dashboard's network lights by the workspace's name (key ending in "net_io").
+  metadata {
+    display_name = "Network"
+    key          = "8_net_io"
+    script       = "${local.metadata_sh}\nnet"
+    interval     = 1
+    timeout      = 1
+  }
 }
 
 resource "coder_app" "marimo" {

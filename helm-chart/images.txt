@@ -4,7 +4,7 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.30-airgap  sha256:a98617225ad400163eb7b4f9f8098484d55a407cc850123ccb8082ccbfc5c9ed   coder (server); = the fork's platform.30 (025b37162) + Terraform provider mirror
+ghcr.io/user187x/coder-platform:2.0.0-platform.31-airgap  sha256:d833d1d1457710fc0aed8d884948f12f8bb056bf0198aa03435b142b2f53be7b   coder (server); = the fork's platform.31 (2e7ae6ff9) + Terraform provider mirror
 ghcr.io/user187x/coder-workspace:1.8.3                    sha256:2b2d1bea0fd8699ff20d9f2e9076f0fdb5ffc630a8e368839f7fd389bf0a0aa3   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
 ghcr.io/user187x/coder-image-tools:1.0.0                  sha256:b173c95de907b184a0219d40ac1dedb6c07a929a10406c96856eb9cda092f8af   coder-ui-updates and the Images builder's scans: the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
 ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap sha256:075fdbdd195a5b7649ce6e341f496653615a2e8785cedb46dda08660a2793410   rollback only: pure upstream Coder at the fork's base (70bc2e554) + the same Terraform provider mirror (development/coder-fork/ROLLBACK.md)

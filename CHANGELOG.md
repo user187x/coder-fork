@@ -2,8 +2,14 @@
 
 ## 1.31.0 – 2026-10-13
 
-Coder `2.0.0-platform.30` (fork `025b37162`), workspace image `coder-workspace:1.8.3`.
+Coder `2.0.0-platform.31` (fork `2e7ae6ff9`), workspace image `coder-workspace:1.8.3`.
 
+* **The workspace's network lights:** in the workspace panel's header, between the workspace's name and the latency,
+  a small oval with **RX ↓** (green) and **TX ↑** (blue) that light up like a network card's activity LEDs when the
+  workspace receives or sends data: each second with traffic flickers its light, more often the busier it is (the
+  tooltip gives the rates). The template reports the workspace's own byte counters every second (`net` in
+  `metadata.sh`, metadata `8_net_io`, every interface of its pod but loopback); it is not one of the metric displays.
+  A workspace on an older template version shows the lights dimmed until it is updated.
 * **The Inbox's buttons show what they do.** Both worked, but looked broken: Mark all as read stayed clickable with
   nothing unread (and then changed nothing), and Clear all's first click only turned its icon red. Now Mark all as
   read is disabled when nothing is unread ("Nothing unread") and says how many it marked; Clear all's first click

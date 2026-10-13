@@ -101,6 +101,13 @@ load_host() {
  _load "$avg" "$(getconf _NPROCESSORS_ONLN 2>/dev/null || grep -c ^processor /proc/cpuinfo)"
 }
 
+# The workspace's network traffic so far, as "received sent" bytes: every interface of its own network namespace (the
+# pod's) but loopback. Not a metric display: the dashboard's network lights (RX / TX, by the workspace's name) compare
+# one reading with the next and light up when bytes went in or out.
+net() {
+ awk 'NR > 2 { sub(/:/, " "); if ($1 != "lo") { rx += $2; tx += $10 } } END { printf "%.0f %.0f", rx, tx }' /proc/net/dev
+}
+
 # As a command: bash metadata.sh <metric>.
 if [ "$#" -gt 0 ]; then
  "$@"
