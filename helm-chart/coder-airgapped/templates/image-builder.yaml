@@ -68,7 +68,14 @@ spec:
         - name: garbage-collect
           image: {{ $ib.registry.image }}
           imagePullPolicy: IfNotPresent
-          command: [registry, garbage-collect, --delete-untagged, /etc/distribution/config.yml]
+          # A new (empty) volume has nothing to collect, and garbage-collect fails on it ("Path not found"): skipped.
+          command: [/bin/sh, -c]
+          args:
+            - |
+              if [ -d /var/lib/registry/docker/registry/v2/repositories ]; then
+                exec registry garbage-collect --delete-untagged /etc/distribution/config.yml
+              fi
+              echo "empty registry: nothing to collect"
           env:
             - {name: REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY, value: /var/lib/registry}
             - {name: REGISTRY_STORAGE_DELETE_ENABLED, value: "true"}

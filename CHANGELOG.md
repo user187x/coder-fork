@@ -28,6 +28,9 @@ it found. The report is [`docs/READINESS.md`](docs/READINESS.md).
     on EKS, BuildKit had to pull it from your registry, which needs credentials: ECR with node roles has none.
   * A GNOME build, or one with apt packages, and no apt mirror is refused before it starts, with the reason. It
     used to fail halfway.
+* **The image builder's registry starts on a fresh install:** its garbage-collect step failed on an empty volume
+  ("Path not found"), so on every new install the registry crash-looped and the image builder could not build. Found
+  by the air-gapped end-to-end test; the development cluster's registry already had data.
 * **EKS volumes:** workspaces' home volumes and the image builder's take the chosen StorageClass. EKS clusters may
   have no default class, which left them Pending.
   * `coder-workspace.storageClass` sets it for workspaces; `./make --deploy` sets it everywhere off Minikube. The
@@ -37,6 +40,9 @@ it found. The report is [`docs/READINESS.md`](docs/READINESS.md).
   the bundle. No published upstream release can take the fork's database yet: v2.38.0 stops at migration 605, the
   fork is at 611. `development/coder-fork/ROLLBACK.md` has the procedure. Tested on a copy of the development
   database: upstream starts, sees everything, and the fork rolls forward.
+* **A slow platform service no longer holds the dashboard up:** every page waits for its boot script
+  (`/__coder-ui/boot.js`); Coder now gives it 3 s and then serves an empty one, so the dashboard starts with its
+  defaults. Quota and schedule checks already let workspaces through when the service gives no answer.
 * **Under load:** the platform service's session cache is least-recently-used with 20,000 entries. It used to be
   cleared whole past 2,000, which under a large team sent every request back to Coder's API.
 * **A verification suite,** `development/tools/verify/` (`run.sh`):

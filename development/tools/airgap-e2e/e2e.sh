@@ -50,6 +50,7 @@ v["database"]["storage"]["storageClass"] = "standard"; v["uiUpdates"]["persisten
 for k in ("registry", "files"):
     v.setdefault("imageBuilder", {}).setdefault(k, {})["storageClass"] = "standard"
 v.setdefault("coder-workspace", {})["storageClass"] = "standard"
+v.setdefault("metricsServer", {})["kubeletInsecureTLS"] = True   # kind's kubelets: self-signed serving certificates
 yaml.safe_dump_all([sec, app], open(p, "w"), sort_keys=False); print("filled in, chart", app["spec"]["source"]["targetRevision"])
 PY
 say "Step 7"; kubectl apply -f $A/argocd/coder-airgapped-application.yaml; START=$(date +%s)
