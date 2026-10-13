@@ -2,7 +2,7 @@
 
 ## 1.29.0 – 2026-10-13
 
-Coder `2.0.0-platform.26` (fork `100cc87d8`), workspace image `coder-workspace:1.8.1` (unchanged).
+Coder `2.0.0-platform.27` (fork `6b26be930`), workspace image `coder-workspace:1.8.1` (unchanged).
 
 * **The workspace template's scripts are files of their own,** in `charts/coder-workspace/files/scripts/`: the
   startup script, the certificate install, the agent activity monitor, and the metrics in one `metadata.sh` with a
@@ -21,10 +21,17 @@ Coder `2.0.0-platform.26` (fork `100cc87d8`), workspace image `coder-workspace:1
   node's, so `load` counts the kernel's way from the workspace's own threads (running, waiting for a CPU, or in
   uninterruptible sleep), in a 1-minute decaying average with the kernel's weight, over the workspace's CPU limit:
   three busy processes in a 2-core workspace read `3.00 / 2 cores (150%)`.
-* **An easter egg in the announcement's terminal** (the banner's down arrow): its prompt takes typing, Enter answers
-  `command not found`, and typing `skynet` fades the whole screen into Skynet. A click or any key dismisses it: the
+* **An easter egg in the announcement's terminal** (the banner's down arrow): its prompt takes typing. Enter answers
+  any command with a wagging finger (`no-no.gif`, printed inline as image-capable terminals do) and
+  "ahh ahh ahh..." typed out with the banner's typewriter effect; typing `skynet` fades the whole screen into the
+  Skynet logo (fitted to any screen shape, on black). A click or any key dismisses it: the
   picture tears into shifted, colour-split slices and collapses like an old screen switching off. Without animations
   (the setting, or reduced motion) it simply fades.
+* **The Viewed box's tooltip names the user's certificate:** `Certificate Fingerprint:` (its SHA-256) and, on the
+  next line, `MD5 HASH:` (its MD5), in place of `TLS/x509 Fingerprint:`; both lines are left out when the user has
+  no certificate. Settings › Certificates now records the MD5 with the SHA-256 at upload (WebCrypto has no MD5:
+  the dashboard computes it, checked against RFC 1321's test vectors). A certificate uploaded before says "not
+  recorded" for its MD5 until it is uploaded again.
 * **The template is shown as UBUNTU, with the Ubuntu icon** (`coder-workspace.template.displayName` / `icon`). Its
   name, and so its URL and the CLI's `ubuntu-vnc-desktop`, stay. They are set where the template has none (a new
   install, or one that never had them): a display name or icon set in the dashboard is kept.
