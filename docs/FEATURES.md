@@ -29,6 +29,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | No telemetry, update check, trial or premium funnel, STUN servers or GitHub/GitLab default login: Coder contacts nothing outside the network | fork | `go test ./cli` (OIDC), egress crawl |
 | Coder starts and password sign-in works before Keycloak is set up or while it is down (Keycloak's standard endpoints; other OIDC providers: password-only, then a restart once they answer). Keycloak's Secrets optional | fork, chart | `go test ./cli -run OIDC`, verify |
 | Workspace image with everything preinstalled: desktop (XFCE, noVNC), Firefox, code-server, File Browser, marimo with a data stack, tmux, btop, k9s, kubectl, kubelogin, JetBrains Mono Nerd Font | image | image build checks (offline), e2e step 8 |
+| Images lists the workspace template's own image (read-only): its security report and its add-ons (every program with its version, apt and Python packages, from the image's addons.json) | service, fork, image | platform unit tests, vitest |
 | Workspace template UBUNTU (`ubuntu-vnc-desktop`, Ubuntu icon): its scripts as files (`files/scripts/`, `shfmt -i 1`; the metrics as functions of `metadata.sh`), read with `file()` / `templatefile()`; a workspace load average beside the node's | chart | chart checks, step8 |
 | Pure upstream Coder at the fork's base, as a rollback image in the bundle (`coder-upstream:2.38.0-main.70bc2e554-airgap`) | chart | verify rollback |
 | Prerequisites in the bundle: Gateway API CRDs, Traefik, CloudNativePG; Argo CD and Keycloak images for reference | chart | e2e |
@@ -79,6 +80,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | HUD: live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users, failures) | fork, service | e2e step 8 |
 | Health view, monitoring and security posture (zero-trust checks, runtime signals) | fork, service | e2e step 8 |
 | Network and persistence maps | fork, service | vitest |
+| Inbox (the bell): Clear all (deletes the user's notifications, asks twice) beside an icon-only Mark all as read | fork, service | vitest |
 | Classification banners (e.g. UNCLASSIFIED), announcement banner (typewriter, crawl, fonts, Viewed box; a terminal view with an easter egg) | fork, service | verify |
 | Chat between users and admins, with screenshots, and the admins' chat console | fork, service | vitest |
 | Admin menu quick links, breadcrumb, arrangeable top bar, Resources menu | fork | vitest |

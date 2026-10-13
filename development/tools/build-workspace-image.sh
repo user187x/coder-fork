@@ -4,10 +4,10 @@
 # into the delivery bundle (helm-chart/images/custom/), replacing the previous one. marimo/requirements.lock is re-pinned
 # first when marimo/requirements.in changed (needs internet, like the build itself). Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.8.1
+#   ./build-workspace-image.sh [TAG]       default 1.8.2
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.8.1}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.8.2}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 # Pin marimo's packages for the base image's Python, when the list changed.
 m="${dev}/workspace-image/marimo"
 if [[ "${m}/requirements.in" -nt "${m}/requirements.lock" ]]; then
@@ -34,6 +34,7 @@ docker run --rm --entrypoint sh "$img" -c '
 	grep -q xfce-cp-dark.svg /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml && test -f /usr/share/backgrounds/xfce/xfce-cp-dark.svg
 	dpkg-query -W -f "\${Version}\n" firefox | grep -qv snap && firefox --version
 	grep -qx WebBrowser=firefox /etc/xdg/xfce4/helpers.rc && grep -q "use_compositing\" type=\"bool\" value=\"false" /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
+	python3 -c "import json; d = json.load(open(\"/usr/share/coder-workspace/addons.json\")); assert d[\"software\"] and d[\"packages\"][\"added\"]"
 	echo "image checks passed"'
 # Firefox runs in a container with no network: it renders a local page headless.
 docker run --rm --network none --shm-size 256m --entrypoint bash "$img" -c '

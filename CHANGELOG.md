@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.30.0 – 2026-10-13
+
+Coder `2.0.0-platform.28` (fork `4e31952b0`), workspace image `coder-workspace:1.8.2`.
+
+* **Images lists the image the workspaces run.** The workspace template's own image (`coder-workspace`, "In use by
+  workspaces") is an entry of Templates › Images, first in the list, so everyone can see what they would take into
+  their enclave before building on it or starting a workspace:
+  * its **security health**, scanned like a built image (vulnerabilities, secrets, the image checks, FIPS readiness)
+    from the builder's own copy of it (seeded at install), with no internet; rescanned with every new security data
+    set (Rescan all) or on demand;
+  * its **add-ons**: every program it adds over `enterprise-base` with the version that program reports (21: the
+    desktop, code-server, File Browser, marimo, Firefox, k9s, kubectl, kubelogin, tmux and the command-line tools),
+    the 20 apt packages it asks for (601 dependencies counted beside them) and marimo's 142 Python packages.
+  * It follows the platform: a chart upgrade that ships another workspace image updates the entry and scans it. It
+    is read-only there (no edit, build, delete or S3); New Image still builds on it.
+  * Workspace image 1.8.2 records its add-ons when it is built (`/usr/share/coder-workspace/addons.json`, from
+    `development/workspace-image/addons/addons.py`): the base's package list is saved before anything is installed,
+    and the build fails when a program does not say its version. Images built on it show the same list.
+* **The Inbox (the bell) can be cleared:** a Clear all icon button left of Mark all as read, which is an icon button
+  now too. Clear all deletes the user's own notifications (Coder can only mark them read), through the platform
+  service; it asks twice (the first click arms it for 3 seconds).
+
 ## 1.29.0 – 2026-10-13
 
 Coder `2.0.0-platform.27` (fork `6b26be930`), workspace image `coder-workspace:1.8.1` (unchanged).

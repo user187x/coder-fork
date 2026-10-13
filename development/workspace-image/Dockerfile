@@ -21,13 +21,21 @@
 #   - the default shell setup (shell/): ~/.bashrc (/etc/skel and /usr/share/coder-workspace/bashrc) and the vimrc it
 #     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc);
 #   - code-server and File Browser, the template's two web apps (pinned below, checked by SHA-256): the template used
-#     to download them at every workspace start, which fails without internet.
+#     to download them at every workspace start, which fails without internet;
+#   - /usr/share/coder-workspace/addons.json: what it adds over the base, with every version (addons/addons.py), for
+#     the Images view, which lists it next to the image's security report.
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
 ARG BASE=codercom/enterprise-base:ubuntu
 FROM ${BASE}
 
 USER root
 ARG DEBIAN_FRONTEND=noninteractive
+ARG BASE
+
+# The base's packages, before anything is added (addons/addons.py, the last step, tells what this image adds).
+RUN install -d /usr/share/coder-workspace \
+	&& dpkg-query -W -f='${Package}\t${Version}\n' >/usr/share/coder-workspace/.base-packages \
+	&& apt-mark showmanual >/usr/share/coder-workspace/.base-manual
 
 RUN apt-get update \
 	&& apt-get install -y xfce4 xfce4-goodies xfce4-terminal dbus-x11 tigervnc-standalone-server novnc websockify \
@@ -139,5 +147,11 @@ RUN curl -fsSL -o /tmp/filebrowser.tgz \
 	&& chmod 0755 /usr/local/bin/filebrowser \
 	&& rm -f /tmp/filebrowser.tgz \
 	&& filebrowser version
+
+# What it adds over the base, every version as the installed programs say it: /usr/share/coder-workspace/addons.json.
+COPY addons/addons.py /tmp/addons.py
+RUN python3 /tmp/addons.py "${BASE}" >/usr/share/coder-workspace/addons.json \
+	&& python3 -m json.tool /usr/share/coder-workspace/addons.json >/dev/null \
+	&& rm -f /tmp/addons.py /usr/share/coder-workspace/.base-packages /usr/share/coder-workspace/.base-manual
 
 USER coder

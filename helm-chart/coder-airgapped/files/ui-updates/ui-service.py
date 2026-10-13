@@ -14,6 +14,7 @@
   POST /__coder-ui/api/notes/delete  {id}                              an admin deletes it
   POST /__coder-ui/api/notes/dismiss {id}                              the workspace's owner dismisses it
   GET  /__coder-ui/api/notes/users        admins: every note not dismissed yet, by the workspace owner's user id
+  POST /__coder-ui/api/inbox/clear        anyone: their own Inbox (the bell) emptied, every notification deleted
   GET  /__coder-ui/api/acks               admins: every announcement ("event") with who saw / confirmed it, who has not
   POST /__coder-ui/api/events/delete {"id": X}   admins: forget one announcement and its receipts
 
@@ -7544,6 +7545,23 @@ class Handler(BaseHTTPRequestHandler):
         if not imagebuilder.handle(self, "PUT", url.path, url.query, ADMIN_ROLES):
             self.send(404, "not found\n")
 
+    def clear_inbox(self):
+        """The signed-in user's Inbox (the bell), emptied: Coder can only mark its notifications read, and a busy
+        Inbox fills up. Only the caller's own rows of Coder's inbox_notifications go; nothing else is touched."""
+        user, err = self.user()
+        if err:
+            return
+        pool = LOGOS.pool if LOGOS else None
+        if not pool:
+            return self.send_json(503, {"error": "Coder's database is not reachable yet."})
+        try:
+            rows = pool.query("DELETE FROM inbox_notifications WHERE user_id = $1::uuid RETURNING id", [user["id"]])
+        except Exception as e:  # noqa: BLE001 - said to the user
+            log(event="inbox-clear-failed", user=user["username"], error=str(e)[:300])
+            return self.send_json(503, {"error": "The Inbox could not be cleared: %s" % str(e)[:200]})
+        log(event="inbox-cleared", user=user["username"], count=len(rows))
+        return self.send_json(200, {"cleared": len(rows)})
+
     def do_POST(self):
         self.close_connection = True
         url = urllib.parse.urlsplit(self.path)
@@ -7579,6 +7597,7 @@ class Handler(BaseHTTPRequestHandler):
             BASE + "/api/notes/update",
             BASE + "/api/notes/delete",
             BASE + "/api/notes/dismiss",
+            BASE + "/api/inbox/clear",
         }
         if path not in routes and not path.startswith(BASE + "/api/chat/"):
             return self.send(404, "not found\n")
@@ -7603,6 +7622,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(403, {"error": "Only the workspace's owner can dismiss its notes."})
             log(event="note-dismissed", user=user["username"], note=note["id"], workspace=note["workspaceId"])
             return self.send_json(200, {"note": STORE.note_dismiss(note["id"])})
+        if path == BASE + "/api/inbox/clear":
+            return self.clear_inbox()
         if path in (BASE + "/api/avatar", BASE + "/api/avatar/reset"):
             return self.save_avatar(path.endswith("/reset"), payload)
         if path.startswith(BASE + "/api/chat/"):

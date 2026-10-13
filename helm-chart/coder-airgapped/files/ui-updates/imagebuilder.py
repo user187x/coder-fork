@@ -8,6 +8,11 @@ An image is a definition (spec, below) that admins (and template admins) edit in
 <registry>/coder-images/<name>:<version> with BuildKit rootless in a Job, then a scan Job reports on its security.
 Workspace templates use it as localhost:5000/coder-images/<name>:<version> (BUILDER_PULL_PREFIX).
 
+The image the workspace template runs (BUILDER_WORKSPACE_IMAGE) is an entry too, "coder-workspace" (TRACKED_ID): kept
+to the image the platform deploys, scanned from the builder's copy of it (BUILDER_BASE_IMAGE) when it is new or changed,
+and read-only here. Everyone sees its security report and its add-ons (/usr/share/coder-workspace/addons.json in it)
+before building on it, or using it in an enclave.
+
     GET  /__coder-ui/api/images                         every image (anyone signed in; editing needs EDIT_ROLES)
     POST /__coder-ui/api/images {name, description, base}        a new image (a draft)
     GET  /__coder-ui/api/images/<id>                    one image, its spec, builds and last report
@@ -62,6 +67,12 @@ BUILDKIT_IMAGE = os.environ.get("BUILDER_BUILDKIT_IMAGE", "docker.io/moby/buildk
 TOOLS_IMAGE = os.environ.get("BUILDER_TOOLS_IMAGE", "ghcr.io/user187x/coder-image-tools:1.0.0")
 BASE_IMAGE = os.environ.get("BUILDER_BASE_IMAGE", "")
 BASE_FALLBACK = os.environ.get("BUILDER_BASE_FALLBACK", "")
+# The image the workspace template runs, as the template names it, and the template's name (for the tracked entry).
+WORKSPACE_IMAGE = os.environ.get("BUILDER_WORKSPACE_IMAGE", "")
+WORKSPACE_TEMPLATE = os.environ.get("BUILDER_WORKSPACE_TEMPLATE", "")
+TRACKED_ID = "coder-workspace"
+TRACKED_SYNC_SECONDS = 300
+ADDONS_PATH = "usr/share/coder-workspace/addons.json"
 SERVICE_URL = os.environ.get("BUILDER_SERVICE_URL", "http://coder-ui-updates.coder.svc").rstrip("/")
 BUILD_CPU = os.environ.get("BUILDER_CPU", "4")
 BUILD_MEMORY = os.environ.get("BUILDER_MEMORY", "8Gi")
@@ -164,6 +175,11 @@ class DB:
             "s3": json.loads(r["s3"] or "{}"),
         }
         spec = json.loads(r["spec"])
+        tracked = spec.get("tracked")
+        out["tracked"] = tracked or None
+        if tracked:
+            # what workspace templates name: the image itself, not the builder's copy that is scanned
+            out["pullRef"] = tracked.get("image") if r["ref"] else None
         report = json.loads(r["report"]) if r["report"] else None
         out["base"] = spec.get("base") or {"kind": "workspace"}
         out["counts"] = {"packages": len(spec.get("packages") or []), "debs": len(spec.get("debs") or []),
@@ -309,7 +325,7 @@ def clean_spec(spec, image_id):
         raise ValueError("Expected an image definition.")
     out = empty_spec()
     base = spec.get("base") or {"kind": "workspace"}
-    if base.get("kind") == "image":
+    if base.get("kind") == "image" and base.get("id") != TRACKED_ID:  # the tracked entry is the workspace base
         other = str(base.get("id") or "")
         if other == image_id or not NAME_RE.match(other):
             raise ValueError("Pick another built image as the base.")
@@ -1085,9 +1101,9 @@ def build_job(image_id, build_id, version, token):
     return name, job_body(name, image_id, build_id, "build", spec)
 
 
-def scan_job(image_id, build_id, version, token):
+def scan_job(image_id, build_id, version, token, ref=None):
     name = job_name("scan", image_id, build_id)
-    ref = "%s/%s/%s:%d" % (REGISTRY, REPO, image_id, version)
+    ref = ref or "%s/%s/%s:%d" % (REGISTRY, REPO, image_id, version)
     url = "%s%s/internal/builds/%s/report" % (SERVICE_URL, BASE, token)
     c = {"name": "scan", "image": TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent",
          "command": ["python3", "/app/imagebuilder.py", "scan", ref, url],
@@ -1344,7 +1360,7 @@ class Build(threading.Thread):
         """The scan Job (trivy and the image checks, with the security data in force): the report, or None."""
         self.advance("scan")
         STORE.update_build(self.build_id, status="scanning")
-        name, body = scan_job(self.image_id, self.build_id, self.version, self.token)
+        name, body = scan_job(self.image_id, self.build_id, self.version, self.token, getattr(self, "scan_ref", None))
         self._job(body)
         deadline = time.time() + 1800
         while time.time() < deadline and not self.cancelled:
@@ -1412,6 +1428,7 @@ class Rescan(Build):
         self.plan = [("scan", "Scanning it for vulnerabilities and secrets"),
                      ("checks", "Checking its security and FIPS readiness")]
         self.current = "scan"
+        self.scan_ref = (STORE.image(image_id, full=False) or {}).get("ref")
 
     def _run(self):
         data = securitydata.stamp()
@@ -1521,7 +1538,10 @@ def report_summary(report):
     return {"grade": report.get("grade"), "counts": v.get("counts", {}), "fixable": v.get("fixable", 0),
             "secrets": len(report.get("secrets") or []), "fips": (report.get("fips") or {}).get("status"),
             "scannedAt": report.get("scannedAt"), "dbUpdatedAt": report.get("dbUpdatedAt"),
-            "checks": {s: sum(1 for c in report.get("checks") or [] if c["status"] == s) for s in ("pass", "warn", "fail")}}
+            "checks": {s: sum(1 for c in report.get("checks") or [] if c["status"] == s) for s in ("pass", "warn", "fail")},
+            # what the image adds over its base (addons.json): programs, and the apt packages asked for
+            "addons": len((report.get("addons") or {}).get("software") or []),
+            "addonPackages": len(((report.get("addons") or {}).get("packages") or {}).get("added") or [])}
 
 
 # --------------------------------------------------------------------------- the scan (runs in the scan Job)
@@ -1537,6 +1557,7 @@ def walk_image(ref):
         config = json.loads(r.read())
     wanted = re.compile(r"^(etc/(sudoers(\.d/.*)?|ssh/(ssh|sshd)_config(\.d/.*)?|ssh/ssh_host_.*_key|passwd|shadow|group|"
                         r"ssl/openssl\.cnf|ssl/fipsmodule\.cnf|coder-image/.*|os-release)|usr/lib/os-release|var/lib/dpkg/status|"
+                        r"usr/share/coder-workspace/addons\.json|"
                         r"(root|home/[^/]+)/\.(bash_history|ssh/id_[a-z0-9]+))$")
     files, contents = {}, {}
     for layer in m["layers"]:
@@ -1718,8 +1739,34 @@ def scan(ref, report_url):
     report["fips"] = fips_checks(files, contents, pkgs, data["rules"] or None)
     release = contents.get("etc/os-release") or contents.get("usr/lib/os-release") or ""
     report["os"] = (re.search(r'^PRETTY_NAME="?([^"\n]+)', release, re.M) or [None, None])[1]
+    report["addons"] = addons_of(contents.get(ADDONS_PATH))
     report["grade"] = grade(report)
     post({"report": report})
+
+
+def addons_of(text_):
+    """The image's add-ons (addons.json, written by the workspace image's build), checked and kept small; or None."""
+    try:
+        d = json.loads(text_ or "")
+    except ValueError:
+        return None
+    if not isinstance(d, dict) or not isinstance(d.get("software"), list):
+        return None
+    clip = lambda v, n=200: str(v)[:n] if v is not None else None  # noqa: E731
+    pk = d.get("packages") if isinstance(d.get("packages"), dict) else {}
+    py = d.get("python") if isinstance(d.get("python"), dict) else {}
+    return {
+        "base": clip(d.get("base")), "builtAt": clip(d.get("builtAt"), 40),
+        "software": [{"name": clip(x.get("name"), 80), "what": clip(x.get("what")), "group": clip(x.get("group"), 40),
+                      "version": clip(x.get("version"), 80)} for x in d["software"][:200] if isinstance(x, dict)],
+        "packages": {"added": [{"name": clip(x.get("name"), 120), "version": clip(x.get("version"), 120)}
+                               for x in (pk.get("added") or [])[:2000] if isinstance(x, dict)],
+                     "dependencies": int(pk.get("dependencies") or 0), "upgraded": int(pk.get("upgraded") or 0),
+                     "installed": int(pk.get("installed") or 0)},
+        "python": {"environment": clip(py.get("environment")),
+                   "packages": [{"name": clip(x.get("name"), 120), "version": clip(x.get("version"), 80)}
+                                for x in (py.get("packages") or [])[:2000] if isinstance(x, dict)]},
+    }
 
 
 def fetch_context(url, dest):
@@ -1929,6 +1976,11 @@ def route(h, method, rest, query, user, editor, admin):
         img = STORE.image(image_id)
         if not img:
             return h.send_json(404, {"error": "No image called '%s'." % image_id}) or True
+        if img.get("tracked") and (
+                (sub == "" and method == "POST") or sub in ("/delete", "/build", "/s3", "/s3/backup", "/files/delete")
+                or sub.startswith("/files/")):
+            raise ValueError(TRACKED_NOTE % img["tracked"].get("image"))
+
         def detail(img):
             """The image page's view (GET, and what a save answers with, so the dashboard can keep it)."""
             img["builds"] = STORE.builds(image_id)
@@ -2004,13 +2056,14 @@ def route(h, method, rest, query, user, editor, admin):
                 raise ValueError("The image has not been built yet.")
             h.send_response(200)
             h.send_header("Content-Type", "application/x-tar")
-            h.send_header("Content-Disposition", 'attachment; filename="%s-%d.tar"' % (image_id, img["version"]))
+            repo, _, tag = img["ref"].split("/", 1)[1].rpartition(":")
+            h.send_header("Content-Disposition", 'attachment; filename="%s-%s.tar"' % (image_id, tag))
             h.send_header("Cache-Control", "no-store")
             h.send_header("Connection", "close")
             h.end_headers()
             h.close_connection = True
             LOG(event="image-download", image=image_id, version=img["version"], by=user["username"])
-            docker_archive("%s/%s" % (REPO, image_id), str(img["version"]), img["pullRef"], h.wfile)
+            docker_archive(repo, tag, img["pullRef"], h.wfile)
             return True
         if sub == "/s3" and method == "POST":
             need(editor)
@@ -2037,7 +2090,61 @@ def _quiet(fn, *args):
 
 
 RESERVED_NAMES = {"security-data", "rescan-all", "settings", "apt-check", "apt-search", "apt-refresh", "lint", "format",
-                  "dockerfile"}
+                  "dockerfile", TRACKED_ID}
+
+TRACKED_NOTE = ("This is the image the workspace template runs (%s), listed so everyone can see its security and its "
+                "add-ons. It comes with the platform (development/workspace-image) and is not changed here: build on "
+                "it with New Image (the workspace image is the default base).")
+
+
+def sync_tracked():
+    """The workspace template's image as the entry TRACKED_ID: made, kept to the image the platform deploys (a chart
+    upgrade changes it), and scanned when it is new or has changed. Until the builder's registry has its copy (seeded
+    at install), the entry waits as a draft."""
+    if not (ENABLED and STORE and WORKSPACE_IMAGE and BASE_IMAGE.startswith(REGISTRY + "/")):
+        return
+    img = STORE.image(TRACKED_ID)
+    if img and not img.get("tracked"):
+        if LOG:
+            LOG(event="image-tracked-conflict", image=TRACKED_ID)
+        return
+    tracked = {"image": WORKSPACE_IMAGE, "ref": BASE_IMAGE, "template": WORKSPACE_TEMPLATE}
+    description = ("The image the workspace template%s runs, as the platform deploys it: its security report and "
+                   "its add-ons. Read-only here; new images build on it." % (
+                       " " + WORKSPACE_TEMPLATE if WORKSPACE_TEMPLATE else ""))
+    if not img:
+        STORE.create(TRACKED_ID, description, dict(empty_spec(), tracked=tracked), "platform")
+    elif img["spec"].get("tracked") != tracked or img["description"] != description:
+        STORE.save(TRACKED_ID, "platform", spec=dict(img["spec"], tracked=tracked), description=description)
+    repo, _, tag = BASE_IMAGE.split("/", 1)[1].rpartition(":")
+    try:
+        _, digest = manifest(repo, tag)
+        size = image_size(repo, tag)
+    except Exception:  # noqa: BLE001 - not seeded yet, or the registry is not up: next time
+        digest = None
+    img = STORE.image(TRACKED_ID)
+    if not digest:
+        if img["ref"]:
+            STORE.set(TRACKED_ID, status="draft", ref=None)
+        return
+    if img["digest"] != digest or img["ref"] != BASE_IMAGE:
+        STORE.set(TRACKED_ID, status="ready", ref=BASE_IMAGE, digest=digest, size=size, builtAt=now(),
+                  builtBy="platform", report=None)
+        if LOG:
+            LOG(event="image-tracked", image=WORKSPACE_IMAGE, digest=digest)
+        img = STORE.image(TRACKED_ID)
+    if not img["report"] and not STORE.active_build(TRACKED_ID):
+        start_rescan(TRACKED_ID, "platform")
+
+
+def _sync_tracked_loop():
+    while True:
+        try:
+            sync_tracked()
+        except Exception as e:  # noqa: BLE001 - tried again on the next round
+            if LOG:
+                LOG(event="image-tracked-failed", error=str(e)[:300])
+        time.sleep(TRACKED_SYNC_SECONDS)
 
 
 def upload_security_data(h, name, user):
@@ -2112,6 +2219,7 @@ def start():
     if ENABLED:
         STORE = DB(os.path.join(FILES, "images.sqlite"))
         securitydata.setup(FILES)
+        threading.Thread(target=_sync_tracked_loop, daemon=True, name="tracked-image").start()
 
 
 if __name__ == "__main__":

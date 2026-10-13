@@ -85,9 +85,9 @@ coder:
   coder:
     image:
       repo: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-platform") }}'
-      # The fork's 2.0.0-platform.27 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
+      # The fork's 2.0.0-platform.28 (development/coder-fork/FORK.md); "-airgap" is that image plus a Terraform provider mirror
       # (development/airgap-image), without which templates cannot be pushed or built offline.
-      tag: 2.0.0-platform.27-airgap
+      tag: 2.0.0-platform.28-airgap
       pullSecrets: []
     # No gap during rollouts. The new pod starts first and must be ready before the old one stops (the defaults with
     # one replica: maxSurge 25% rounds up to 1, maxUnavailable 25% down to 0). The old pod then keeps serving for 15 s
@@ -408,10 +408,10 @@ coder-workspace:
     internalUrl: 'http://coder.{{ .Release.Namespace }}.svc.cluster.local'
   # The template push's CLI: Coder's own image (the same coder binary as the server), not a separate floating tag.
   # Keep its tag equal to coder.coder.image.tag (development/tools/verify checks it).
-  cliImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-platform:2.0.0-platform.27-airgap") }}'
+  cliImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-platform:2.0.0-platform.28-airgap") }}'
   loginImage: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   # The workspace image (development/workspace-image): desktop, JetBrains Mono Nerd Font and tmux preinstalled.
-  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.8.1") }}'
+  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.8.2") }}'
   imagePullSecrets: []
   secrets:
     tlsCa: '{{ .Values.global.secretNames.tlsCa }}'

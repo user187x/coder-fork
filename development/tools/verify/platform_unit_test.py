@@ -98,5 +98,90 @@ class ImageBuilderOfflineTest(unittest.TestCase):
                 ib.base_ref_for(spec)
 
 
+class TrackedWorkspaceImageTest(unittest.TestCase):
+    """The workspace template's image as an entry of the Images view: made, kept to the deployed image, scanned when
+    it is new or changed, and read-only."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.rescans = []
+        self.digest = "sha256:" + "1" * 64
+        patches = [
+            mock.patch.object(ib, "STORE", ib.DB(os.path.join(self.tmp, "images.sqlite"))),
+            mock.patch.object(ib, "ENABLED", True),
+            mock.patch.object(ib, "WORKSPACE_TEMPLATE", "UBUNTU"),
+            mock.patch.object(ib, "LOG", None),
+            mock.patch.object(ib, "start_rescan", side_effect=lambda image_id, user: self.rescans.append(image_id)),
+            mock.patch.object(ib, "manifest", side_effect=lambda repo, ref: ({}, self.digest)),
+            mock.patch.object(ib, "image_size", return_value=1234),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.deploy("1.8.2")
+
+    def deploy(self, tag):
+        for name, value in (("WORKSPACE_IMAGE", "ghcr.io/user187x/coder-workspace:" + tag),
+                            ("BASE_IMAGE", ib.REGISTRY + "/coder-images/base/coder-workspace:" + tag)):
+            p = mock.patch.object(ib, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_made_scanned_and_kept_to_the_deployed_image(self):
+        ib.sync_tracked()
+        img = ib.STORE.image(ib.TRACKED_ID)
+        self.assertEqual(img["status"], "ready")
+        self.assertEqual(img["pullRef"], "ghcr.io/user187x/coder-workspace:1.8.2")  # what templates name
+        self.assertEqual(img["ref"], ib.REGISTRY + "/coder-images/base/coder-workspace:1.8.2")  # what is scanned
+        self.assertEqual(img["tracked"]["template"], "UBUNTU")
+        self.assertEqual(self.rescans, [ib.TRACKED_ID])
+        ib.STORE.set(ib.TRACKED_ID, report={"grade": "C"})
+        ib.sync_tracked()
+        self.assertEqual(self.rescans, [ib.TRACKED_ID])  # scanned, unchanged: not again
+        # a chart upgrade deploys another image: the entry follows it, and it is scanned again
+        self.deploy("1.8.3")
+        self.digest = "sha256:" + "2" * 64
+        ib.sync_tracked()
+        img = ib.STORE.image(ib.TRACKED_ID)
+        self.assertEqual(img["pullRef"], "ghcr.io/user187x/coder-workspace:1.8.3")
+        self.assertIsNone(img["report"])
+        self.assertEqual(self.rescans, [ib.TRACKED_ID, ib.TRACKED_ID])
+
+    def test_waits_as_a_draft_until_the_builder_has_its_copy(self):
+        with mock.patch.object(ib, "manifest", side_effect=OSError("404")):
+            ib.sync_tracked()
+        img = ib.STORE.image(ib.TRACKED_ID)
+        self.assertEqual(img["status"], "draft")
+        self.assertIsNone(img["pullRef"])
+        self.assertEqual(self.rescans, [])
+
+    def test_read_only_and_its_name_reserved(self):
+        ib.sync_tracked()
+        h = mock.MagicMock()
+        user = {"username": "admin"}
+        for method, sub in (("POST", ""), ("POST", "/build"), ("POST", "/delete"), ("POST", "/s3"),
+                            ("PUT", "/files/deb/x.deb")):
+            with self.assertRaisesRegex(ValueError, "image the workspace template runs"):
+                ib.route(h, method, "/" + ib.TRACKED_ID + sub, "", user, True, True)
+        self.assertIn(ib.TRACKED_ID, ib.RESERVED_NAMES)
+        # as a base it is the workspace image itself
+        self.assertEqual(ib.clean_spec({"base": {"kind": "image", "id": ib.TRACKED_ID}}, "mine")["base"],
+                         {"kind": "workspace"})
+
+    def test_addons_read_from_the_image(self):
+        import json
+        a = ib.addons_of(json.dumps({"schema": 1, "base": "codercom/enterprise-base:ubuntu", "software": [
+            {"name": "code-server", "version": "4.141.0", "group": "Apps", "what": "VS Code in the browser"}],
+            "packages": {"added": [{"name": "firefox", "version": "157.0"}], "dependencies": 800, "upgraded": 3,
+                         "installed": 1300}, "python": {"packages": [{"name": "marimo", "version": "0.24.2"}]}}))
+        self.assertEqual(a["software"][0]["version"], "4.141.0")
+        self.assertEqual(a["packages"]["added"][0]["name"], "firefox")
+        self.assertEqual(a["packages"]["dependencies"], 800)
+        self.assertEqual(a["python"]["packages"][0]["name"], "marimo")
+        self.assertIsNone(ib.addons_of("not json"))
+        self.assertIsNone(ib.addons_of(None))
+
+
 if __name__ == "__main__":
     unittest.main()

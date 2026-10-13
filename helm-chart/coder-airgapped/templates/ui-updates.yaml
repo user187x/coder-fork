@@ -114,6 +114,10 @@ spec:
             # builds fall back to the workspace image in global.registry (that registry's pull secret, if any).
             - {name: BUILDER_BASE_IMAGE, value: {{ printf "coder-image-registry.%s.svc:5000/coder-images/base/%s" $ns ($ws | splitList "/" | last) | quote }}}
             - {name: BUILDER_BASE_FALLBACK, value: {{ ternary $ws "" (ne $.Values.global.registry "") | quote }}}
+            # The image the workspace template runs: an entry of its own in the Images view (scanned from the copy above).
+            {{- $tpl := index $.Values "coder-workspace" "template" }}
+            - {name: BUILDER_WORKSPACE_IMAGE, value: {{ $ws | quote }}}
+            - {name: BUILDER_WORKSPACE_TEMPLATE, value: {{ $tpl.displayName | default $tpl.name | quote }}}
             - {name: BUILDER_SERVICE_URL, value: {{ printf "http://coder-ui-updates.%s.svc" $ns | quote }}}
             - {name: BUILDER_CPU, value: {{ .build.cpu | quote }}}
             - {name: BUILDER_MEMORY, value: {{ .build.memory | quote }}}
