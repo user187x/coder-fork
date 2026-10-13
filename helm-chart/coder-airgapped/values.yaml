@@ -50,8 +50,9 @@ global:
     prefix: "keycloak:"
     clusterRole: cluster-admin
     # Coder roles that count as admins: their workspaces get the kubeconfig, and (syncGroup) the platform service
-    # keeps the Keycloak group's members equal to the Coder users with one of these roles who sign in with Keycloak
-    # (matched by email, else username; checked every minute). Members added in Keycloak by hand are removed then.
+    # keeps the Keycloak group's members equal to the Coder users with one of these roles, whether they sign in to
+    # Coder with Keycloak or a password: each as the Keycloak account with the same email, else the same username
+    # (checked every minute). kubectl signs in with Keycloak either way. Members added in Keycloak by hand are removed.
     adminRoles: owner
     syncGroup: true
   # "false": the admin below signs in with its password, everyone else with Keycloak (they have no password).

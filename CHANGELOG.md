@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.27.2 – 2026-10-12
+
+Coder `2.0.0-platform.23` (rebuilt: `0eb28965f`).
+
+* **Admins' kubectl and k9s work for owners who sign in to Coder with a password.** The platform service kept the
+  Keycloak group `coder-cluster-admins` equal to the Coder owners who sign in *with Keycloak* only. The built-in
+  `admin` and any other password owner were never added. Their kubectl sign-in (Keycloak's device login) succeeded,
+  but the cluster gave that identity no rights: kubectl and k9s showed the context and nothing else. Now every Coder
+  owner counts, whichever way they sign in to Coder, as the Keycloak account with the same email, else the same
+  username (e.g. Coder `admin` → Keycloak `admin`, `greg` → `greg@greg.com`). A token issued before the fix has no
+  group: sign in again (or wait up to 10 minutes for the refresh).
+* **A template renamed in the dashboard keeps getting the chart's updates.** The install pushed the template by its
+  configured name (`ubuntu-vnc-desktop`). After a rename it found none, created a second, empty template, and the
+  workspaces and their usage history stayed on the first. The push now looks first for the template that holds this
+  release's deployed versions and pushes to it under its new name.
+* **A template's Details are part of its Overview,** between the resources and the README, instead of a tab of
+  their own: active users, latency by user, app & IDE usage, activity by user, parameter usage, with the interval and
+  date range. Links to `…/insights` open the Overview at Details.
+
 ## 1.27.1 – 2026-10-12
 
 Coder `2.0.0-platform.23` (rebuilt: `9185891af`).

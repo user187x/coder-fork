@@ -28,23 +28,51 @@ spec:
           args:
             - |
               import json, os, ssl, sys, urllib.request
-              if os.environ.get("CODER_SESSION_TOKEN"):
-                  open("/shared/token", "w").write(os.environ["CODER_SESSION_TOKEN"]); sys.exit(0)
-              print("No token Secret. Logging in with coder-init-auth...")
+              base = os.environ["CODER_URL"].rstrip("/")
               ctx = ssl.create_default_context(cafile="/etc/ssl/certs/coder/ca.crt") if os.path.exists("/etc/ssl/certs/coder/ca.crt") else None
-              body = json.dumps({"email": os.environ.get("CODER_EMAIL", ""), "password": os.environ.get("CODER_PASSWORD", "")}).encode()
-              req = urllib.request.Request(os.environ["CODER_URL"].rstrip("/") + "/api/v2/users/login", data=body,
-                                           method="POST", headers={"Content-Type": "application/json"})
-              try:
-                  token = json.load(urllib.request.urlopen(req, timeout=30, context=ctx)).get("session_token")
-              except Exception as e:
-                  sys.exit(f"Authentication failed: {e}")
+              token = os.environ.get("CODER_SESSION_TOKEN")
               if not token:
-                  sys.exit("Authentication failed.")
+                  print("No token Secret. Logging in with coder-init-auth...")
+                  body = json.dumps({"email": os.environ.get("CODER_EMAIL", ""), "password": os.environ.get("CODER_PASSWORD", "")}).encode()
+                  req = urllib.request.Request(base + "/api/v2/users/login", data=body,
+                                               method="POST", headers={"Content-Type": "application/json"})
+                  try:
+                      token = json.load(urllib.request.urlopen(req, timeout=30, context=ctx)).get("session_token")
+                  except Exception as e:
+                      sys.exit(f"Authentication failed: {e}")
+                  if not token:
+                      sys.exit("Authentication failed.")
               open("/shared/token", "w").write(token)
+
+              # The template to push to: the configured name, or, when it was renamed in the dashboard, the template
+              # this release deployed (its versions' message), under its new name. Without this a rename made the
+              # next install create a second, empty template, leaving the workspaces and their history on the first.
+              name = os.environ["TEMPLATE_NAME"]
+              mark = os.environ["PUSH_MESSAGE"]
+              def get(path):
+                  r = urllib.request.Request(base + path, headers={"Coder-Session-Token": token})
+                  return json.load(urllib.request.urlopen(r, timeout=30, context=ctx))
+              try:
+                  templates = get("/api/v2/templates")
+                  if not any(t["name"] == name for t in templates):
+                      ours = [t for t in templates
+                              if any((v.get("message") or "") == mark for v in get("/api/v2/templates/%s/versions" % t["id"]))]
+                      if len(ours) == 1:
+                          print(f"The template {name} was renamed to {ours[0]['name']} in the dashboard: pushing to it.")
+                          name = ours[0]["name"]
+                      elif len(ours) > 1:
+                          print("More than one template holds this release's versions (%s): creating %s."
+                                % (", ".join(t["name"] for t in ours), name))
+              except Exception as e:
+                  print(f"Could not look for a renamed template ({e}): pushing to {name}.")
+              open("/shared/template", "w").write(name)
           env:
             - name: CODER_URL
               value: {{ $url | quote }}
+            - name: TEMPLATE_NAME
+              value: {{ .Values.template.name | quote }}
+            - name: PUSH_MESSAGE
+              value: {{ printf "Deployed via Helm release %s" .Release.Name | quote }}
             - name: CODER_SESSION_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -91,7 +119,9 @@ spec:
               cp /tmp/tf-code/*.tf "${WORKSPACE}"/
 
               # Push the physical directory
-              coder templates push {{ .Values.template.name }} \
+              # The configured name, or the template it was renamed to (the login step looks it up)
+              TEMPLATE="$(cat /shared/template)"
+              coder templates push "${TEMPLATE}" \
                 --directory "${WORKSPACE}" \
                 --message "Deployed via Helm release {{ .Release.Name }}" \
                 --variable namespace="{{ .Values.namespace | default "coder" }}" \

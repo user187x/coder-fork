@@ -679,8 +679,8 @@ CLUSTER_ACCESS_EVERY = 60  # seconds
 
 
 def cluster_admin_targets(coder_admins, kc_users_by):
-    """Which Keycloak users should be in the group: for each Coder admin who signs in with Keycloak, the Keycloak
-    user with the same email, else the same username. kc_users_by(field, value) returns the matching Keycloak users."""
+    """Which Keycloak users should be in the group: for each Coder admin, the Keycloak user with the same email,
+    else the same username. kc_users_by(field, value) returns the matching Keycloak users."""
     out = {}
     for a in coder_admins:
         found = None
@@ -703,9 +703,11 @@ def cluster_admin_targets(coder_admins, kc_users_by):
 
 class ClusterAdminSync(threading.Thread):
     """Keeps the Keycloak group of the admins' cluster sign-in (global.clusterAccess) equal to Coder's admins: the
-    Coder users with one of CLUSTER_ACCESS_ROLES who sign in with Keycloak (the built-in password admin has no
-    Keycloak account, so it is never added). Read from Coder's database every minute; the group is created when
-    missing. Members it does not list are removed: membership is managed here, not in Keycloak."""
+    Coder users with one of CLUSTER_ACCESS_ROLES, whichever way they sign in to Coder (Keycloak or a password), each
+    as the Keycloak account with the same email, else the same username (cluster_admin_targets). kubectl always
+    signs in with Keycloak, so a password admin (the built-in admin) signs in there with its Keycloak account; an
+    admin without one gets none. Read from Coder's database every minute; the group is created when missing.
+    Members it does not list are removed: membership is managed here, not in Keycloak."""
 
     def __init__(self):
         super().__init__(daemon=True)
@@ -733,7 +735,7 @@ class ClusterAdminSync(threading.Thread):
             raise RuntimeError("Coder's database is not reachable yet")
         rows = pool.query(
             """SELECT username, email FROM users WHERE NOT deleted AND status <> 'suspended'
-            AND login_type = 'oidc' AND rbac_roles && $1::text[]""",
+            AND login_type IN ('oidc', 'password') AND rbac_roles && $1::text[]""",
             ["{" + ",".join(CLUSTER_ACCESS_ROLES) + "}"],
         )
         return [{"username": r[0], "email": r[1]} for r in rows]
