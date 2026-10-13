@@ -5,7 +5,7 @@ loads them from here and pushes them to your registry – no internet needed.
 
 | Folder | What | Size | Keep? |
 |---|---|---:|---|
-| `custom/` | The fork's Coder server image and the workspace image. **On no public registry.** | ~1.1 GB | **Always keep** – nothing else can replace them |
+| `custom/` | The fork's Coder server image, the workspace image, the image tools and the rollback image. **On no public registry.** | ~2.7 GB | **Always keep** – nothing else can replace them |
 | `public/chart/` | Public images the chart runs (database, Python add-ons, template push) | 513 MB | Remove if your registry already has them |
 | `public/prereqs/` | CloudNativePG operator, Traefik – for the charts in `../prereqs/` | 87 MB | Remove if those are already installed |
 | `public/platform/` | Argo CD and Keycloak as the reference cluster runs them – reference only, not pushed by default | 986 MB | Remove if you have Argo CD and Keycloak |
@@ -13,7 +13,7 @@ loads them from here and pushes them to your registry – no internet needed.
 ## Make the bundle smaller
 
 ```bash
-rm -rf images/public              # keeps only custom/: ~1.1 GB instead of ~2.7 GB
+rm -rf images/public              # keeps only custom/: ~2.7 GB instead of ~4.3 GB
 # or just one folder:  rm -rf images/public/platform
 ```
 
@@ -35,7 +35,7 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 |---|---|---:|---|
 | `ghcr.io_user187x_coder-platform_2.0.0-platform.24-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.24-airgap` | 313 MB | coder (server) and the template push Job's CLI; = the fork's platform.24 (fafe5314b) + Terraform provider mirror |
 | `ghcr.io_user187x_coder-image-tools_1.0.0.tar.gz` | `ghcr.io/user187x/coder-image-tools:1.0.0` | 208 MB | coder-ui-updates and the Images builder's scans: python:3.13-alpine + shellcheck, shfmt, trivy (+ its vulnerability database), regctl (`development/image-tools`) |
-| `ghcr.io_user187x_coder-workspace_1.8.0.tar.gz` | `ghcr.io/user187x/coder-workspace:1.8.0` | 1856 MB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools (btop, bat, vim, eza, fzf, grc, jq, yq), k9s (custom build + config), kubectl, kubelogin (admins' kubectl sign-in), marimo with its Python packages (offline), code-server and File Browser (offline), default ~/.bashrc and desktop background |
+| `ghcr.io_user187x_coder-workspace_1.8.1.tar.gz` | `ghcr.io/user187x/coder-workspace:1.8.1` | 1873 MB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools (btop, bat, vim, eza, fzf, grc, jq, yq), k9s (custom build + config), kubectl, kubelogin (admins' kubectl sign-in), marimo with its Python packages (offline), code-server and File Browser (offline), default ~/.bashrc and desktop background |
 | `ghcr.io_user187x_coder-upstream_2.38.0-main.70bc2e554-airgap.tar.gz` | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap` | 309 MB | rollback only: pure upstream Coder at the fork's base (70bc2e554) + the same Terraform provider mirror (`development/coder-fork/ROLLBACK.md`) |
 
 ### `public/chart/`

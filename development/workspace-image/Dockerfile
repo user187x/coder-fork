@@ -120,8 +120,8 @@ RUN index="$(/opt/marimo/bin/python -c 'import marimo, os; print(os.path.join(os
 
 # code-server (VS Code in the browser) and File Browser: downloaded here, at build time only, and checked. The
 # template starts these; it downloads them itself only on an image without them (and only with internet).
-ARG CODE_SERVER_VERSION=4.139.1
-ARG CODE_SERVER_SHA256=53029be6c5781b7bca49b815fcc9a2a3fc111813ad8c9965b2c0f0d2985a0674
+ARG CODE_SERVER_VERSION=4.141.0
+ARG CODE_SERVER_SHA256=65bcd20b524d03eb1b5adb7f360244599ef0e5b74089a46a982d32c074b97a29
 ARG FILEBROWSER_VERSION=2.63.23
 ARG FILEBROWSER_SHA256=b14db2bb8033caa3f80205eb6578b2ed0744ebd9e716b790bc4a9703ce909e88
 RUN curl -fsSL -o /tmp/code-server.tgz \

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.28.1 – 2026-10-13
+
+Coder `2.0.0-platform.24` (unchanged), workspace image `coder-workspace:1.8.1`.
+
+* **code-server 4.141.0 (VS Code 1.141), the newest release,** in the workspace image. 1.8.0 pinned 4.139.1 (VS Code
+  1.139), while workspaces had been downloading the newest at every start, so updating a workspace to 1.28.0's
+  template moved VS Code back. Still pinned by SHA-256 (the same as GitHub's for the release file) and checked
+  offline when the image is built. File Browser stays 2.63.23, its newest release.
+* Nothing else changes: the template, the server and the other images are 1.28.0's. Workspaces show as outdated;
+  **Update** restarts them on the new image and keeps their home.
+
 ## 1.28.0 – 2026-10-13
 
 Coder `2.0.0-platform.24` (fork `fafe5314b`), workspace image `coder-workspace:1.8.0`. Release-readiness work: a
