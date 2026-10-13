@@ -19,7 +19,9 @@
 #     marimo/requirements.lock; tkinter (python3-tk). The template gives each user a ~/.marimo-venv on top of it.
 #     marimo opens its own pages in the same window (marimo/same-window.js);
 #   - the default shell setup (shell/): ~/.bashrc (/etc/skel and /usr/share/coder-workspace/bashrc) and the vimrc it
-#     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc).
+#     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc);
+#   - code-server and File Browser, the template's two web apps (pinned below, checked by SHA-256): the template used
+#     to download them at every workspace start, which fails without internet.
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
 ARG BASE=codercom/enterprise-base:ubuntu
 FROM ${BASE}
@@ -115,5 +117,27 @@ COPY marimo/same-window.js /tmp/marimo-same-window.js
 RUN index="$(/opt/marimo/bin/python -c 'import marimo, os; print(os.path.join(os.path.dirname(marimo.__file__), "_static", "index.html"))')" \
 	&& /opt/marimo/bin/python -c 'import sys; p, js = sys.argv[1], open(sys.argv[2]).read(); s = open(p).read(); s = s.replace("<head>", "<head><script id=\"marimo-same-window\">" + js + "</script>", 1); open(p, "w").write(s)' "$index" /tmp/marimo-same-window.js \
 	&& grep -q marimo-same-window "$index" && rm -f /tmp/marimo-same-window.js
+
+# code-server (VS Code in the browser) and File Browser: downloaded here, at build time only, and checked. The
+# template starts these; it downloads them itself only on an image without them (and only with internet).
+ARG CODE_SERVER_VERSION=4.139.1
+ARG CODE_SERVER_SHA256=53029be6c5781b7bca49b815fcc9a2a3fc111813ad8c9965b2c0f0d2985a0674
+ARG FILEBROWSER_VERSION=2.63.23
+ARG FILEBROWSER_SHA256=b14db2bb8033caa3f80205eb6578b2ed0744ebd9e716b790bc4a9703ce909e88
+RUN curl -fsSL -o /tmp/code-server.tgz \
+		"https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-amd64.tar.gz" \
+	&& echo "${CODE_SERVER_SHA256}  /tmp/code-server.tgz" | sha256sum -c - \
+	&& install -d /usr/lib/code-server \
+	&& tar -xzf /tmp/code-server.tgz -C /usr/lib/code-server --strip-components=1 \
+	&& ln -sf /usr/lib/code-server/bin/code-server /usr/bin/code-server \
+	&& rm -f /tmp/code-server.tgz \
+	&& code-server --version
+RUN curl -fsSL -o /tmp/filebrowser.tgz \
+		"https://github.com/filebrowser/filebrowser/releases/download/v${FILEBROWSER_VERSION}/linux-amd64-filebrowser.tar.gz" \
+	&& echo "${FILEBROWSER_SHA256}  /tmp/filebrowser.tgz" | sha256sum -c - \
+	&& tar -xzf /tmp/filebrowser.tgz -C /usr/local/bin filebrowser \
+	&& chmod 0755 /usr/local/bin/filebrowser \
+	&& rm -f /tmp/filebrowser.tgz \
+	&& filebrowser version
 
 USER coder

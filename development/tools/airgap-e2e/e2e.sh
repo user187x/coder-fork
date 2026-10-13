@@ -47,6 +47,9 @@ app["spec"]["source"]["repoURL"] = rc
 v = app["spec"]["source"]["helm"]["valuesObject"]; g = v["global"]
 g["domain"] = "airgap.test"; g["registry"] = "localhost:5001"; g["oidc"]["issuerUrl"] = "https://keycloak.airgap.test/realms/master"
 v["database"]["storage"]["storageClass"] = "standard"; v["uiUpdates"]["persistence"]["storageClass"] = "standard"
+for k in ("registry", "files"):
+    v.setdefault("imageBuilder", {}).setdefault(k, {})["storageClass"] = "standard"
+v.setdefault("coder-workspace", {})["storageClass"] = "standard"
 yaml.safe_dump_all([sec, app], open(p, "w"), sort_keys=False); print("filled in, chart", app["spec"]["source"]["targetRevision"])
 PY
 say "Step 7"; kubectl apply -f $A/argocd/coder-airgapped-application.yaml; START=$(date +%s)
@@ -57,3 +60,5 @@ while :; do
   kubectl -n argocd wait application/coder --for=jsonpath='{.status.operationState.phase}'=Succeeded --timeout=15s >/dev/null 2>&1
 done
 echo "Argo CD: $S after $(( $(date +%s) - START ))s"; kubectl -n argocd get application coder -o jsonpath='{.status.operationState.message}{"\n"}'
+say "Step 7b: the image builder's base (mirror-images.sh seed-builder, as after an Argo CD install)"
+(cd $A && ./mirror-images.sh seed-builder coder) 2>&1 | tail -3

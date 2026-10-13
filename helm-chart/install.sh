@@ -105,8 +105,15 @@ if [[ -n "$pull_registry" ]]; then
 		--docker-username="$REGISTRY_USERNAME" --docker-password="$REGISTRY_PASSWORD"
 	warn "add imagePullSecrets: [{name: registry-pull}] to your values (coder.coder.image.pullSecrets, uiUpdates, coder-banner, coder-workspace)"
 fi
-for s in "${sname[@]}"; do
+for k in tlsCa wildcardTls; do
+	s="${sname[$k]}"
 	((dry)) || exists secret "$s" || warn "secret/$s is missing: Coder will not start until it exists (see options above)"
+done
+# Keycloak's: Coder starts without them, with password sign-in only, and reads them when it next restarts.
+for k in oidcCa oidcClient; do
+	s="${sname[$k]}"
+	((dry)) || exists secret "$s" ||
+		warn "secret/$s is missing: Coder starts with password sign-in only; create it (see options above) and restart Coder for Keycloak sign-in"
 done
 
 log "Default logo / avatar ConfigMaps (defaults/)"

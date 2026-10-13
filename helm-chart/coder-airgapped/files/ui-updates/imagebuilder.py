@@ -61,6 +61,7 @@ PULL_PREFIX = os.environ.get("BUILDER_PULL_PREFIX", "localhost:5000")
 BUILDKIT_IMAGE = os.environ.get("BUILDER_BUILDKIT_IMAGE", "docker.io/moby/buildkit:v0.33.0-rootless")
 TOOLS_IMAGE = os.environ.get("BUILDER_TOOLS_IMAGE", "ghcr.io/user187x/coder-image-tools:1.0.0")
 BASE_IMAGE = os.environ.get("BUILDER_BASE_IMAGE", "")
+BASE_FALLBACK = os.environ.get("BUILDER_BASE_FALLBACK", "")
 SERVICE_URL = os.environ.get("BUILDER_SERVICE_URL", "http://coder-ui-updates.coder.svc").rstrip("/")
 BUILD_CPU = os.environ.get("BUILDER_CPU", "4")
 BUILD_MEMORY = os.environ.get("BUILDER_MEMORY", "8Gi")
@@ -375,11 +376,21 @@ def clean_spec(spec, image_id):
 
 
 def spec_problems(spec, apt_results=None):
-    """What stops a build: packages apt doesn't have, empty installation scripts."""
+    """What stops a build: packages apt doesn't have (the GNOME desktop's too), empty installation scripts. Offline
+    with no apt mirror, nothing is in the sources: such builds stop here, before they start, rather than failing
+    halfway."""
     out = []
+    gnome_missing = []
     for name, r in (apt_results or {}).items():
-        if not r.get("available"):
+        if r.get("available"):
+            continue
+        if spec.get("desktop") == "gnome" and name in GNOME and name not in (spec.get("packages") or []):
+            gnome_missing.append(name)
+        else:
             out.append("'%s' is not in the apt sources: upload its .deb or install it manually." % name)
+    if gnome_missing:
+        out.append("The GNOME desktop needs packages that are not in the apt sources (%s): set your apt mirror in "
+                   "Images > Settings, or keep the XFCE desktop (it needs no download)." % ", ".join(gnome_missing))
     for i in spec.get("installations") or []:
         if not i["script"].strip():
             out.append("The installation '%s' has no script." % i["name"])
@@ -788,6 +799,18 @@ def base_ref_for(spec):
         return other["ref"]
     if not BASE_IMAGE:
         raise ValueError("No workspace base image is configured.")
+    # The workspace image in the builder's own registry (seeded at install); else, until it is seeded, the one in
+    # your registry (global.registry), which BuildKit pulls with the pull secret.
+    repo_tag = BASE_IMAGE.split("/", 1)[1] if BASE_IMAGE.startswith(REGISTRY + "/") else None
+    if repo_tag:
+        repo, _, tag = repo_tag.rpartition(":")
+        try:
+            registry("HEAD", "%s/manifests/%s" % (repo, tag), timeout=15).close()
+        except Exception:  # noqa: BLE001 - not seeded (404) or the registry is not up: the fallback, if any
+            if BASE_FALLBACK:
+                return BASE_FALLBACK
+            raise ValueError("The base image (%s) is not in the image builder's registry yet: seed it with "
+                             "`./mirror-images.sh seed-builder` from the bundle (`./make --deploy` does it)." % repo_tag)
     return BASE_IMAGE
 
 
@@ -1364,7 +1387,8 @@ def start_build(image_id, user):
     if STORE.active_build(image_id):
         raise ValueError("This image is being built already.")
     spec = clean_spec(img["spec"], image_id)
-    problems = spec_problems(spec, APT.check(spec["packages"]) if spec["packages"] else {})
+    wanted = list(spec["packages"]) + (GNOME if spec["desktop"] == "gnome" else [])
+    problems = spec_problems(spec, APT.check(wanted) if wanted else {})
     if problems:
         raise ValueError(" ".join(problems))
     base_ref_for(spec)

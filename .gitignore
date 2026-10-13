@@ -14,6 +14,10 @@
 /development/tools/airgap-e2e/kubeconfig
 /development/tools/airgap-e2e/pki/
 /development/tools/airgap-e2e/*.log
+/development/tools/airgap-e2e/helm/
+/development/tools/airgap-e2e/helm-registry.json
+/development/tools/airgap-e2e/connected/
+/development/tools/airgap-e2e/airgap/
 # Local
 __pycache__/
 *.pyc

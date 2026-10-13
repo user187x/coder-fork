@@ -1,4 +1,4 @@
-# coder-airgapped 1.27.2: portable Helm chart of the live Coder fork
+# coder-airgapped 1.28.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -221,12 +221,16 @@ were missing from `prereqs/`; three HTTPRoutes stayed OutOfSync. The harness to 
 
 ## Known gaps for a strict air gap
 
-* **Workspace start-up installs two apps from the internet** (`main.tf`): code-server (`code-server.dev/install.sh`)
-  and File Browser (`raw.githubusercontent.com`). In a strict air gap the agent connects and the desktop and marimo
-  work (they are in the workspace image, `development/workspace-image`), but those two apps are missing. Add them to
-  the workspace image the same way, or point the downloads at internal mirrors.
-* **The image builder (Templates › Images) needs an apt mirror** in a strict air gap: set `imageBuilder.aptSources`
-  (or Images › Settings) to it. Otherwise the package check finds nothing and builds that install packages fail.
-  Its vulnerability database is the one in `coder-image-tools`, as old as the bundle; Java archives are not scanned.
-* The noVNC app icon is a wikimedia.org URL (cosmetic).
-* `ghcr.io/coder/coder:latest` (the push Job's CLI) is a floating tag: mirror it once and keep that copy.
+Fixed in 1.28.0: code-server and File Browser are in the workspace image (nothing is downloaded at workspace start);
+the push Job's CLI is Coder's own image (no floating `ghcr.io/coder/coder:latest`); Coder starts without Keycloak;
+the image builder's base comes from its own registry. What is left:
+
+* **Apt packages in the image builder need an apt mirror** (`imageBuilder.aptSources`, or Images › Settings). Without
+  one, everything else in a build works offline (uploaded .deb files, installations, dotfiles, hardening, FIPS
+  settings, XFCE or no desktop, the scan). Builds that need a download (apt packages, the GNOME desktop) are refused
+  before they start, saying so.
+* **The security data ages:** the vulnerability database in `coder-image-tools` is as old as the bundle. Load a newer
+  one with `development/tools/build-security-data.sh` (DEPLOY.md › *Keeping the security data current*).
+* **Admins' kubectl on EKS needs a Keycloak that EKS can reach:** EKS checks tokens from its own control plane, so an
+  issuer that only the private network can reach cannot be used there (DEPLOY.md › *kubectl and k9s for admins*).
+* **amd64 only:** every image is linux/amd64 (no Graviton nodes).

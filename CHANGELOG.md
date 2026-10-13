@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.28.0 – 2026-10-13
+
+Coder `2.0.0-platform.24` (fork `40db301bf`), workspace image `coder-workspace:1.8.0`. Release-readiness work: a
+full check of the published 1.27.2 against an air gap, Keycloak outages, EKS, rollback and load, with fixes for what
+it found. The report is [`docs/READINESS.md`](docs/READINESS.md).
+
+* **Coder runs without Keycloak.**
+  * Upstream Coder fetches the OIDC issuer's discovery document at startup and exits when it can't. So while
+    Keycloak was not set up, or down, Coder crash-looped and nobody could sign in, owners with passwords included.
+  * Now a Keycloak issuer gets its standard endpoints without discovery: Coder starts, password sign-in works, and
+    "Sign in with your certificate" works as soon as Keycloak answers. Any other OIDC provider: Coder starts with
+    password sign-in only and restarts itself cleanly once the provider answers.
+  * The Keycloak Secrets (`keycloaking-coder-oidc`, `keycloaking-coder-ca`) are optional, so the Coder pod starts
+    before they exist; `install.sh` says so instead of warning that Coder won't start.
+* **Workspaces need nothing from the internet.**
+  * Workspace image 1.8.0 has code-server 4.139.1 and File Browser 2.63.23 preinstalled, pinned by SHA-256 and
+    checked offline when the image is built. The template used to download both at every workspace start, which
+    fails in an air gap, so those two apps stayed unhealthy.
+  * The template now uses the image's copies and downloads only on an image without them. code-server runs with
+    telemetry and its update check off.
+* **No floating images:** the template push Job's CLI is Coder's own image, the same `coder` as the server. It used to
+  be `ghcr.io/coder/coder:latest`, dropped from the bundle (244 MB smaller).
+* **Image builder offline and on EKS:**
+  * Builds start from the workspace image in the builder's own registry. `./make --deploy` seeds it on any cluster,
+    and `./mirror-images.sh seed-builder` does it after an Argo CD install, through `kubectl port-forward`. Before,
+    on EKS, BuildKit had to pull it from your registry, which needs credentials: ECR with node roles has none.
+  * A GNOME build, or one with apt packages, and no apt mirror is refused before it starts, with the reason. It
+    used to fail halfway.
+* **EKS volumes:** workspaces' home volumes and the image builder's take the chosen StorageClass. EKS clusters may
+  have no default class, which left them Pending.
+  * `coder-workspace.storageClass` sets it for workspaces; `./make --deploy` sets it everywhere off Minikube. The
+    example values and the Argo CD file have it.
+  * A volume's class never changes after it is made, so existing homes are never replaced.
+* **Rollback image:** `coder-upstream:2.38.0-main.70bc2e554-airgap` is pure upstream Coder at the fork's base, in
+  the bundle. No published upstream release can take the fork's database yet: v2.38.0 stops at migration 605, the
+  fork is at 611. `development/coder-fork/ROLLBACK.md` has the procedure. Tested on a copy of the development
+  database: upstream starts, sees everything, and the fork rolls forward.
+* **Under load:** the platform service's session cache is least-recently-used with 20,000 entries. It used to be
+  cleared whole past 2,000, which under a large team sent every request back to Coder's API.
+* **A verification suite,** `development/tools/verify/` (`run.sh`):
+  - static checks of the deliverable;
+  - the fork's unit tests (Go, vitest, the platform service);
+  - a live conformance suite of Coder's own capabilities and the fork's (`live.py`, with the web terminal end to
+    end);
+  - browser checks with an egress check and a memory soak (`ui.mjs`);
+  - the rollback test (`rollback.sh`);
+  - a load test (`load.py`).
+* **Air-gap end-to-end test:**
+  - `setup.sh` scripts its one-time setup;
+  - step 8 fails on unhealthy workspace apps (it only printed them);
+  - step 9 builds an image offline and runs it on the node;
+  - etcd runs in memory, so a busy machine no longer fails the test.
+* **Documents:** `docs/FEATURES.md` (everything the fork adds to Coder Community Edition), `docs/READINESS.md`,
+  `development/coder-fork/UPSTREAM.md` (following upstream releases, with a trial merge), `ROLLBACK.md`.
+
 ## 1.27.2 – 2026-10-12
 
 Coder `2.0.0-platform.23` (rebuilt: `0eb28965f`).

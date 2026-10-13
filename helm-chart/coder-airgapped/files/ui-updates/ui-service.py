@@ -259,20 +259,32 @@ def http_json(
 
 
 class TTLCache:
+    """Expiring entries, least recently used evicted past MAX (a large team's sessions all fit: clearing the whole
+    cache at once, as before, sent every request back to Coder's API under load)."""
+
+    MAX = 20000
+
     def __init__(self):
         self.lock = threading.Lock()
-        self.items = {}
+        self.items = collections.OrderedDict()
 
     def get(self, key):
         with self.lock:
             hit = self.items.get(key)
-            return hit[1] if hit and hit[0] > time.time() else None
+            if not hit:
+                return None
+            if hit[0] <= time.time():
+                del self.items[key]
+                return None
+            self.items.move_to_end(key)
+            return hit[1]
 
     def put(self, key, value, ttl):
         with self.lock:
-            if len(self.items) > 2000:
-                self.items.clear()
             self.items[key] = (time.time() + ttl, value)
+            self.items.move_to_end(key)
+            while len(self.items) > self.MAX:
+                self.items.popitem(last=False)
 
 
 CACHE = TTLCache()

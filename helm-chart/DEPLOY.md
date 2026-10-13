@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.27.2.tar.gz && cd coder-airgapped-1.27.2
+tar -xzf coder-airgapped-1.28.0.tar.gz && cd coder-airgapped-1.28.0
 ./make --deploy
 ```
 
@@ -73,8 +73,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.27.2.tar.gz
-cd coder-airgapped-1.27.2
+tar -xzf coder-airgapped-1.28.0.tar.gz
+cd coder-airgapped-1.28.0
 ./mirror-images.sh list
 ```
 
@@ -85,14 +85,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.27.2` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.28.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.27.2
+cd coder-airgapped-1.28.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -121,6 +121,13 @@ CNPG_IMAGE=$REGISTRY/cloudnative-pg/cloudnative-pg:1.30.0 \
 
 Leave out `--cnpg` if CloudNativePG is already installed on the cluster.
 
+**Keycloak not ready yet?** Leave out `--oidc-ca` and `--oidc-secret-file`. Coder starts without them, and the admin
+signs in with the password from Step 8. A Keycloak issuer that does not answer yet does not stop Coder either: its
+sign-in button works as soon as Keycloak does. When Keycloak is set up, create the two secrets (run this step again
+with both options) and restart Coder (`kubectl -n coder rollout restart deploy/coder`). Keep
+`global.disablePasswordAuth: "false"` until a Keycloak sign-in has worked: with `"true"` nobody can sign in while
+Keycloak is down.
+
 ## Step 6 – Fill in the Argo CD file
 
 Open `argocd/coder-airgapped-application.yaml` and change every line marked **`CHANGE-ME`**:
@@ -131,7 +138,7 @@ Open `argocd/coder-airgapped-application.yaml` and change every line marked **`C
 | Registry password | ECR: output of `aws ecr get-login-password` |
 | `domain` | `example.com` |
 | `oidc.issuerUrl` | `https://keycloak.example.com/realms/master` |
-| `storageClass` (2 places) | `gp3` |
+| `storageClass` (5 places) | `gp3` |
 
 Everything else can stay as it is. The admin account is `admin` / `admin@admin.com` with password **`admin`**
 (`firstUser`); you change the password in Step 8.
@@ -159,6 +166,13 @@ You are the Coder admin (owner).
 Everyone else clicks **Sign in with your certificate** and logs in with Keycloak; they get a normal account. The
 admin can make others admins in **Admin settings › Users**. The banner starts empty – publish one at
 `https://coder.<your-domain>/__banner/admin`.
+
+Then give the image builder its base image (Templates › Images builds on the workspace image, from its own
+registry in the cluster; `./make --deploy` does this itself):
+
+```bash
+./mirror-images.sh seed-builder coder          # uses kubectl port-forward; a few minutes
+```
 
 Done.
 
@@ -252,8 +266,10 @@ Images › Settings. The package check and the builds both use it. The vulnerabi
 `coder-image-tools`, dated when the bundle was made); Java archives are not scanned, because their database is not
 bundled. Set S3 backups (bucket, region, keys, or an S3-compatible endpoint such as MinIO) in Images › Settings.
 
-On EKS with your own registry (`global.registry`), images start from the workspace image in that registry. On
-Minikube, `./make --deploy` seeds the built-in registry with it.
+Builds start from the workspace image in the builder's own registry in the cluster, so BuildKit needs no access
+to your registry. `./make --deploy` puts it there (on any cluster); after an Argo CD or plain Helm install, run
+`./mirror-images.sh seed-builder coder` once (Step 8). Until then, builds use the workspace image in your registry
+(`global.registry`, with its pull secret if any).
 
 ## Keeping the security data current (air gap)
 
@@ -297,10 +313,9 @@ volume (`imageBuilder.enabled`) and the platform service's permission to manage 
 * **Expand disk** grows the volume in place where the storage class has `allowVolumeExpansion: true` (EBS gp2 / gp3
   on EKS). Elsewhere it stops the workspace and copies its home onto a bigger volume.
 
-> **Good to know – workspaces in a strict air gap:** workspaces start and connect. The desktop, the JetBrains Mono Nerd
-> Font, tmux, k9s/kubectl and marimo (with all its packages) are in the workspace image. The template still installs
-> code-server and File Browser from the internet when a workspace starts; without internet those two show as unhealthy
-> – see `README.md` › *Known gaps*.
+> **Good to know – workspaces in a strict air gap:** everything a workspace runs is in the workspace image: the
+> desktop, Firefox, code-server, File Browser, marimo (with all its packages), tmux, k9s/kubectl and the JetBrains Mono
+> Nerd Font. Nothing is downloaded when a workspace starts (`coder-workspace:1.8.0` and later).
 
 ---
 

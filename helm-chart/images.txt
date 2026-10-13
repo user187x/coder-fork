@@ -4,14 +4,14 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.23-airgap  sha256:4670d6e9626bd2676b29c67a6c36b9bc860f6c07eadd07cf80427df4922062f8   coder (server); = the fork's platform.23 (0eb28965f) + Terraform provider mirror
-ghcr.io/user187x/coder-workspace:1.7.0                    sha256:e814705b7f91d1e9896e558d646668f944531aea348eb3d7d74cccaf674df189   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
+ghcr.io/user187x/coder-platform:2.0.0-platform.24-airgap  sha256:c9991f8973b1fd507ab63682a61b6f210e3045ff58d1f1b443026d47ff26af0f   coder (server); = the fork's platform.24 (40db301bf) + Terraform provider mirror
+ghcr.io/user187x/coder-workspace:1.8.0                    sha256:e47b4d060c0d2e6c3bc8ef77dd5fcaeafd7f2fef2a5a129b57b041abec4441f8   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
 ghcr.io/user187x/coder-image-tools:1.0.0                  sha256:b173c95de907b184a0219d40ac1dedb6c07a929a10406c96856eb9cda092f8af   coder-ui-updates and the Images builder's scans: the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
+ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap sha256:075fdbdd195a5b7649ce6e341f496653615a2e8785cedb46dda08660a2793410   rollback only: pure upstream Coder at the fork's base (70bc2e554) + the same Terraform provider mirror (development/coder-fork/ROLLBACK.md)
 
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage
 docker.io/library/python:3.13-alpine                      sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a   coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor)
-ghcr.io/coder/coder:latest                                sha256:38a4cfc548b096484d6d1743e5f1a5af18301ed9a7ffde5150663822f9887026   coder-workspace push-template Job (floating tag, pinned here)
 docker.io/moby/buildkit:v0.33.0-rootless                  sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef   Images view: the build Jobs (BuildKit rootless)
 docker.io/library/registry:3.1.2                          sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8   Images view: coder-image-registry, where built images are kept
 registry.k8s.io/metrics-server/metrics-server:v0.8.1     sha256:b2d2efaf5ac3b366ed0f839d2412a2c4279d4fc2a2a733f12c52133faed36c41   metrics-server (live CPU / memory for the HUD, Health, quotas; metricsServer.enabled: auto)

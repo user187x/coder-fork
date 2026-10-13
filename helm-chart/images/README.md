@@ -33,9 +33,10 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
-| `ghcr.io_user187x_coder-platform_2.0.0-platform.23-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.23-airgap` | 312 MB | coder (server); = the fork's platform.23 (0eb28965f) + Terraform provider mirror |
+| `ghcr.io_user187x_coder-platform_2.0.0-platform.24-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.24-airgap` | 313 MB | coder (server) and the template push Job's CLI; = the fork's platform.24 (40db301bf) + Terraform provider mirror |
 | `ghcr.io_user187x_coder-image-tools_1.0.0.tar.gz` | `ghcr.io/user187x/coder-image-tools:1.0.0` | 208 MB | coder-ui-updates and the Images builder's scans: python:3.13-alpine + shellcheck, shfmt, trivy (+ its vulnerability database), regctl (`development/image-tools`) |
-| `ghcr.io_user187x_coder-workspace_1.7.0.tar.gz` | `ghcr.io/user187x/coder-workspace:1.7.0` | 1539 MB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools (btop, bat, vim, eza, fzf, grc, jq, yq), k9s (custom build + config), kubectl, kubelogin (admins' kubectl sign-in), marimo with its Python packages (offline), default ~/.bashrc and desktop background |
+| `ghcr.io_user187x_coder-workspace_1.8.0.tar.gz` | `ghcr.io/user187x/coder-workspace:1.8.0` | 1856 MB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools (btop, bat, vim, eza, fzf, grc, jq, yq), k9s (custom build + config), kubectl, kubelogin (admins' kubectl sign-in), marimo with its Python packages (offline), code-server and File Browser (offline), default ~/.bashrc and desktop background |
+| `ghcr.io_user187x_coder-upstream_2.38.0-main.70bc2e554-airgap.tar.gz` | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap` | 309 MB | rollback only: pure upstream Coder at the fork's base (70bc2e554) + the same Terraform provider mirror (`development/coder-fork/ROLLBACK.md`) |
 
 ### `public/chart/`
 
@@ -43,7 +44,6 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 |---|---|---:|---|
 | `ghcr.io_cloudnative-pg_postgresql_18.4-system-trixie.tar.gz` | `ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie` | 249 MB | database, uiUpdates.logsDb, uiUpdates.pgImage |
 | `docker.io_library_python_3.13-alpine.tar.gz` | `docker.io/library/python:3.13-alpine` | 19 MB | coder-banner, coder-image-registry-proxy, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor) |
-| `ghcr.io_coder_coder_latest.tar.gz` | `ghcr.io/coder/coder:latest` | 244 MB | coder-workspace push-template Job (floating tag, pinned here) |
 | `docker.io_moby_buildkit_v0.33.0-rootless.tar.gz` | `docker.io/moby/buildkit:v0.33.0-rootless` | 123 MB | Images view: the build Jobs (BuildKit rootless) |
 | `docker.io_library_registry_3.1.2.tar.gz` | `docker.io/library/registry:3.1.2` | 20 MB | Images view: coder-image-registry, where built images are kept |
 | `registry.k8s.io_metrics-server_metrics-server_v0.8.1.tar.gz` | `registry.k8s.io/metrics-server/metrics-server:v0.8.1` | 21 MB | metrics-server: live CPU and memory (HUD, Health, quotas); installed only where the cluster has no metrics API |

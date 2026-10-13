@@ -25,6 +25,12 @@
 #                                   the repository argocd/coder-airgapped-application.yaml pulls from
 #                                   (helm registry login <registry> first; ECR=1 creates the ECR repository)
 #
+#   ./mirror-images.sh seed-builder [NAMESPACE]
+#                                   the image builder's base: pushes the workspace image into the in-cluster registry
+#                                   (coder-image-registry, through kubectl port-forward) as coder-images/base/<name:tag>.
+#                                   Any cluster kubectl reaches (EKS, kind...); no-op when it is there already.
+#                                   `./make --deploy` runs it; run it yourself after an Argo CD install.
+#
 #   ECR=1 ./mirror-images.sh push ...    create missing ECR repositories first (needs the aws CLI)
 #   PLAIN_HTTP=1 ./mirror-images.sh chart ...   registry without TLS
 set -euo pipefail
@@ -132,6 +138,29 @@ chart)
 			aws ecr create-repository --repository-name "$ecr_repo" >/dev/null
 	fi
 	helm push "$pkg" "oci://${repo}" $([[ "${PLAIN_HTTP:-0}" == 1 ]] && echo --plain-http)
+	;;
+seed-builder)
+	ns="${1:-coder}"
+	ws=""; for i in "${!images[@]}"; do [[ "${images[$i]}" == ghcr.io/user187x/coder-workspace:* ]] && { ws=$i; break; }; done
+	[[ -n "$ws" ]] || { echo "ERROR: no workspace image in images.txt" >&2; exit 1; }
+	name="${images[$ws]##*/}"
+	kubectl -n "$ns" rollout status deploy/coder-image-registry --timeout=300s >/dev/null ||
+		{ echo "ERROR: deploy/coder-image-registry in namespace $ns is not ready (imageBuilder.enabled?)" >&2; exit 1; }
+	port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+	kubectl -n "$ns" port-forward svc/coder-image-registry "${port}:5000" >/dev/null 2>&1 & pf=$!
+	trap 'kill "$pf" 2>/dev/null || true' EXIT
+	for _ in $(seq 60); do curl -fs -o /dev/null "http://127.0.0.1:${port}/v2/" && break; sleep 1; done
+	curl -fs -o /dev/null "http://127.0.0.1:${port}/v2/" || { echo "ERROR: the registry does not answer through port-forward" >&2; exit 1; }
+	if curl -fs -o /dev/null -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+		"http://127.0.0.1:${port}/v2/coder-images/base/${name%%:*}/manifests/${name##*:}"; then
+		echo "the image builder's registry has coder-images/base/${name} already"; exit 0
+	fi
+	ensure "$ws"
+	# Docker pushes to a registry on 127.0.0.1 over plain HTTP without any daemon setting.
+	dst="127.0.0.1:${port}/coder-images/base/${name}"
+	echo "${images[$ws]} -> coder-images/base/${name} (the image builder's registry; a few minutes)"
+	docker tag "${images[$ws]}" "$dst" && docker push -q "$dst" >/dev/null && docker rmi "$dst" >/dev/null
+	echo "seeded coder-images/base/${name}"
 	;;
 list)
 	reg="${1:-}"

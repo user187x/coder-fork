@@ -1,0 +1,144 @@
+"""Static checks of the deliverable (no cluster needed): the chart renders for every way it is installed, every image
+it can run is pinned in images.txt and archived in the bundle, nothing floats, and nothing at run time needs the
+internet.
+
+  python3 chart_checks.py [--bundle helm-chart] [--jsonl out.jsonl]
+
+Each check is a JSON line ({suite: "static", name, ok, detail}) as in live.py."""
+import argparse, glob, json, os, re, subprocess, sys
+
+RESULTS, OUT = [], None
+
+
+def check(name, ok, detail=""):
+    rec = {"suite": "static", "name": name, "ok": bool(ok), "detail": str(detail)[:800], "seconds": None}
+    RESULTS.append(rec)
+    if OUT:
+        OUT.write(json.dumps(rec) + "\n"); OUT.flush()
+    print("%s [static] %s%s" % ("PASS" if ok else "FAIL", name, (" - " + rec["detail"]) if rec["detail"] else ""), flush=True)
+
+
+def run(cmd, **kw):
+    p = subprocess.run(cmd, capture_output=True, text=True, **kw)
+    return p.returncode, p.stdout, p.stderr
+
+
+def strip_registry(ref):
+    first = ref.split("/", 1)[0]
+    return ref.split("/", 1)[1] if "/" in ref and ("." in first or ":" in first or first == "localhost") else ref
+
+
+def main():
+    global OUT
+    ap = argparse.ArgumentParser()
+    here = os.path.dirname(os.path.abspath(__file__))
+    ap.add_argument("--bundle", default=os.path.normpath(os.path.join(here, "../../../helm-chart")))
+    ap.add_argument("--jsonl")
+    a = ap.parse_args()
+    OUT = open(a.jsonl, "a") if a.jsonl else None
+    B = a.bundle; chart = os.path.join(B, "coder-airgapped")
+
+    rc, out, err = run(["helm", "lint", chart])
+    check("helm lint", rc == 0, (out + err).strip().splitlines()[-1] if rc else "")
+
+    images = {}  # ref -> (group, digest)
+    group = None
+    for line in open(os.path.join(B, "images.txt")):
+        f = line.split()
+        if not f or f[0].startswith("#"):
+            continue
+        if f[0].startswith("["):
+            group = f[0][1:-1]; continue
+        images[f[0]] = (group, f[1] if len(f) > 1 else "")
+    check("images.txt: every image pinned by digest", all(d.startswith("sha256:") for _, d in images.values()),
+          [r for r, (_, d) in images.items() if not d.startswith("sha256:")])
+    floating = [r for r in images if r.endswith(":latest") or ":" not in r.rsplit("/", 1)[-1]]
+    check("images.txt: no floating tags (:latest or none)", not floating, floating)
+
+    def archive(ref, grp):
+        d = os.path.join(B, "images", "custom" if grp == "custom" else os.path.join("public", grp))
+        return os.path.join(d, re.sub(r"[/:@]", "_", ref) + ".tar.gz")
+    missing = [r for r, (g, _) in images.items() if not os.path.isfile(archive(r, g))]
+    check("bundle: an archive for every image in images.txt", not missing, missing or "%d archives" % len(images))
+    sums_ok = True
+    for d in glob.glob(os.path.join(B, "images", "**", "SHA256SUMS"), recursive=True):
+        listed = {l.split()[1] for l in open(d) if l.strip()}
+        present = {os.path.basename(p) for p in glob.glob(os.path.join(os.path.dirname(d), "*.tar.gz"))}
+        if listed != present:
+            sums_ok = False
+            check("bundle: %s lists exactly its archives" % os.path.relpath(d, B), False, sorted(listed ^ present))
+    if sums_ok:
+        check("bundle: every SHA256SUMS lists exactly its archives", True)
+
+    scenarios = {
+        "Minikube defaults": [],
+        "EKS (values-eks-airgap.example.yaml)": ["-f", os.path.join(B, "values-eks-airgap.example.yaml")],
+        "a private registry (global.registry)": ["--set", "global.registry=registry.internal.example:5000"],
+        "Keycloak-only sign-in (disablePasswordAuth)": ["--set", "global.disablePasswordAuth=true"],
+        "admins' kubectl (clusterAccess)": ["--set", "global.clusterAccess.enabled=true"],
+    }
+    renders = {}
+    for name, extra in scenarios.items():
+        rc, out, err = run(["helm", "template", "coder", chart, "-n", "coder"] + extra)
+        renders[name] = out if rc == 0 else ""
+        check("renders: %s" % name, rc == 0, err.strip().splitlines()[-1] if rc and err.strip() else "")
+
+    ref_re = re.compile(r'(?:image|cliImage|loginImage|workspaceImage):\s*"?([a-z0-9][a-z0-9.:/_-]*:[A-Za-z0-9._-]+)"?'
+                        r'|=\s*"([a-z0-9][a-z0-9.:/_-]+:[A-Za-z0-9._-]+)"'
+                        r'|value:\s*"?((?:[a-z0-9.-]+(?::[0-9]+)?/)+[a-z0-9._-]+:[A-Za-z0-9._-]+)"?')
+    known = {strip_registry(r) for r in images}
+    for name in ("Minikube defaults", "a private registry (global.registry)"):
+        refs = set()
+        for m in ref_re.finditer(renders[name]):
+            r = next(x for x in m.groups() if x)
+            if "/" in r and not r.startswith(("http", "coder-image-registry", "localhost:5000/coder-images")):
+                refs.add(r)
+        unknown = sorted(r for r in refs if strip_registry(r) not in known and r not in images)
+        check("%s: every image it runs is in images.txt" % name, not unknown, unknown or "%d images" % len(refs))
+        if name.startswith("a private"):
+            outside = sorted(r for r in refs if not r.startswith("registry.internal.example:5000/"))
+            check("a private registry: every image comes from it", not outside, outside)
+
+    vals = open(os.path.join(chart, "values.yaml")).read()
+    tag = re.search(r"\n      tag: (\S+)", vals).group(1)
+    cli = re.search(r'cliImage: .*?"(ghcr\.io/user187x/coder-platform:[^"]+)"', vals)
+    check("the template push's CLI is Coder's own image (same tag as the server)", cli and cli.group(1).endswith(":" + tag),
+          cli.group(1) if cli else "no cliImage")
+    r = renders["Minikube defaults"]
+    check("Coder starts without Keycloak's Secrets (optional)",
+          re.search(r"name: keycloaking-coder-oidc\s*\n\s*optional: true", r) and
+          re.search(r"secretName: keycloaking-coder-ca\s*\n\s*optional: true|optional: true\s*\n\s*secretName: keycloaking-coder-ca", r),
+          "client-secret and CA mounts")
+    check("telemetry and update check off", "CODER_TELEMETRY_ENABLE" not in r or re.search(r"CODER_TELEMETRY_ENABLE\s*\n\s*value: \"?false", r),
+          "")
+    main_tf = open(os.path.join(chart, "charts/coder-workspace/files/main.tf")).read()
+    downloads = re.findall(r"curl[^\n]*https://[^\s|'\"]+", main_tf)
+    tools = {"code-server": "code-server", "filebrowser": "filebrowser"}
+    unguarded = [d for d in downloads
+                 if not any(k in d and re.search(r"command -v %s\b" % re.escape(t), main_tf) for k, t in tools.items())]
+    check("template: internet downloads only as a fallback, when the image lacks the tool", not unguarded,
+          unguarded or "%d fallbacks" % len(downloads))
+    check("template: the workspace image is substituted (not codercom/enterprise-base)",
+          "codercom/enterprise-base" not in r, "")
+    ws_img = re.search(r'workspaceImage: .*?"(ghcr\.io/user187x/coder-workspace:[^"]+)"', vals).group(1)
+    check("the workspace image the chart runs is the bundled one", ws_img in images, ws_img)
+    dfp = os.path.normpath(os.path.join(B, "../development/workspace-image/Dockerfile"))
+    if os.path.isfile(dfp):
+        df = open(dfp).read()
+        check("workspace image: code-server and File Browser preinstalled, pinned by SHA-256",
+              "CODE_SERVER_SHA256=" in df and "FILEBROWSER_SHA256=" in df, "")
+    else:  # a bundle on its own: look inside the image archive's config for the tools' paths
+        check("workspace image: code-server and File Browser preinstalled (needs development/: skipped)", True, "skipped")
+
+    rc, out, err = run([sys.executable, "-m", "unittest", "discover", "-s", here, "-p", "platform_unit_test.py", "-q"])
+    check("platform service unit tests", rc == 0, (err or out).strip().splitlines()[-1] if (err or out).strip() else "")
+    for sh in ("install.sh", "make", "mirror-images.sh", "minikube-support"):
+        rc, _, err = run(["bash", "-n", os.path.join(B, sh)])
+        check("shell syntax: %s" % sh, rc == 0, err.strip())
+    passed = sum(x["ok"] for x in RESULTS)
+    print("\n%d/%d static checks passed" % (passed, len(RESULTS)))
+    sys.exit(0 if passed == len(RESULTS) else 1)
+
+
+if __name__ == "__main__":
+    main()

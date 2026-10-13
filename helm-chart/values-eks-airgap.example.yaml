@@ -54,3 +54,10 @@ uiUpdates:
   # Installed with Helm, not Argo CD.
   argocd:
     enabled: false
+imageBuilder:                                             # Templates > Images: its registry and files volumes
+  registry:
+    storageClass: gp3                                     # CHANGE-ME
+  files:
+    storageClass: gp3                                     # CHANGE-ME
+coder-workspace:
+  storageClass: gp3                                       # CHANGE-ME: workspaces' home volumes (EKS may have no default class)

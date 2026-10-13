@@ -17,6 +17,14 @@ variable "use_kubeconfig" {
   default     = false
 }
 
+# The StorageClass of workspaces' home volumes ("" = the cluster's default). EKS clusters may have no default class:
+# set it (coder-workspace.storageClass in the chart). Only new volumes use it: a volume's class never changes.
+variable "home_storage_class" {
+  type        = string
+  description = "StorageClass of the home volumes (empty: the cluster's default)."
+  default     = ""
+}
+
 variable "namespace" {
   type        = string
   description = "The Kubernetes namespace to create workspaces in. Workspaces run only in the coder namespace."
@@ -343,19 +351,26 @@ APPS_VIEW
       websockify --web="$APPS_WEB" --unix-target="$APPS_SOCK" 127.0.0.1:6902 > /tmp/novnc-apps.log 2>&1 &
     fi
 
-    # 2. Install & Start code-server
-    if [ ! -d "/tmp/code-server" ]; then
-      curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=/tmp/code-server
+    # 2. code-server: the workspace image's (1.8.0 and later), so it works without internet. Downloaded only on an
+    # image without it, which needs internet (it is skipped, with a note in the log, when there is none).
+    CODE_SERVER="$(command -v code-server || true)"
+    if [ -z "$CODE_SERVER" ]; then
+      if [ ! -x /tmp/code-server/bin/code-server ]; then
+        curl -fsSL --max-time 60 https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=/tmp/code-server \
+          || echo "code-server is not in this image and could not be downloaded: skipped"
+      fi
+      CODE_SERVER=/tmp/code-server/bin/code-server
     fi
     # Probe the port rather than pgrep -f: the agent runs this script as `sh -c '<script>'`,
     # so `pgrep -f` matches the script's own command line and never starts anything.
-    if ! curl -fs http://localhost:13337/healthz > /dev/null; then
-      /tmp/code-server/bin/code-server --auth none --port 13337 >/tmp/code-server.log 2>&1 &
+    if [ -x "$CODE_SERVER" ] && ! curl -fs http://localhost:13337/healthz > /dev/null; then
+      "$CODE_SERVER" --auth none --port 13337 --disable-telemetry --disable-update-check >/tmp/code-server.log 2>&1 &
     fi
 
-    # 3. Install & Start Filebrowser
+    # 3. File Browser: the workspace image's as well; downloaded only on an image without it (needs internet).
     if ! command -v filebrowser >/dev/null; then
-      curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | sudo bash
+      curl -fsSL --max-time 60 https://raw.githubusercontent.com/filebrowser/get/master/get.sh | sudo bash \
+        || echo "File Browser is not in this image and could not be downloaded: skipped"
     fi
     # Path-based apps are proxied with their full /@user/workspace.agent/apps/<slug> prefix
     # intact, so filebrowser must serve under it or its assets 404 (endless spinner).
@@ -749,7 +764,8 @@ resource "kubernetes_persistent_volume_claim_v1" "home" {
   wait_until_bound = false
 
   spec {
-    access_modes = ["ReadWriteOnce"]
+    access_modes       = ["ReadWriteOnce"]
+    storage_class_name = var.home_storage_class != "" ? var.home_storage_class : null
     resources {
       requests = {
         storage = "${data.coder_parameter.home_disk_size.value}G"
@@ -758,9 +774,10 @@ resource "kubernetes_persistent_volume_claim_v1" "home" {
   }
 
   # The parameter is the size the workspace was created with; the disk can grow later (the workspace's ⋮ menu >
-  # Expand disk, done by the platform service), so later builds leave the volume's size alone.
+  # Expand disk, done by the platform service), so later builds leave the volume's size alone. The storage class
+  # is fixed when the volume is made: a change of home_storage_class must never replace (empty) existing homes.
   lifecycle {
-    ignore_changes = [spec[0].resources]
+    ignore_changes = [spec[0].resources, spec[0].storage_class_name]
   }
 }
 

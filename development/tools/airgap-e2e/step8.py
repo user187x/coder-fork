@@ -109,13 +109,31 @@ if "ubuntu-vnc-desktop" in names:
             time.sleep(10)
         check("workspace build succeeded", status == "succeeded", status + (" " + w["latest_build"]["job"].get("error", "") if status == "failed" else ""))
         check("workspace agent connected to Coder", agent.get("status") == "connected", str(agent.get("status")))
-        time.sleep(60)
-        s, w = api("/api/v2/workspaces/" + ws["id"], token=admin)
-        agents = [a for r in w["latest_build"]["resources"] for a in r.get("agents") or []]
-        if agents:
-            a = agents[0]
-            print("INFO agent lifecycle: %s; apps: %s" % (a.get("lifecycle_state"),
-                  ", ".join("%s=%s" % (x.get("slug"), x.get("health")) for x in a.get("apps") or [])))
+        # Every app with a health check must become healthy with no internet (code-server, File Browser, the
+        # desktop, marimo): they all come from the workspace image. Up to 10 minutes for the startup script.
+        deadline, a = time.time() + 600, {}
+        while time.time() < deadline:
+            s, w = api("/api/v2/workspaces/" + ws["id"], token=admin)
+            agents = [x for r in w["latest_build"]["resources"] for x in r.get("agents") or []]
+            a = agents[0] if agents else {}
+            checked = [x for x in a.get("apps") or [] if x.get("healthcheck", {}).get("url")]
+            if checked and all(x.get("health") == "healthy" for x in checked) and a.get("lifecycle_state") == "ready":
+                break
+            time.sleep(15)
+        apps = {x.get("slug"): x.get("health") for x in a.get("apps") or []}
+        print("INFO agent lifecycle: %s; apps: %s" % (a.get("lifecycle_state"),
+              ", ".join("%s=%s" % kv for kv in sorted(apps.items()))))
+        check("workspace startup finished (lifecycle ready)", a.get("lifecycle_state") == "ready", str(a.get("lifecycle_state")))
+        for slug in ("code-server", "filebrowser", "novnc", "marimo"):
+            if slug in apps:
+                check("workspace app %s healthy with no internet" % slug, apps[slug] == "healthy", str(apps[slug]))
+        # The apps answer through Coder's path-based proxy (what the dashboard opens).
+        owner = "admin"  # the workspace is the admin's
+        for slug, path in (("code-server", "/"), ("filebrowser", "/"), ("novnc", "/")):
+            if apps.get(slug) == "healthy":
+                st, _, _ = get("%s/@%s/e2e.main/apps/%s%s" % (CODER, owner, slug, path),
+                               headers={"Coder-Session-Token": admin})
+                check("app %s answers through Coder's proxy" % slug, st in (200, 302, 307), str(st))
 
 # --- 1.7.0: HUD, security posture, Global Workspace Scheduler (platform service, admin + Keycloak user) ---
 def ui(path, body=None, token=None):

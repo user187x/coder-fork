@@ -4,10 +4,10 @@
 # into the delivery bundle (helm-chart/images/custom/), replacing the previous one. marimo/requirements.lock is re-pinned
 # first when marimo/requirements.in changed (needs internet, like the build itself). Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.7.0
+#   ./build-workspace-image.sh [TAG]       default 1.8.0
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.7.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.8.0}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 # Pin marimo's packages for the base image's Python, when the list changed.
 m="${dev}/workspace-image/marimo"
 if [[ "${m}/requirements.in" -nt "${m}/requirements.lock" ]]; then
@@ -26,7 +26,7 @@ docker run --rm --entrypoint sh "$img" -c '
 	! dpkg -s light-locker >/dev/null 2>&1
 	fc-match monospace | grep -q JetBrainsMono
 	/usr/local/bin/tmux -V && command -v tmux-mirror-setup >/dev/null
-	for t in btop bat batcat vim eza fzf grc jq yq k9s kubectl kubectl-oidc_login kubelogin k9s-copy-secret; do command -v $t >/dev/null || { echo "missing: $t"; exit 1; }; done
+	for t in btop bat batcat vim eza fzf grc jq yq k9s kubectl kubectl-oidc_login kubelogin k9s-copy-secret code-server filebrowser; do command -v $t >/dev/null || { echo "missing: $t"; exit 1; }; done
 	test -f /usr/share/coder-workspace/bashrc && test -f /usr/share/coder-workspace/vimrc && cmp -s /etc/skel/.bashrc /usr/share/coder-workspace/bashrc
 	HOME=$(mktemp -d) bash -ic "type ls; echo ok" 2>&1 | grep -q "^ok$"
 	HOME=$(mktemp -d) bash -ic "complete -p kubectl >/dev/null || _completion_loader kubectl; complete -p kubectl" 2>/dev/null | grep -q kubectl
@@ -40,6 +40,15 @@ docker run --rm --network none --shm-size 256m --entrypoint bash "$img" -c '
 	set -e; export HOME="$(mktemp -d)"; echo "<h1>ok</h1>" >"$HOME/t.html"
 	timeout 120 firefox --headless --screenshot "$HOME/s.png" "file://$HOME/t.html" >"$HOME/ff.log" 2>&1 || { cat "$HOME/ff.log"; exit 1; }
 	test -s "$HOME/s.png" && echo "firefox offline check passed"'
+# code-server and File Browser start and answer with no network at all (the template's two web apps).
+docker run --rm --network none --entrypoint bash "$img" -c '
+	set -e; export HOME="$(mktemp -d)"; cd "$HOME"
+	code-server --auth none --bind-addr 127.0.0.1:13337 --disable-telemetry --disable-update-check >cs.log 2>&1 &
+	filebrowser --noauth --root "$HOME" --port 13339 --database "$HOME/fb.db" >fb.log 2>&1 &
+	for i in $(seq 1 60); do curl -fs http://127.0.0.1:13337/healthz >/dev/null && curl -fs http://127.0.0.1:13339/health >/dev/null && break; sleep 0.5; done
+	curl -fs http://127.0.0.1:13337/healthz >/dev/null || { cat cs.log; exit 1; }
+	curl -fs http://127.0.0.1:13339/health >/dev/null || { cat fb.log; exit 1; }
+	echo "code-server and File Browser offline checks passed"'
 # marimo with no network at all: run every cell of the check notebook (as a script: the first error stops it), then
 # serve it.
 docker run --rm --network none -v "${m}/smoke_test.py:/tmp/smoke_test.py:ro" --entrypoint bash "$img" -c '

@@ -46,7 +46,7 @@ spec:
   source:
     repoURL: 123456789012.dkr.ecr.us-east-1.amazonaws.com/charts  # CHANGE-ME: same as the repository url above
     chart: coder-airgapped
-    targetRevision: 1.27.2
+    targetRevision: 1.28.0
     helm:
       releaseName: coder
       valuesObject:
@@ -105,6 +105,15 @@ spec:
           storage:
             size: 10Gi
             storageClass: gp3                       # CHANGE-ME
+
+        imageBuilder:                               # Templates > Images: its registry and files volumes
+          registry:
+            storageClass: gp3                       # CHANGE-ME
+          files:
+            storageClass: gp3                       # CHANGE-ME
+
+        coder-workspace:
+          storageClass: gp3                         # CHANGE-ME: workspaces' home volumes (new ones)
 
         uiUpdates:
           adminRoles: owner

@@ -340,6 +340,15 @@ uiUpdates:
 metricsServer:
   kubeletInsecureTLS: $([[ "$TARGET" == minikube ]] && echo true || echo false)
 EOF
+	# Elsewhere than Minikube the cluster may have no default StorageClass (EKS): every volume gets the chosen one
+	# (the image builder's, and new workspace homes; existing homes keep theirs).
+	[[ "$TARGET" == minikube ]] || cat >>"$VALUES" <<EOF
+imageBuilder:
+  registry: {storageClass: ${STORAGE_CLASS}}
+  files: {storageClass: ${STORAGE_CLASS}}
+coder-workspace:
+  storageClass: ${STORAGE_CLASS}
+EOF
 	say "values: ${VALUES}"
 }
 
@@ -468,9 +477,12 @@ deploy() {
 	secret_args
 	if [[ "$METHOD" == argocd ]]; then install_argocd; else install_helm; fi
 	restart_reloaded
+	step "Images view: the workspace image as a build base"
 	if [[ "$TARGET" == minikube ]]; then
-		step "Images view: the workspace image as a build base"
 		"${here}/minikube-support" seed-registry "$PROFILE" "$(awk '/^ghcr.io\/user187x\/coder-workspace:/ {print $1; exit}' "${here}/images.txt")"
+	else
+		# Through kubectl port-forward: no node access and no registry credentials in the cluster needed.
+		"${here}/mirror-images.sh" seed-builder coder || warn "the image builder's base was not seeded: run ./mirror-images.sh seed-builder"
 	fi
 
 	[[ "$TARGET" != minikube ]] || run_sudo_steps
