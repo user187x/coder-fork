@@ -117,6 +117,13 @@ The full feature list, with where each piece lives and how it is tested, is
 - **Terminal:** tmux with btop, a pop-out window, text size, a custom command, JetBrains Mono Nerd Font.
 - **Per-user quotas** and a **global workspace scheduler** (required start/stop schedules, enforced).
 - **Home volumes:** backups (S3 or download) and disk growth (in place, or a copy to a bigger volume).
+- **Lock Down:** admins jail any workspace, for instance one where an agent runs away. There are three modes:
+  - **Network:** only Coder stays reachable;
+  - **Sudo Command:** nobody in it can use sudo;
+  - **Complete:** both.
+
+  It works live on a running workspace: its processes keep running, and its terminal and apps still open, so admins
+  can inspect what the agent is doing. On a stopped workspace it applies from the next start.
 - Admins' **post-it notes** on workspace pages; workspace icons; an agent Update pill.
 
 ### The workspace template and image
@@ -218,6 +225,24 @@ The full feature list, with where each piece lives and how it is tested, is
   - The only way in is Coder's authenticated app proxy, with every app shared with its owner only.
 - **Home volumes are protected:** their storage class can never change after creation, and they only ever grow, so
   a template change cannot replace (empty) anyone's home.
+
+### Lock Down (containing a workspace)
+
+- **Network:** firewall rules in the workspace pod's own network namespace refuse everything in or out except
+  loopback, DNS and Coder; connections already open stop at once, and IPv6 is blocked entirely. The agent's
+  connection to Coder is kept, so admins can still reach the workspace.
+- **Sudo Command:** a last sudoers rule denies every command to everyone. A process that is root already stays root,
+  and nothing else in the workspace can become root.
+- **It can't be undone from inside the workspace:**
+  - the workspace container has no `NET_ADMIN`, so not even root there can change its firewall;
+  - the setting lives outside the workspace, in a ConfigMap only the platform service writes.
+- **It applies live:**
+  - a running workspace is locked by a short-lived helper container, with no restart and nothing killed, so the
+    evidence stays in place;
+  - a stopped one is locked at start, before anything runs;
+  - a watcher keeps every running workspace as the setting says.
+- **It's visible:** everyone who sees a locked workspace, its owner included, gets a notice of what is locked, by
+  whom and since when. Only admins can set or lift it, and every change is logged.
 
 ### Image security
 

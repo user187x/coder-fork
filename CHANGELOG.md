@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.32.0 – 2026-10-13
+
+Coder `2.0.0-platform.32` (fork `716ec4dec`), workspace image `coder-workspace:1.8.3` (unchanged).
+
+* **Lock Down: admins jail a workspace**, for instance when an agent in it runs away. From the workspace page's left
+  sidebar (the shield; admins only), three modes:
+  * **Network:** the workspace reaches nothing but Coder: everything in or out is refused, connections already
+    open too, IPv6 entirely. Its agent stays connected, so admins still open its terminal and apps (they go through
+    Coder) and inspect what runs there.
+  * **Sudo Command:** nobody in the workspace can use sudo any more (a last sudoers rule denies every command).
+  * **Complete:** both.
+
+  It works on a **running** workspace at once, without a restart: an ephemeral container (the workspace's own
+  image, root with NET_ADMIN and SYS_PTRACE, sharing the workspace container's processes) sets it, so the
+  processes keep running for the admins to look at. On a **stopped** one it holds from its next start: the pod's init
+  container sets Network before anything runs, and a start script that blocks login sets Sudo. It cannot be undone
+  from inside: the workspace container has no NET_ADMIN, so not even root there can change the firewall, and
+  without sudo nobody becomes root. Everyone who sees a locked workspace (its owner too) gets a notice of what is
+  locked, by whom and since when; it stays until an admin lifts it. The settings are the ConfigMap `coder-lockdown`
+  (the platform service makes it; Helm and Argo CD leave it alone), and a watcher keeps every running workspace as
+  it says. Needs a namespace that allows NET_ADMIN and SYS_PTRACE in those two containers (Pod Security `privileged`,
+  or none set, as by default).
+
 ## 1.31.0 – 2026-10-13
 
 Coder `2.0.0-platform.31` (fork `2e7ae6ff9`), workspace image `coder-workspace:1.8.3`.

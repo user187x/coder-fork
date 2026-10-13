@@ -19,6 +19,7 @@ def load(name, file):
 
 ui = load("ui_service", "ui-service.py")
 ib = load("imagebuilder", "imagebuilder.py")
+ld = load("lockdown", "lockdown.py")
 
 
 class TTLCacheTest(unittest.TestCase):
@@ -120,6 +121,120 @@ class CoderUptimeTest(unittest.TestCase):
             self.assertIsNone(ui.coder_uptime())
         with mock.patch.object(ui, "KUBE", mock.MagicMock(call=mock.MagicMock(side_effect=OSError("down")))):
             self.assertIsNone(ui.coder_uptime())
+
+
+class LockDownTest(unittest.TestCase):
+    """Lock Down: the settings in the ConfigMap, the ephemeral container for a running pod, who may do what."""
+
+    WID = "5250ca5d-f2a9-4d0d-8153-5960fbb9fb02"
+
+    def kube(self, configmap=None, pods=(), ephemeral_exit=0):
+        calls, state = [], {"cm": configmap}
+
+        def call(method, path, body=None, patch_type=None):
+            calls.append((method, path, body, patch_type))
+            if path.endswith("/configmaps/coder-lockdown"):
+                if method == "GET":
+                    return (200, state["cm"]) if state["cm"] else (404, {})
+                state["cm"] = body
+                return 200, body
+            if path.endswith("/configmaps") and method == "POST":
+                state["cm"] = body
+                return 201, body
+            if "labelSelector" in path:
+                return 200, {"items": list(pods)}
+            if path.endswith("/ephemeralcontainers"):
+                return 200, {}
+            if "/log?" in path:
+                return 200, "lockdown: network on, sudo on"
+            if method == "GET":  # the pod, polled for the ephemeral container's end
+                name = calls[-2][2]["spec"]["ephemeralContainers"][0]["name"] if calls[-2][2] else ""
+                return 200, {"status": {"ephemeralContainerStatuses": [
+                    {"name": n, "state": {"terminated": {"exitCode": ephemeral_exit}}}
+                    for n in [c[2]["spec"]["ephemeralContainers"][0]["name"] for c in calls
+                              if c[1].endswith("/ephemeralcontainers")]]}}
+            return 200, {}
+        return mock.MagicMock(call=call, ok=True), calls, state
+
+    def pod(self, applied=None):
+        meta = {"name": "ws-pod", "labels": {"com.coder.workspace.id": self.WID}}
+        if applied:
+            meta["annotations"] = {ld.ANNOTATION: applied}
+        return {"metadata": meta, "spec": {"containers": [{"name": "dev", "image": "ghcr.io/user187x/coder-workspace:1.8.3"}]},
+                "status": {"phase": "Running", "containerStatuses": [{"name": "dev", "state": {"running": {"startedAt": "2026-10-13T12:00:00Z"}}}]}}
+
+    def setUp(self):
+        for name, value in (("LOG", None), ("CODER_HOST", "coder.example.com"), ("APPLY_TIMEOUT", 5)):
+            p = mock.patch.object(ld, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_settings_saved_and_read(self):
+        kube, calls, state = self.kube()
+        with mock.patch.object(ld, "KUBE", kube):
+            ld.save(self.WID, "network,sudo", {"by": "admin", "at": "t", "workspace": "zzz", "owner": "admin"})
+            self.assertEqual(state["cm"]["data"][self.WID], "network,sudo")   # what the pod reads at start
+            self.assertEqual(ld.settings()[self.WID]["modes"], ["network", "sudo"])
+            self.assertEqual(ld.settings()[self.WID]["by"], "admin")
+            ld.save(self.WID, "off", {})
+            self.assertEqual(ld.settings(), {})
+            self.assertNotIn(self.WID, state["cm"]["data"])
+
+    def test_running_pod_locked_live_by_an_ephemeral_container(self):
+        kube, calls, _ = self.kube(pods=[self.pod()])
+        with mock.patch.object(ld, "KUBE", kube):
+            results = ld.reconcile(self.WID, "network,sudo")
+        self.assertEqual([r[1] for r in results], [True])
+        patch = next(c for c in calls if c[1].endswith("/ephemeralcontainers"))
+        c = patch[2]["spec"]["ephemeralContainers"][0]
+        self.assertEqual(c["targetContainerName"], "dev")                      # shares the workspace's processes
+        self.assertEqual(c["image"], "ghcr.io/user187x/coder-workspace:1.8.3")
+        self.assertEqual(c["command"][4:], ["network,sudo", "coder.example.com", "/proc/1/root"])
+        self.assertEqual(c["securityContext"]["runAsUser"], 0)
+        self.assertEqual(set(c["securityContext"]["capabilities"]["add"]), {"NET_ADMIN", "NET_RAW", "SYS_PTRACE"})
+        annotate = [c for c in calls if c[0] == "PATCH" and c[3] == "application/merge-patch+json"]
+        self.assertEqual(annotate[0][2]["metadata"]["annotations"][ld.ANNOTATION], "network,sudo")
+
+    def test_in_force_already_or_failing(self):
+        kube, calls, _ = self.kube(pods=[self.pod(applied="sudo")])
+        with mock.patch.object(ld, "KUBE", kube):
+            self.assertEqual(ld.reconcile(self.WID, "sudo")[0][2], "already in force")
+        self.assertFalse(any(c[1].endswith("/ephemeralcontainers") for c in calls))
+        kube, calls, _ = self.kube(pods=[self.pod()], ephemeral_exit=1)
+        with mock.patch.object(ld, "KUBE", kube):
+            ok, message = ld.reconcile(self.WID, "network")[0][1:]
+        self.assertFalse(ok)
+        self.assertIn("exit 1", message)
+        self.assertFalse(any(c[3] == "application/merge-patch+json" for c in calls))   # not recorded as in force
+
+    def test_only_admins_lock_owners_see(self):
+        kube, _, _ = self.kube()
+        sent = []
+        h = mock.MagicMock()
+        h.csrf_ok.return_value = True
+        h.token.return_value = "t"
+        h.send_json.side_effect = lambda status, body: sent.append((status, body))
+        h.headers = {"Content-Length": "18"}
+        h.rfile.read.return_value = b'{"mode":"network"}'
+        ws = {"id": self.WID, "name": "zzz", "owner_name": "dev1", "owner_id": "u-dev1"}
+        with mock.patch.object(ld, "KUBE", kube), mock.patch.object(ld, "WORKSPACE_INFO", lambda t, w: ws), \
+                mock.patch.object(ld, "ADMIN_ROLES", {"owner"}):
+            h.user.return_value = ({"id": "u-dev1", "username": "dev1", "roles": []}, None)
+            ld.handle(h, "POST", "/__coder-ui/api/lockdown/" + self.WID, "")
+            self.assertEqual(sent[-1][0], 403)                                    # an owner cannot lock (or unlock)
+            ld.handle(h, "GET", "/__coder-ui/api/lockdown/" + self.WID, "")
+            self.assertEqual(sent[-1][0], 200)                                    # but sees whether it is locked
+            h.user.return_value = ({"id": "u-other", "username": "other", "roles": []}, None)
+            ld.handle(h, "GET", "/__coder-ui/api/lockdown/" + self.WID, "")
+            self.assertEqual(sent[-1][0], 403)                                    # someone else's: no
+            h.user.return_value = ({"id": "u-admin", "username": "admin", "roles": ["owner"]}, None)
+            ld.handle(h, "POST", "/__coder-ui/api/lockdown/" + self.WID, "")
+            self.assertEqual(sent[-1][0], 200)
+            self.assertEqual(sent[-1][1]["modes"], ["network"])
+            self.assertEqual(sent[-1][1]["applied"], "next start")                # not running here
+            h.rfile.read.return_value = b'{"mode":"wifi!!!!}'
+            ld.handle(h, "POST", "/__coder-ui/api/lockdown/" + self.WID, "")
+            self.assertEqual(sent[-1][0], 400)
 
 
 class TrackedWorkspaceImageTest(unittest.TestCase):

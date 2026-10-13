@@ -136,6 +136,10 @@ locals {
   cluster_kubeconfig = "/home/coder/.kube/coder-cluster.yaml"
   # The metrics' functions (the agent's metadata below).
   metadata_sh = file("${path.module}/scripts/metadata.sh")
+  # Lock Down (an admin's jail for this workspace: Network, Sudo or both): the script the pod's init container runs
+  # at start, and the host the workspace's agent reaches Coder on (Network keeps it).
+  lockdown_sh = file("${path.module}/scripts/lockdown.sh")
+  coder_host  = regex("^[a-z]+://([^/:]+)", data.coder_workspace.me.access_url)[0]
 }
 
 resource "coder_agent" "main" {
@@ -237,6 +241,18 @@ resource "coder_agent" "main" {
     interval     = 1
     timeout      = 1
   }
+}
+
+# Lock Down, at start: Sudo (Network is the pod's init container, below). Login waits for it.
+resource "coder_script" "lockdown" {
+  agent_id           = coder_agent.main.id
+  display_name       = "Lock Down"
+  icon               = "/icon/lock.svg"
+  run_on_start       = true
+  start_blocks_login = true
+  script = templatefile("${path.module}/scripts/lockdown-start.sh", {
+    workspace_id = data.coder_workspace.me.id
+  })
 }
 
 resource "coder_app" "marimo" {
@@ -441,6 +457,32 @@ resource "kubernetes_deployment_v1" "main" {
           }
         }
 
+        # Lock Down, at start: Network, before anything in the workspace runs. The admins' setting comes from the
+        # ConfigMap coder-lockdown (the platform service keeps it; none yet: nothing is locked). Root with NET_ADMIN
+        # in the pod's network namespace, which the workspace container shares but cannot change (it has no
+        # NET_ADMIN). A running workspace is locked without a restart, by the platform service.
+        init_container {
+          name              = "lockdown"
+          image             = "codercom/enterprise-base:ubuntu"
+          image_pull_policy = "IfNotPresent"
+          command = [
+            "sh", "-c", local.lockdown_sh, "lockdown",
+            "file:/etc/coder-lockdown/${data.coder_workspace.me.id}", local.coder_host, "",
+          ]
+          security_context {
+            run_as_user     = 0
+            run_as_non_root = false
+            capabilities {
+              add = ["NET_ADMIN", "NET_RAW"]
+            }
+          }
+          volume_mount {
+            name       = "lockdown"
+            mount_path = "/etc/coder-lockdown"
+            read_only  = true
+          }
+        }
+
         container {
           name              = "dev"
           image             = "codercom/enterprise-base:ubuntu"
@@ -486,6 +528,12 @@ resource "kubernetes_deployment_v1" "main" {
             mount_path = "/dev/shm"
             name       = "dshm"
           }
+          # Lock Down's setting (read-only): the start script reads it for Sudo.
+          volume_mount {
+            mount_path = "/etc/coder-lockdown"
+            name       = "lockdown"
+            read_only  = true
+          }
         }
 
         volume {
@@ -518,6 +566,15 @@ resource "kubernetes_deployment_v1" "main" {
         volume {
           name = "ca-bundle"
           empty_dir {}
+        }
+
+        # Lock Down's settings, by workspace id (the platform service makes the ConfigMap at the first lock).
+        volume {
+          name = "lockdown"
+          config_map {
+            name     = "coder-lockdown"
+            optional = true
+          }
         }
 
         affinity {

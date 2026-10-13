@@ -76,6 +76,7 @@
   Monitoring (admins; workspace pod logs streamed into the temporary Postgres coder-ui-logs-db, 5 MB per instance)
   GET  /__coder-ui/api/monitoring          users and their running workspaces
   GET  /__coder-ui/api/monitoring/posture  zero-trust checks and runtime signals (identity, exposure, pods, failures)
+  GET  /__coder-ui/api/lockdown[/<id>]      admins (an owner: their workspace): Lock Down; POST /<id> {mode}: see lockdown.py
   GET  /__coder-ui/api/hud                 admins: the HUD's metrics (totals, leaders, health) and Coder's uptime, cached 5 seconds
   GET  /__coder-ui/api/hud/history?range=  admins: the HUD graphs (CPU, memory, latency), sampled every 15 s, kept 7 days
   /__coder-ui/api/workspace-icons, /__coder-ui/api/workspace-volumes/<id>   workspace icons, home backups and disk
@@ -118,6 +119,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pgwire  # noqa: E402  (next to this file)
 import imagebuilder  # noqa: E402  (next to this file: the Images view)
 import workspacevolumes  # noqa: E402  (workspace icons, home backups, disk growth)
+import lockdown  # noqa: E402  (Lock Down: admins jail a workspace's network and sudo)
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -6843,6 +6845,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if workspacevolumes.handle(self, "GET", path, url.query):
             return
+        if lockdown.handle(self, "GET", path, url.query):
+            return
         if path.startswith(TEMPLATE_ICONS_PATH):
             return self.template_icon(path[len(TEMPLATE_ICONS_PATH):])
         if path == BASE + "/refresh":
@@ -7594,6 +7598,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if workspacevolumes.handle(self, "POST", path, url.query):
             return
+        if lockdown.handle(self, "POST", path, url.query):
+            return
         routes = {
             BASE + "/api/view",
             BASE + "/api/ack",
@@ -7996,6 +8002,8 @@ def main():
     workspacevolumes.setup(log, http_json, KUBE)
     workspacevolumes.CODER_URL = CODER_URL
     workspacevolumes.start()
+    lockdown.setup(log, KUBE, workspace_info, ADMIN_ROLES, CODER_ACCESS_URL)
+    lockdown.start()
     if imagebuilder.ENABLED:
         # the apt indices for the package check, ready before anyone opens the builder
         threading.Thread(target=lambda: imagebuilder.APT.load(), daemon=True).start()

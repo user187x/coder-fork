@@ -85,6 +85,21 @@ rules:
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
+  # Lock Down (lockdown.py): a running workspace pod gets the setting from an ephemeral container (no restart), and
+  # an annotation of what is in force; the settings are the ConfigMap coder-lockdown, which the service makes.
+  - apiGroups: [""]
+    resources: [pods/ephemeralcontainers]
+    verbs: [patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [patch]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [coder-lockdown]
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
   # Monitoring > Security posture: are workspaces segmented?
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]

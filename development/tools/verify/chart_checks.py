@@ -134,6 +134,20 @@ def main():
         check("template scripts: formatted (shfmt -i 1)", rc == 0, (out + err).strip()[:300] or "%d scripts" % len(scripts))
     else:
         check("template scripts: formatted (shfmt -i 1; shfmt not installed: skipped)", True, "skipped")
+    # Every module the platform service imports from its own folder (and the Lock Down script) is in the chart's list
+    # of the service's files: one left out crash-loops the service (1.32.0's first deploy did, with lockdown.py).
+    ui_dir = os.path.join(chart, "files/ui-updates")
+    tpl_ui = open(os.path.join(chart, "templates/ui-updates.yaml")).read()
+    listed = set(re.findall(r'"([\w.-]+)"', (re.search(r"\$code := list ([^}]+)\}", tpl_ui) or [None, ""])[1]))
+    imported = {m + ".py" for m in re.findall(r"^import (\w+)", open(os.path.join(ui_dir, "ui-service.py")).read(), re.M)
+                if os.path.isfile(os.path.join(ui_dir, m + ".py"))} | {"lockdown.sh"}
+    check("platform service: every module it imports is shipped (templates/ui-updates.yaml's file list)",
+          imported <= listed, sorted(imported - listed) or "%d modules" % len(imported))
+    ui_lock = os.path.join(chart, "files/ui-updates/lockdown.sh")
+    tpl_lock = os.path.join(tf_dir, "scripts", "lockdown.sh")
+    check("Lock Down: the platform service's lockdown.sh is the template's (one script, two places)",
+          os.path.isfile(ui_lock) and os.path.isfile(tpl_lock) and open(ui_lock).read() == open(tpl_lock).read(),
+          "files/ui-updates/lockdown.sh vs charts/coder-workspace/files/scripts/lockdown.sh")
     bad = [os.path.basename(s) for s in scripts if run(["bash", "-n", s])[0] != 0]
     check("template scripts: shell syntax (bash -n)", not bad, bad or "%d scripts" % len(scripts))
     main_tf = tf["main.tf"] + "".join(open(s).read() for s in scripts)

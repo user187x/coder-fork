@@ -119,7 +119,9 @@ if [ ! -f /usr/bin/vncserver ] && [ "$IMAGE_DESKTOP" != none ]; then
 fi
 
 # Serve the noVNC client as the directory index so the bare app URL loads it.
-sudo ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
+# (Only when the image lacks it: the workspace image has it, and a Lock Down may have taken sudo away.)
+[ "$(readlink /usr/share/novnc/index.html 2>/dev/null)" = /usr/share/novnc/vnc.html ] ||
+ sudo ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
 # Configure XFCE (or the image's own desktop session, such as GNOME) to start on VNC launch
 # TigerVNC >= 1.14 reads ~/.config/tigervnc (the legacy ~/.vnc fails to migrate),
