@@ -2,12 +2,13 @@
 
 ## 1.29.0 – 2026-10-13
 
-Coder `2.0.0-platform.25` (unchanged), workspace image `coder-workspace:1.8.1` (unchanged).
+Coder `2.0.0-platform.26` (fork `100cc87d8`), workspace image `coder-workspace:1.8.1` (unchanged).
 
 * **The workspace template's scripts are files of their own,** in `charts/coder-workspace/files/scripts/`: the
-  startup script, the certificate install, the agent activity monitor and the five metadata scripts (RAM, disk,
-  load). The `.tf` files read them with `file()`, or `templatefile()` where they need the template's values;
-  `main.tf` went from 967 lines to 530. Formatted with `shfmt -i 1`; the static checks keep them formatted,
+  startup script, the certificate install, the agent activity monitor, and the metrics in one `metadata.sh` with a
+  function each (`ram`, `ram_host`, `disk`, `disk_host`, `load`, `load_host`): a metric runs the file with its
+  function's name appended (`bash metadata.sh ram` tries one by hand). The `.tf` files read them with `file()`, or
+  `templatefile()` where they need the template's values; `main.tf` went from 967 lines to 530. Formatted with `shfmt -i 1`; the static checks keep them formatted,
   `bash -n` clean and in the push's ConfigMap, and no script back inline.
   * `startup.sh` gets the template's values once, as shell variables at its top (`OWNER_NAME`, `CLUSTER_ADMIN`, …),
     instead of Terraform references throughout.
@@ -16,6 +17,14 @@ Coder `2.0.0-platform.25` (unchanged), workspace image `coder-workspace:1.8.1` (
   * **The agent activity monitor's forwarder starts** (`agentAudit`, off by default). The end marker of its
     `forward.py` heredoc was indented, so bash never found it: the heredoc ran to the end of the script, which
     left the forwarder unstarted. As a file, the Python sits in column 0 and needs no `sed` to un-indent it.
+* **A workspace load average** (Load Avg, in the Workspace group next to CPU and RAM). `/proc/loadavg` is the
+  node's, so `load` counts the kernel's way from the workspace's own threads (running, waiting for a CPU, or in
+  uninterruptible sleep), in a 1-minute decaying average with the kernel's weight, over the workspace's CPU limit:
+  three busy processes in a 2-core workspace read `3.00 / 2 cores (150%)`.
+* **An easter egg in the announcement's terminal** (the banner's down arrow): its prompt takes typing, Enter answers
+  `command not found`, and typing `skynet` fades the whole screen into Skynet. A click or any key dismisses it: the
+  picture tears into shifted, colour-split slices and collapses like an old screen switching off. Without animations
+  (the setting, or reduced motion) it simply fades.
 * **The template is shown as UBUNTU, with the Ubuntu icon** (`coder-workspace.template.displayName` / `icon`). Its
   name, and so its URL and the CLI's `ubuntu-vnc-desktop`, stay. They are set where the template has none (a new
   install, or one that never had them): a display name or icon set in the dashboard is kept.

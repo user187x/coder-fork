@@ -134,6 +134,8 @@ locals {
     toset([for r in split(",", var.cluster_admin_roles) : trimspace(r) if trimspace(r) != ""]),
   )) > 0
   cluster_kubeconfig = "/home/coder/.kube/coder-cluster.yaml"
+  # The metrics' functions (the agent's metadata below).
+  metadata_sh = file("${path.module}/scripts/metadata.sh")
 }
 
 resource "coder_agent" "main" {
@@ -159,6 +161,9 @@ resource "coder_agent" "main" {
     cluster_oidc_client_id = var.cluster_oidc_client_id
   })
 
+  # The metrics: the workspace's (CPU, RAM, load, home disk) and, in the dashboard's Cluster group, the node's (keys
+  # ending in "_host"). Each but CPU is a function of scripts/metadata.sh, which explains it: the file runs with the
+  # function's name appended.
   metadata {
     display_name = "CPU"
     key          = "0_cpu_usage"
@@ -167,23 +172,26 @@ resource "coder_agent" "main" {
     timeout      = 1
   }
 
-  # Memory in GB (10^9 bytes) like the disks, not coder stat's GiB: its JSON (indented, so joined into one line for
-  # awk) gives the bytes (the workspace's: its cgroup's usage and limit; with --host, the node's).
   metadata {
     display_name = "RAM"
     key          = "1_ram_usage"
-    script       = file("${path.module}/scripts/metadata-ram.sh")
+    script       = "${local.metadata_sh}\nram"
     interval     = 10
     timeout      = 1
   }
 
-  # The home volume, in GB: what it holds of its own size (CODER_HOME_DISK_SIZE, the volume's size as Kubernetes
-  # has it). Where the file system is the volume (EBS...), df says both; where the volume is a directory of a bigger
-  # disk (local-path, hostPath), df would show that disk, so du counts the home instead.
+  metadata {
+    display_name = "Load Avg"
+    key          = "2_load"
+    script       = "${local.metadata_sh}\nload"
+    interval     = 10
+    timeout      = 3
+  }
+
   metadata {
     display_name = "Disk"
     key          = "3_home_disk"
-    script       = file("${path.module}/scripts/metadata-disk.sh")
+    script       = "${local.metadata_sh}\ndisk"
     interval     = 60
     timeout      = 15
   }
@@ -199,30 +207,25 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "RAM"
     key          = "5_mem_usage_host"
-    script       = file("${path.module}/scripts/metadata-ram-host.sh")
+    script       = "${local.metadata_sh}\nram_host"
     interval     = 10
     timeout      = 1
   }
 
-  # The disk of the node the workspace runs on (where its images and containers live; on Minikube, the host's disk),
-  # in GB like the workspace's.
   metadata {
     display_name = "Disk"
     key          = "6_disk_host"
-    script       = file("${path.module}/scripts/metadata-disk-host.sh")
-    interval = 60
-    timeout  = 5
+    script       = "${local.metadata_sh}\ndisk_host"
+    interval     = 60
+    timeout      = 5
   }
 
-  # The host's 1-minute load over its cores: /proc/loadavg is the host's, so it is divided by the host's online
-  # cores (getconf), not by nproc (in the container: the workspace's CPU limit, which made 6 / 6 cores read as fully
-  # loaded on a 24-core host).
   metadata {
     display_name = "Load Avg"
     key          = "7_load_host"
-    script       = file("${path.module}/scripts/metadata-load-host.sh")
-    interval = 60
-    timeout  = 1
+    script       = "${local.metadata_sh}\nload_host"
+    interval     = 60
+    timeout      = 1
   }
 }
 
