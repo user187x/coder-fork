@@ -445,6 +445,38 @@ class LoginPageSettingsTest(unittest.TestCase):
                 ui.clean_login_page(dict({"effect": "plain", "color": "#000000", "speed": 3}, **bad))
 
 
+class NotApplicableFindingsTest(unittest.TestCase):
+    """The scan sets apart what cannot apply to a container (and only that): the kernel's header package, and Ubuntu's
+    snap-package advisories, two years old or more, matched against Mozilla's own Firefox."""
+
+    OS = {"Class": "os-pkgs", "Target": "img (ubuntu 26.04)"}
+
+    def v(self, pkg, installed="1", fixed="", published="2022-02-19T18:15:08Z", sev="HIGH"):
+        return {"PkgName": pkg, "InstalledVersion": installed, "FixedVersion": fixed, "PublishedDate": published,
+                "Severity": sev, "VulnerabilityID": "CVE-2022-25235"}
+
+    def test_kernel_headers(self):
+        self.assertEqual(ib.not_applicable(self.v("linux-libc-dev", "7.0.0-38.38"), self.OS), "kernel-headers")
+        # not the kernel package's other names, and not outside the OS packages
+        self.assertIsNone(ib.not_applicable(self.v("linux-image-generic"), self.OS))
+        self.assertIsNone(ib.not_applicable(self.v("linux-libc-dev"), {"Class": "lang-pkgs", "Target": "x"}))
+
+    def test_mozilla_firefox_old_snap_advisories_only(self):
+        mozilla = self.v("firefox", "158.0~build2", "1:1snap1-0ubuntu1")
+        self.assertEqual(ib.not_applicable(mozilla, self.OS), "mozilla-firefox")
+        recent = self.v("firefox", "158.0~build2", "1:1snap1-0ubuntu1",
+                        published=ib.datetime.datetime.now(ib.datetime.timezone.utc).isoformat())
+        self.assertIsNone(ib.not_applicable(recent, self.OS))                      # a new one counts
+        ubuntu_deb = self.v("firefox", "1:1snap1-0ubuntu1", "1:1snap1-0ubuntu2")
+        self.assertIsNone(ib.not_applicable(ubuntu_deb, self.OS))                  # Ubuntu's own package counts
+        real_fix = self.v("firefox", "158.0~build2", "159.0")
+        self.assertIsNone(ib.not_applicable(real_fix, self.OS))                    # a real fixed version counts
+
+    def test_grade_counts_only_what_applies(self):
+        self.assertEqual(ib.grade({"vulnerabilities": {"counts": {"HIGH": 0, "MEDIUM": 258}}, "checks": []}), "B")
+        self.assertEqual(ib.grade({"vulnerabilities": {"counts": {"HIGH": 1, "MEDIUM": 0}}, "checks": []}), "C")
+
+
 class TrackedWorkspaceImageTest(unittest.TestCase):
     """The workspace template's image as an entry of the Images view: made, kept to the deployed image, scanned when
     it is new or changed, and read-only."""

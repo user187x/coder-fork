@@ -1511,6 +1511,43 @@ def cancel_build(image_id, build_id):
 # --------------------------------------------------------------------------- the report
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 
+# Findings that cannot apply to a container image, set apart in the report (each listed, with the reason) and left
+# out of its counts and grade. Narrow on purpose: anything they do not match counts.
+#   kernel-headers   linux-libc-dev carries the Linux kernel's header files (for compiling C programs), so Ubuntu
+#                    files every kernel vulnerability under it; a container runs its node's kernel, never one from the
+#                    image. Those are fixed by patching the nodes (their kernel), not the image.
+#   mozilla-firefox  Ubuntu's firefox package became a snap installer in 2022 and Ubuntu marks every Firefox
+#                    vulnerability "fixed" in it (1:1snap1...); an image with Mozilla's own Firefox (packages.mozilla.org:
+#                    no epoch, a ~build version) matches them all. Only those at least two years old count as not
+#                    applicable: Mozilla ships its fixes within weeks, so a current build has them.
+NA_FIREFOX_AGE_DAYS = 730
+
+
+def not_applicable(v, res):
+    """The rule a trivy finding is set apart by (kernel-headers, mozilla-firefox), or None."""
+    os_pkg = res.get("Class") == "os-pkgs"
+    if os_pkg and v.get("PkgName") == "linux-libc-dev":
+        return "kernel-headers"
+    if os_pkg and v.get("PkgName") == "firefox" and (v.get("FixedVersion") or "").startswith("1:1snap") \
+            and ":" not in (v.get("InstalledVersion") or ":") and "~build" in (v.get("InstalledVersion") or ""):
+        try:
+            published = datetime.datetime.fromisoformat((v.get("PublishedDate") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if (datetime.datetime.now(datetime.timezone.utc) - published).days >= NA_FIREFOX_AGE_DAYS:
+            return "mozilla-firefox"
+    return None
+
+
+NA_REASONS = {
+    "kernel-headers": "Linux kernel vulnerabilities, filed under the kernel's header files (linux-libc-dev, for "
+                      "compiling C programs): a container runs its node's kernel, never one from the image. Patch the "
+                      "nodes' kernel.",
+    "mozilla-firefox": "Ubuntu's advisories for its own firefox package (a snap installer since 2022), matching this "
+                       "image's Mozilla Firefox (packages.mozilla.org); at least two years old, so fixed in Mozilla's "
+                       "releases long before this one.",
+}
+
 
 def grade(report):
     v = report.get("vulnerabilities", {}).get("counts", {})
@@ -1712,12 +1749,17 @@ def scan(ref, report_url):
         t = {}
     if p.returncode != 0 and not t:
         report["error"] = "trivy: " + p.stderr.decode()[-600:]
-    vulns, secrets_ = [], []
+    vulns, secrets_, na = [], [], {}
     for res in t.get("Results") or []:
         for v in res.get("Vulnerabilities") or []:
-            vulns.append({"id": v.get("VulnerabilityID"), "pkg": v.get("PkgName"), "installed": v.get("InstalledVersion"),
-                          "fixed": v.get("FixedVersion") or "", "severity": v.get("Severity", "UNKNOWN"),
-                          "title": (v.get("Title") or v.get("Description") or "")[:160], "target": res.get("Target")})
+            item = {"id": v.get("VulnerabilityID"), "pkg": v.get("PkgName"), "installed": v.get("InstalledVersion"),
+                    "fixed": v.get("FixedVersion") or "", "severity": v.get("Severity", "UNKNOWN"),
+                    "title": (v.get("Title") or v.get("Description") or "")[:160], "target": res.get("Target")}
+            rule = not_applicable(v, res)
+            if rule:
+                na.setdefault(rule, []).append(item)
+            else:
+                vulns.append(item)
         for s in res.get("Secrets") or []:
             secrets_.append({"rule": s.get("RuleID"), "title": s.get("Title"), "severity": s.get("Severity"),
                              "target": res.get("Target"), "line": s.get("StartLine")})
@@ -1729,7 +1771,14 @@ def scan(ref, report_url):
                                  "os": (t.get("Metadata") or {}).get("OS"),
                                  "javaScanned": data["java"],
                                  "note": "" if data["java"] else "Java archives (.jar) are not checked: load security "
-                                         "data with the Java database (Images > Settings) to check them."}
+                                         "data with the Java database (Images > Settings) to check them.",
+                                 # set apart, each rule with its reason, how many, and the findings (the first 100)
+                                 "notApplicable": [
+                                     {"rule": rule, "reason": NA_REASONS[rule], "total": len(items),
+                                      "counts": {s: sum(1 for x in items if x["severity"] == s) for s in SEVERITIES},
+                                      "packages": sorted({x["pkg"] for x in items}),
+                                      "items": sorted(items, key=lambda x: order.get(x["severity"], 9))[:100]}
+                                     for rule, items in sorted(na.items())]}
     report["secrets"] = secrets_[:50]
     report["dbUpdatedAt"] = data["stamp"]["vulnerabilityDbUpdatedAt"]
     post({"progress": "checks"})

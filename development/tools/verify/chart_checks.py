@@ -164,8 +164,10 @@ def main():
     dfp = os.path.normpath(os.path.join(B, "../development/workspace-image/Dockerfile"))
     if os.path.isfile(dfp):
         df = open(dfp).read()
+        # code-server's release download, and File Browser's source (built in the image's filebrowser-* stages)
         check("workspace image: code-server and File Browser preinstalled, pinned by SHA-256",
-              "CODE_SERVER_SHA256=" in df and "FILEBROWSER_SHA256=" in df, "")
+              "CODE_SERVER_SHA256=" in df and "FILEBROWSER_SRC_SHA256=" in df
+              and "COPY --from=filebrowser /out/filebrowser" in df, "")
     else:  # a bundle on its own: look inside the image archive's config for the tools' paths
         check("workspace image: code-server and File Browser preinstalled (needs development/: skipped)", True, "skipped")
 

@@ -85,7 +85,11 @@ def main():
     manual = set(run(["apt-mark", "showmanual"]).split())
     added = sorted(n for n in now if n not in base)
     asked = [n for n in added if n in manual and n not in base_manual]
-    pip = json.loads(run(["/opt/marimo/bin/pip", "list", "--format", "json", "--disable-pip-version-check"]) or "[]")
+    # marimo's packages, as `pip list` would give them (the environment has no pip of its own: the image removes it)
+    pip = json.loads(run(["/opt/marimo/bin/python", "-c",
+                          "import importlib.metadata as m, json; print(json.dumps(sorted("
+                          "({'name': d.metadata['Name'], 'version': d.version} for d in m.distributions()),"
+                          " key=lambda x: x['name'].lower())))"]) or "[]")
 
     json.dump({
         "schema": 1,

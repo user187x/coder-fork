@@ -137,6 +137,14 @@ mk_load_image() { # group image
 		fi
 	done
 	on_every_node "$img" "$want" || warn "image $img: not on every node after loading"
+	# minikube image load leaves its copy of the archive in each node (/var/lib/minikube/images/<name>_<tag>), and
+	# every earlier tag's too: about 2 GB a node for each workspace image, until the disk fills. The image is in the
+	# node's Docker now, so its copies (any tag) go.
+	local cache="${img##*/}"; cache="${cache%%:*}_"
+	for n in $(kc get nodes -o jsonpath='{.items[*].metadata.name}'); do
+		minikube -p "$PROFILE" ssh -n "$n" -- \
+			"sudo find /var/lib/minikube/images -maxdepth 1 -type f -name '${cache}*' -delete" </dev/null >/dev/null 2>&1 || true
+	done
 	if ((had)) && [[ -n "${MK_RELOADED_FILE:-}" ]]; then echo "$img" >>"$MK_RELOADED_FILE"; fi
 }
 

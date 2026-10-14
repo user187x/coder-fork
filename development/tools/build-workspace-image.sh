@@ -4,10 +4,10 @@
 # into the delivery bundle (helm-chart/images/custom/), replacing the previous one. marimo/requirements.lock is re-pinned
 # first when marimo/requirements.in changed (needs internet, like the build itself). Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.8.3
+#   ./build-workspace-image.sh [TAG]       default 1.8.4
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.8.3}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.8.4}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 # Pin marimo's packages for the base image's Python, when the list changed.
 m="${dev}/workspace-image/marimo"
 if [[ "${m}/requirements.in" -nt "${m}/requirements.lock" ]]; then
@@ -27,6 +27,8 @@ docker run --rm --entrypoint sh "$img" -c '
 	fc-match monospace | grep -q JetBrainsMono
 	/usr/local/bin/tmux -V && command -v tmux-mirror-setup >/dev/null
 	for t in btop bat batcat vim eza fzf grc jq yq k9s kubectl kubectl-oidc_login kubelogin k9s-copy-secret code-server filebrowser; do command -v $t >/dev/null || { echo "missing: $t"; exit 1; }; done
+	# Lock Down runs these from the image (lockdown.sh: Network, Freeze), as root in the pod
+	for t in iptables ip6tables getent awk kill stat; do command -v $t >/dev/null || { echo "missing (Lock Down): $t"; exit 1; }; done
 	test -f /usr/share/coder-workspace/bashrc && test -f /usr/share/coder-workspace/vimrc && cmp -s /etc/skel/.bashrc /usr/share/coder-workspace/bashrc
 	HOME=$(mktemp -d) bash -ic "type ls; echo ok" 2>&1 | grep -q "^ok$"
 	HOME=$(mktemp -d) bash -ic "complete -p kubectl >/dev/null || _completion_loader kubectl; complete -p kubectl" 2>/dev/null | grep -q kubectl

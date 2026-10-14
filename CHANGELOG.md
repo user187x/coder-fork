@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.35.0 – 2026-10-14
+
+Coder `2.0.0-platform.35` (fork `ac6508b0e`), workspace image **`coder-workspace:1.8.4`** (the template has a new
+version: update workspaces to get the new image).
+
+* **The workspace image's scan: grade B, no critical and no high finding** (1.8.3: D, 64 high). In 1.8.4:
+  * every package upgraded at build time (Ubuntu's and Docker's fixes since the base was built);
+  * **File Browser built from its source** (2.63.23) with Go 1.27.2 and the fixed golang.org/x modules (net 0.61.0,
+    crypto 0.58.0, image 0.47.0): its release binary was built with Go 1.26.5 and older modules (14 high);
+  * **`basic-ftp` 6.2.3 in code-server** (it shipped 5.3.1: GHSA-c475-qrg2-pj4r and others), checked by its npm
+    SHA-512, like `shell-quote` before;
+  * **Docker's engine and plugins removed** (dockerd, containerd, buildx, compose): a workspace pod has no
+    privileges to run them, and their Go builds carried known vulnerabilities; the docker CLI stays (29.9.0), for a
+    remote daemon;
+  * the base's stray `/usr/bin/pebble` removed (no package owns it, nothing uses it; Go 1.26.7);
+  * marimo's environment without its own pip (nothing uses it after the build; pip vendors vulnerable `urllib3`,
+    `msgpack` and `setuptools`); users' `~/.marimo-venv` has its own.
+
+  What is left is 223 medium findings with no fix released (Ubuntu 26.04's own packages: ffmpeg's libraries, Rust
+  coreutils, libsoup, ...), so grade A (at most 20 medium) is not reachable without removing parts of the desktop.
+* **The scan sets apart findings that cannot apply to a container**, listed in the report (Images > the image) with
+  the reason, the packages and every finding, and left out of the counts and the grade. Two narrow rules:
+  * `linux-libc-dev`, the kernel's header files: Ubuntu files every Linux kernel vulnerability under it (2,625 in
+    1.8.4: 22 high, 2,603 medium), but a container runs its node's kernel, never one from the image; patch the
+    nodes;
+  * Mozilla's own Firefox (packages.mozilla.org) matching Ubuntu's advisories for its snap-installer package
+    (fixed: `1:1snap1`), only those two years old or more (16 in 1.8.4, from 2021 and 2022): fixed in Mozilla's
+    releases long before this one.
+* **Fixed (Minikube):** `minikube image load` leaves a copy of each loaded image in every node
+  (`/var/lib/minikube/images`), every earlier tag too: about 2 GB a node per workspace image, which filled the disk.
+  `./make --deploy` now deletes those copies once the image is in the node.
+
 ## 1.34.0 – 2026-10-14
 
 Coder `2.0.0-platform.34` (fork `4885d2c81`), workspace image `coder-workspace:1.8.3` (unchanged); the workspace

@@ -62,6 +62,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Admins' post-it notes on workspace pages and in the users table | fork, service | vitest |
 | Workspace icons; home backups (S3 or download); disk growth (in place, or a copy to a bigger volume) | fork, service | verify |
 | Global Workspace Scheduler: required start/stop schedules, enforced | fork, service | e2e step 8 |
+| Image scans set apart what cannot apply to a container (the kernel's header package; Ubuntu's snap advisories on Mozilla's Firefox, two years old or more), each rule with its reason and findings, not graded | service, fork | platform unit tests, vitest |
 | **Lock Down**: admins jail a workspace (Network: only Coder reachable; Sudo Command: no sudo; Complete: both; Freeze: Complete and everything paused, with a snapshot of its disk), live while it runs or from its next start, and again after every restart until lifted; a centred notice for everyone who sees it; red, still network lights | fork, service, chart | platform unit tests, vitest, live Lock Down test |
 | Per-user quota | fork, service | e2e step 8 |
 | "Animations" switch; no Favorite; no links to Coder's online docs | fork | vitest |

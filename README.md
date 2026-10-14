@@ -6,10 +6,10 @@ announcement banner and a full-featured workspace template, packaged as **one He
 every container image it needs**. Nothing is downloaded during the install, and nothing at run time reaches outside
 your network.
 
-| | Current release: [**v1.34.0**](https://github.com/user187x/coder-fork/releases/latest) |
+| | Current release: [**v1.35.0**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
 | Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.31-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
-| Workspace image | `ghcr.io/user187x/coder-workspace:1.8.3` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
+| Workspace image | `ghcr.io/user187x/coder-workspace:1.8.4` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
 | Image tools | `ghcr.io/user187x/coder-image-tools:1.0.0` (the platform service, BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
 | Bundle | 17 images pinned by digest, ~4 GB (`-slim`: the 4 custom images only, ~2.6 GB) |
@@ -26,11 +26,11 @@ your network.
 Download the release's parts, verify and join them, then install from inside the air-gapped network:
 
 ```bash
-sha256sum -c coder-airgapped-1.34.0.parts.sha256           # every part: OK
-cat coder-airgapped-1.34.0.tar.gz.part-0* > coder-airgapped-1.34.0.tar.gz
-sha256sum -c coder-airgapped-1.34.0.tar.gz.sha256          # the bundle: OK
+sha256sum -c coder-airgapped-1.35.0.parts.sha256           # every part: OK
+cat coder-airgapped-1.35.0.tar.gz.part-0* > coder-airgapped-1.35.0.tar.gz
+sha256sum -c coder-airgapped-1.35.0.tar.gz.sha256          # the bundle: OK
 
-tar -xzf coder-airgapped-1.34.0.tar.gz && cd coder-airgapped-1.34.0
+tar -xzf coder-airgapped-1.35.0.tar.gz && cd coder-airgapped-1.35.0
 ./make --deploy
 ```
 
@@ -283,8 +283,14 @@ The full feature list, with where each piece lives and how it is tested, is
 - **Security data stays current in an air gap:** trivy's vulnerability and Java databases and the FIPS rules are
   loaded from a file made outside (`build-security-data.sh`). Each report records which data graded it, and every
   image can be rescanned.
-- **The workspace image is tracked and scanned too**, and its findings are acted on. CVE-2026-102422 (critical,
-  `shell-quote` in code-server) is fixed in workspace image 1.8.3, so its scan shows no critical finding.
+- **The workspace image is tracked and scanned too**, and its findings are acted on. Workspace image 1.8.4 grades
+  **B: no critical and no high finding** (it was D, with 64 high): every package upgraded; File Browser built from
+  its source with the current Go and fixed Go modules; `basic-ftp` replaced in code-server (as `shell-quote` was for
+  CVE-2026-102422); Docker's engine and plugins (which cannot run in a workspace pod), a stray `pebble` and the marimo
+  environment's own pip (with vulnerable vendored copies) removed. What is left is medium findings with no fix
+  released. Findings that cannot apply to a container are listed apart in the report, each with its reason, and not
+  graded: the kernel's header package (a container runs its node's kernel) and Ubuntu's snap-package advisories,
+  two years old or more, on Mozilla's own Firefox.
 
 ### Data protection and rollback
 
@@ -327,15 +333,15 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **34/34** (1.34.0) |
-| Platform service unit tests | **30/30** (1.34.0) |
+| Static checks | **34/34** (1.35.0) |
+| Platform service unit tests | **33/33** (1.35.0) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Live conformance | **76/76** (1.28.0) |
 | Load, ~1,050 dashboard tabs for 8 minutes | **0 errors** of 157,626 requests, worst p95 0.28 s, no restarts (1.28.0) |
 | Browser memory soak, 8 minutes | JS heap +0.3 MB; no external requests (1.28.0) |
 | Rollback to upstream and back | **7/7** on a database copy, **4/4** live (1.28.0) |
-| Lock Down, live (Network, Sudo, Complete, Freeze, restarts) | **35/35** (1.34.0) |
-| Workspace image 1.8.3 scan | **0 critical** (1.31.0) |
+| Lock Down, live (Network, Sudo, Complete, Freeze, restarts) | **35/35** (1.35.0, workspace image 1.8.4) |
+| Workspace image 1.8.4 scan | Grade **B**: 0 critical, **0 high**, 223 medium with no fix released (1.35.0) |
 
 ```bash
 cd development/tools/verify

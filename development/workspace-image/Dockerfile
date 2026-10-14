@@ -21,11 +21,42 @@
 #   - the default shell setup (shell/): ~/.bashrc (/etc/skel and /usr/share/coder-workspace/bashrc) and the vimrc it
 #     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc);
 #   - code-server and File Browser, the template's two web apps (pinned below, checked by SHA-256): the template used
-#     to download them at every workspace start, which fails without internet;
+#     to download them at every workspace start, which fails without internet. File Browser is built from its source
+#     (the filebrowser-* stages below) with the current Go and fixed Go modules: its release binary carries known
+#     vulnerabilities (an old Go and old golang.org/x modules);
+#   - security: every package upgraded at build time; Docker's engine and plugins (dockerd, containerd, buildx,
+#     compose) removed - a workspace pod has no privileges to run them, and their Go builds carried known
+#     vulnerabilities - as is the base's stray /usr/bin/pebble (no package owns it, nothing uses it); the docker CLI
+#     stays, for a remote daemon;
 #   - /usr/share/coder-workspace/addons.json: what it adds over the base, with every version (addons/addons.py), for
 #     the Images view, which lists it next to the image's security report.
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
 ARG BASE=codercom/enterprise-base:ubuntu
+ARG FILEBROWSER_VERSION=2.63.23
+ARG FILEBROWSER_SRC_SHA256=18020983f6a4e43d679738738c3f95c52a333a282144046ec152491f2341a152
+
+# File Browser from its source: the frontend (pnpm, as its Taskfile builds it), then the Go binary with the current Go
+# and the fixed golang.org/x modules (its own go.mod pins vulnerable ones).
+FROM docker.io/library/node:24.21.0-trixie@sha256:1278a37eb510ec1606fba0e80f554bcc941ae0b44f35ae373c4822ae7717c64d AS filebrowser-frontend
+ARG FILEBROWSER_VERSION
+ARG FILEBROWSER_SRC_SHA256
+WORKDIR /src
+RUN curl -fsSL -o /tmp/fb.tgz "https://github.com/filebrowser/filebrowser/archive/refs/tags/v${FILEBROWSER_VERSION}.tar.gz" \
+	&& echo "${FILEBROWSER_SRC_SHA256}  /tmp/fb.tgz" | sha256sum -c - \
+	&& tar -xzf /tmp/fb.tgz --strip-components=1 && rm -f /tmp/fb.tgz
+RUN cd frontend && corepack enable && pnpm install --frozen-lockfile && pnpm run build
+
+FROM docker.io/library/golang:1.27.2-trixie@sha256:47667934874913a449b96faa7ef4777fa285d9ec29126ee80ed61c45b7cccf0e AS filebrowser
+ARG FILEBROWSER_VERSION
+COPY --from=filebrowser-frontend /src /src
+WORKDIR /src
+RUN go get golang.org/x/net@v0.61.0 golang.org/x/crypto@v0.58.0 golang.org/x/image@v0.47.0 \
+	&& go mod tidy \
+	&& CGO_ENABLED=0 go build -trimpath \
+		-ldflags "-s -w -X github.com/filebrowser/filebrowser/v2/version.Version=${FILEBROWSER_VERSION}" \
+		-o /out/filebrowser . \
+	&& /out/filebrowser version
+
 FROM ${BASE}
 
 USER root
@@ -36,6 +67,20 @@ ARG BASE
 RUN install -d /usr/share/coder-workspace \
 	&& dpkg-query -W -f='${Package}\t${Version}\n' >/usr/share/coder-workspace/.base-packages \
 	&& apt-mark showmanual >/usr/share/coder-workspace/.base-manual
+
+# Security: the base's packages to their newest (Ubuntu's and Docker's fixes since the base was built); Docker's engine
+# and plugins out (no privileges to run them in a workspace pod; their Go builds carried known vulnerabilities; the
+# docker CLI stays, for a remote daemon); the base's /usr/bin/pebble out (no package owns it, nothing uses it).
+# iptables stays (Docker had pulled it in): Lock Down's Network mode runs it from this image (lockdown.sh).
+RUN apt-get update \
+	&& apt-get -y full-upgrade \
+	&& apt-mark manual iptables >/dev/null \
+	&& apt-get purge -y docker-ce docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin \
+	&& apt-get autoremove -y --purge \
+	&& rm -f /usr/bin/pebble \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& docker --version && ! command -v dockerd && ! test -e /usr/libexec/docker/cli-plugins/docker-buildx \
+	&& iptables --version && ip6tables --version
 
 RUN apt-get update \
 	&& apt-get install -y xfce4 xfce4-goodies xfce4-terminal dbus-x11 tigervnc-standalone-server novnc websockify \
@@ -84,6 +129,8 @@ RUN apt-get update \
 
 # marimo, offline: everything installed at build time (marimo/requirements.lock, pinned by build-workspace-image.sh).
 # Its home page's "Resources" section (external links, useless offline) is hidden with a CSS rule in its index.html.
+# Its own pip is removed once the packages are in: nothing uses it later (each user's ~/.marimo-venv has its own, from
+# the system's Python), and pip carries known-vulnerable copies of urllib3, msgpack and setuptools (pip/_vendor).
 COPY marimo/requirements.lock /tmp/marimo-requirements.lock
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends python3-venv python3-tk \
@@ -94,6 +141,8 @@ RUN apt-get update \
 	&& index="$(/opt/marimo/bin/python -c 'import marimo, os; print(os.path.join(os.path.dirname(marimo.__file__), "_static", "index.html"))')" \
 	&& sed -i 's#</head>#<style id="marimo-hide-resources">div.flex.flex-col.gap-2:has(> div.grid.gap-3.lg\\:grid-cols-3 > a[target="_blank"]){display:none !important}</style></head>#' "$index" \
 	&& grep -q marimo-hide-resources "$index" \
+	&& /opt/marimo/bin/python -m pip uninstall -y -q pip \
+	&& ! test -e /opt/marimo/bin/pip \
 	&& /opt/marimo/bin/marimo --version
 
 # Firefox, the desktop's web browser (XFCE's "Web Browser" and the dock's launcher open it): Mozilla's own .deb
@@ -130,8 +179,6 @@ RUN index="$(/opt/marimo/bin/python -c 'import marimo, os; print(os.path.join(os
 # template starts these; it downloads them itself only on an image without them (and only with internet).
 ARG CODE_SERVER_VERSION=4.141.0
 ARG CODE_SERVER_SHA256=65bcd20b524d03eb1b5adb7f360244599ef0e5b74089a46a982d32c074b97a29
-ARG FILEBROWSER_VERSION=2.63.23
-ARG FILEBROWSER_SHA256=b14db2bb8033caa3f80205eb6578b2ed0744ebd9e716b790bc4a9703ce909e88
 RUN curl -fsSL -o /tmp/code-server.tgz \
 		"https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-amd64.tar.gz" \
 	&& echo "${CODE_SERVER_SHA256}  /tmp/code-server.tgz" | sha256sum -c - \
@@ -152,13 +199,20 @@ RUN curl -fsSL -o /tmp/shell-quote.tgz "https://registry.npmjs.org/shell-quote/-
 	&& tar -xzf /tmp/shell-quote.tgz -C "$d" --strip-components=1 --no-same-owner \
 	&& rm -f /tmp/shell-quote.tgz \
 	&& /usr/lib/code-server/lib/node -e 'const q = require(process.argv[1]); if (require(process.argv[1] + "/package.json").version !== process.argv[2] || q.quote(["a b"]) !== "'"'"'a b'"'"'") process.exit(1)' "$d" "${SHELL_QUOTE_VERSION}"
-RUN curl -fsSL -o /tmp/filebrowser.tgz \
-		"https://github.com/filebrowser/filebrowser/releases/download/v${FILEBROWSER_VERSION}/linux-amd64-filebrowser.tar.gz" \
-	&& echo "${FILEBROWSER_SHA256}  /tmp/filebrowser.tgz" | sha256sum -c - \
-	&& tar -xzf /tmp/filebrowser.tgz -C /usr/local/bin filebrowser \
-	&& chmod 0755 /usr/local/bin/filebrowser \
-	&& rm -f /tmp/filebrowser.tgz \
-	&& filebrowser version
+# GHSA-c475-qrg2-pj4r and others (high: excessive CPU, an uncaught exception): code-server ships basic-ftp 5.3.1 (for
+# get-uri, its proxy agent's ftp:// support). Replaced by 6.2.3, the newest, checked by its npm SHA-512. 6.0's one
+# breaking change refuses separate FTP transfer hosts by default (bounce attacks), which get-uri does not use.
+ARG BASIC_FTP_VERSION=6.2.3
+ARG BASIC_FTP_SHA512=4fb198b50d9e28950de583911bb03cbb659f07d24c3746b8ff0977308eb8aaadaa4d17dadc55f3a0dab40c3a23643903c92b5c2fe4e47cab33e091c4671e6419
+RUN curl -fsSL -o /tmp/basic-ftp.tgz "https://registry.npmjs.org/basic-ftp/-/basic-ftp-${BASIC_FTP_VERSION}.tgz" \
+	&& echo "${BASIC_FTP_SHA512}  /tmp/basic-ftp.tgz" | sha512sum -c - \
+	&& d=/usr/lib/code-server/node_modules/basic-ftp \
+	&& test -d "$d" && rm -rf "$d" && install -d "$d" \
+	&& tar -xzf /tmp/basic-ftp.tgz -C "$d" --strip-components=1 --no-same-owner \
+	&& rm -f /tmp/basic-ftp.tgz \
+	&& /usr/lib/code-server/lib/node -e 'const f = require(process.argv[1]); if (require(process.argv[1] + "/package.json").version !== process.argv[2] || typeof f.Client !== "function") process.exit(1); require("/usr/lib/code-server/node_modules/get-uri")' "$d" "${BASIC_FTP_VERSION}"
+COPY --from=filebrowser /out/filebrowser /usr/local/bin/filebrowser
+RUN chmod 0755 /usr/local/bin/filebrowser && filebrowser version
 
 # What it adds over the base, every version as the installed programs say it: /usr/share/coder-workspace/addons.json.
 COPY addons/addons.py /tmp/addons.py
