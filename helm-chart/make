@@ -10,6 +10,14 @@
 #                            registry): helps you log your docker and helm in to Harbor and Docker Hub, checks (or
 #                            creates) the project, pushes, checks, and remembers the registry for --deploy (EKS).
 #                            E.g. ./make --push-images harbor.example.com/coder   (harbor-support explains each step)
+#   ./make --argocd HARBOR[/PROJECT] [--plain]
+#                            Coder on Argo CD, decorated by the customization layer: the Coder installation and the
+#                            layer as two charts in one Application (argocd/coder-decorated-application.yaml). Pushes
+#                            every image and chart to Harbor (as --push-images), installs what the cluster lacks
+#                            (Gateway API CRDs v1.6.0, Traefik, CloudNativePG), makes the Secrets, gives Argo CD the
+#                            chart repository, writes the Application with your values and applies it (asked).
+#                            --plain: without the layer (takes it off a decorated install; the data stays)
+#                            (argocd-support explains each step)
 #   ./make --help
 #
 # The layer bundle (coder-airgapped-<version>-layer.tar.gz, LAYER.json at its top) is the customization layer alone:
@@ -26,9 +34,12 @@
 #   REGISTRY=… PUSH_IMAGES=y|n STORAGE_CLASS=… METHOD=helm|argocd SUDO_STEPS=y|n
 #   --push-images: HARBOR_PROJECT=… HARBOR_USER=… HARBOR_CA=… PUSH_GROUPS="custom chart prereqs" DOCKERHUB_LOGIN=y|n
 #   DOCKERHUB_USER=…, and for --yes the secrets HARBOR_PASSWORD=… DOCKERHUB_TOKEN=… (never remembered)
+#   --argocd: ARGOCD_USER=… ARGOCD_APPLY=y|n METRICS_INSECURE_TLS=y|n PULL_USER=… ARGOCD_REPO=…, and for --yes the secrets
+#   ARGOCD_PASSWORD=… PULL_PASSWORD=… (never remembered)
 #
 # Helpers in this directory: x509-support (certificates), minikube-support (Minikube), install.sh (secrets + chart),
-# mirror-images.sh (images, chart push), harbor-support (--push-images). Generated files (certificates, values, secrets) go to .deploy/.
+# mirror-images.sh (images, chart push), harbor-support (--push-images), argocd-support (--argocd).
+# Generated files (certificates, values, secrets, Applications) go to .deploy/.
 set -eEuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,11 +47,14 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${here}/x509-support"
 # shellcheck source=harbor-support
 source "${here}/harbor-support"
+# shellcheck source=argocd-support
+source "${here}/argocd-support"
 STATE_ROOT="${here}/.deploy"
 ANSWERS="${STATE_ROOT}/answers.env"
 VARS=(TARGET DOMAIN CERTS TLS_CRT TLS_KEY CA_BUNDLE PROFILE KEYCLOAK OIDC_ISSUER OIDC_CA OIDC_SECRET_FILE
 	REGISTRY PUSH_IMAGES STORAGE_CLASS METHOD SUDO_STEPS CLUSTER_ACCESS
-	HARBOR_PROJECT HARBOR_USER HARBOR_CA DOCKERHUB_LOGIN DOCKERHUB_USER PUSH_GROUPS)
+	HARBOR_PROJECT HARBOR_USER HARBOR_CA DOCKERHUB_LOGIN DOCKERHUB_USER PUSH_GROUPS
+	ARGOCD_USER ARGOCD_APPLY METRICS_INSECURE_TLS PULL_USER ARGOCD_REPO)
 # A layer bundle: the customization layer alone, on a cluster that has the rest (layer-support)
 LAYER=0; [[ -f "${here}/LAYER.json" ]] && LAYER=1
 carried() { "${here}/layer-support" carries "$1"; }   # the layer carries FILE (relative to this folder)
@@ -166,8 +180,8 @@ guess_sibling() { # FILE key|ca : a likely companion file next to FILE
 # ---- prerequisites shared by both targets -------------------------------------------------------------------
 gateway_crds() {
 	kube get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1 && { say "Gateway API CRDs: present"; return; }
-	say "Gateway API CRDs: installing v1.5.1"
-	kube apply --server-side -f "${here}/prereqs/gateway-api-v1.5.1-standard-install.yaml" >/dev/null
+	say "Gateway API CRDs: installing v1.6.0"
+	kube apply --server-side -f "${here}/prereqs/gateway-api-v1.6.0-standard-install.yaml" >/dev/null
 }
 
 traefik() { # [pinned ClusterIP]
@@ -322,7 +336,7 @@ prepare_eks() {
 		need docker
 		if ((LAYER)); then "${here}/layer-support" restore registry "$REGISTRY" "${STATE}/layer-tmp"; fi
 		ECR=$([[ "$REGISTRY" == *.amazonaws.com ]] && echo 1 || echo 0) "${here}/mirror-images.sh" push "$REGISTRY" |
-			grep -E '^(loading|using|pulling|.* -> )' | sed 's/^/    /'
+			{ grep -E '^(loading|using|pulling|in .* since |.* -> )' || true; } | sed 's/^/    /'
 	fi
 
 	step "Prerequisites"
@@ -561,6 +575,19 @@ case "${1:-}" in
 	target="${1:-}"; shift || true
 	[[ "${1:-}" == --yes || "${1:-}" == -y ]] && INTERACTIVE=0
 	push_images "$target" ;;
+--argocd)
+	shift
+	target="${1:-}"; shift || true
+	plain=0
+	while (($#)); do
+		case "$1" in
+		--plain) plain=1 ;;
+		--yes | -y) INTERACTIVE=0 ;;
+		*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+		esac
+		shift
+	done
+	argocd_install "$target" "$plain" ;;
 -h | --help | "") sed -n '2,/^set -euo/p' "$0" | sed '$d' ;;
 *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
 esac

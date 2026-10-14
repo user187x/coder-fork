@@ -1,6 +1,6 @@
 {{- /* Admins' kubectl on this cluster (global.clusterAccess): the Keycloak group, as the API server names it, gets
 the cluster role. Each admin signs in as themselves; see values.yaml. */ -}}
-{{- with .Values.global.clusterAccess }}{{ if .enabled }}
+{{- with .Values.global.clusterAccess }}{{ if and .enabled (include "platform.hasLayer" $) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

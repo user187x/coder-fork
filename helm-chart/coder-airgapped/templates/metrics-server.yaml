@@ -17,7 +17,7 @@ charge); true always, false never. As upstream components.yaml v0.8.1, in the re
 {{- $install = true }}
 {{- end }}
 {{- end }}
-{{- if $install }}
+{{- if and $install (include "platform.hasLayer" .) }}
 {{- $ns := .Release.Namespace }}
 apiVersion: v1
 kind: ServiceAccount

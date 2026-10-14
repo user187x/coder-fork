@@ -4,6 +4,9 @@
 # Image archives (pinned by images.txt + SHA256SUMS; rebuilt with mirror-images.sh save / tools/build-airgap-image.sh)
 /helm-chart/images/**/*.tar
 /helm-chart/images/**/*.tar.gz
+# The Argo CD decorator install's two charts, packaged from helm-chart/coder-airgapped by tools/build-bundle.sh
+# (mirror-images.sh decorator-charts); the bundles ship them
+/helm-chart/argocd/charts/
 # Filled by tools/build-airgap-image.sh
 /development/airgap-image/template/
 # Never commit private material (it lives in ~/coder-airgapped-private/)

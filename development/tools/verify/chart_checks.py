@@ -28,6 +28,80 @@ def strip_registry(ref):
     return ref.split("/", 1)[1] if "/" in ref and ("." in first or ":" in first or first == "localhost") else ref
 
 
+def objects(render):
+    """(kind, name) of every object in a helm template output."""
+    out = set()
+    for doc in render.split("\n---"):
+        k = re.search(r"^kind: (\S+)", doc, re.M)
+        n = re.search(r"^metadata:\n(?:  .*\n)*?  name: (\S+)", doc, re.M)
+        if k and n:
+            out.add((k.group(1), n.group(1).strip('"')))
+    return out
+
+
+def decorator_checks(B, chart, full_render):
+    """The Argo CD decorator install: the two charts packaged from coder-airgapped, and its two Applications."""
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="decorator-")
+    rc, out, err = run([os.path.join(B, "mirror-images.sh"), "decorator-charts", tmp])
+    pkgs = {p: next(iter(glob.glob(os.path.join(tmp, "coder-airgapped-%s-*.tgz" % p))), None) for p in ("base", "layer")}
+    check("decorator: coder-airgapped-base and coder-airgapped-layer package (mirror-images.sh decorator-charts)",
+          rc == 0 and all(pkgs.values()), (err or out).strip()[-300:] if rc else sorted(os.path.basename(p or "") for p in pkgs.values()))
+    if not all(pkgs.values()):
+        return
+    renders = {}
+    for name, (pkg, extra) in {"base": (pkgs["base"], []), "base+layer": (pkgs["base"], ["--set", "global.decorator.layer=true"]),
+                               "layer": (pkgs["layer"], [])}.items():
+        rc, out, err = run(["helm", "template", "coder", pkg, "-n", "coder"] + extra)
+        renders[name] = out if rc == 0 else ""
+        check("decorator: %s renders" % name, rc == 0, err.strip().splitlines()[-1] if rc and err.strip() else "")
+    full, base, layer = objects(full_render), objects(renders["base"]), objects(renders["layer"])
+    check("decorator: the base and the layer share no object, and together are coder-airgapped",
+          base and layer and not (base & layer) and (base | layer) == full,
+          {"both": sorted(base & layer), "missing": sorted(full - base - layer), "extra": sorted((base | layer) - full)}
+          if (base & layer) or (base | layer) != full else "%d + %d objects" % (len(base), len(layer)))
+    check("decorator: the base is Coder, its database and first owner only",
+          {k for k, _ in base} <= {"Deployment", "Service", "ServiceAccount", "Role", "RoleBinding", "HTTPRoute", "Cluster",
+                                    "Secret", "ConfigMap", "Job"} and ("Cluster", "coder-db") in base and ("Deployment", "coder") in base
+          and not any(n.startswith(("coder-ui", "coder-banner", "coder-workspace-push", "coder-image")) for _, n in base),
+          sorted(base))
+    plain, dec = renders["base"], renders["base+layer"]
+    plain_env = re.findall(r"name: CODER_PLATFORM_(?:SERVICE_ROUTES|FIRST_OWNER)\n\s+value: (\S*)", plain)
+    check("decorator: without the layer the base runs upstream Coder, without the fork's settings",
+          "/user187x/coder-upstream:" in plain and "/user187x/coder-platform:" not in plain and plain_env == ['""', '""'],
+          plain_env)
+    dec_env = re.findall(r"name: CODER_PLATFORM_(?:SERVICE_ROUTES|FIRST_OWNER)\n\s+value: (\S*)", dec)
+    check("decorator: with global.decorator.layer the base runs the fork's image with its settings",
+          "/user187x/coder-platform:" in dec and "/user187x/coder-upstream:" not in dec and all(v not in ('""', "") for v in dec_env),
+          dec_env)
+    # The Applications: the plain one is the decorated one without the layer (application.py --plain), both parse, and
+    # they install this chart version.
+    argo = os.path.join(B, "argocd")
+    made = os.path.join(tmp, "plain.yaml")
+    rc, _, err = run([sys.executable, os.path.join(argo, "application.py"), "--plain",
+                      os.path.join(argo, "coder-decorated-application.yaml"), made])
+    same = rc == 0 and open(made).read() == open(os.path.join(argo, "coder-plain-application.yaml")).read()
+    check("decorator: coder-plain-application.yaml is coder-decorated-application.yaml without the layer (application.py --plain)",
+          same, err.strip() if rc else ("" if same else "differs: python3 argocd/application.py --plain "
+                                        "coder-decorated-application.yaml coder-plain-application.yaml"))
+    try:
+        import yaml
+        version = re.search(r"^version: (\S+)", open(os.path.join(chart, "Chart.yaml")).read(), re.M).group(1)
+        detail = {}
+        for f, charts in (("coder-decorated-application.yaml", ["coder-airgapped-base", "coder-airgapped-layer"]),
+                          ("coder-plain-application.yaml", ["coder-airgapped-base"])):
+            app = [d for d in yaml.safe_load_all(open(os.path.join(argo, f))) if d and d.get("kind") == "Application"][0]
+            srcs = app["spec"]["sources"]
+            g = [s["helm"]["valuesObject"]["global"] for s in srcs]
+            ok = ([s["chart"] for s in srcs] == charts and all(s["targetRevision"] == version for s in srcs)
+                  and all(x == g[0] for x in g) and g[0]["decorator"]["layer"] == (len(charts) == 2))
+            detail[f] = ok
+        check("decorator: both Applications parse, install chart %s, and share one global block" % version,
+              all(detail.values()), detail)
+    except ImportError:
+        check("decorator: the Applications parse (needs PyYAML: skipped)", True, "skipped")
+
+
 def main():
     global OUT
     ap = argparse.ArgumentParser()
@@ -100,11 +174,10 @@ def main():
             check("a private registry: every image comes from it", not outside, outside)
 
     vals = open(os.path.join(chart, "values.yaml")).read()
-    tag = re.search(r"\n      tag: (\S+)", vals).group(1)
-    cli = re.search(r'cliImage: .*?"(ghcr\.io/user187x/coder-platform:[^"]+)"', vals)
-    check("the template push's CLI is Coder's own image (same tag as the server)", cli and cli.group(1).endswith(":" + tag),
-          cli.group(1) if cli else "no cliImage")
     r = renders["Minikube defaults"]
+    forks = sorted(set(re.findall(r'image: "?(\S*/user187x/coder-platform:[^"\s]+)"?', r)))
+    check("the template push's CLI is Coder's own image (same tag as the server)", len(forks) == 1, forks)
+    decorator_checks(B, chart, r)
     check("Coder starts without Keycloak's Secrets (optional)",
           re.search(r"name: keycloaking-coder-oidc\s*\n\s*optional: true", r) and
           re.search(r"secretName: keycloaking-coder-ca\s*\n\s*optional: true|optional: true\s*\n\s*secretName: keycloaking-coder-ca", r),
@@ -173,7 +246,7 @@ def main():
 
     rc, out, err = run([sys.executable, "-m", "unittest", "discover", "-s", here, "-p", "platform_unit_test.py", "-q"])
     check("platform service unit tests", rc == 0, (err or out).strip().splitlines()[-1] if (err or out).strip() else "")
-    for sh in ("install.sh", "make", "mirror-images.sh", "minikube-support", "harbor-support"):
+    for sh in ("install.sh", "make", "mirror-images.sh", "minikube-support", "harbor-support", "argocd-support"):
         rc, _, err = run(["bash", "-n", os.path.join(B, sh)])
         check("shell syntax: %s" % sh, rc == 0, err.strip())
     # the layer bundle's helper (Python): compiles, and answers --help

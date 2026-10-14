@@ -24,8 +24,15 @@
 #   ./mirror-images.sh chart REPO   package ./coder-airgapped and helm push it to oci://REPO (e.g. <registry>/charts),
 #                                   the repository argocd/coder-airgapped-application.yaml pulls from
 #                                   (helm registry login <registry> first; ECR=1 creates the ECR repository)
-#   ./mirror-images.sh charts REPO  the same, and the prerequisites' charts (prereqs/*.tgz: CloudNativePG, Traefik)
+#   ./mirror-images.sh charts REPO  the same, the decorator install's two charts (below) and the prerequisites' charts
+#                                   (prereqs/*.tgz: CloudNativePG, Traefik)
 #   ./mirror-images.sh charts-list  name and version of each of those charts
+#   ./mirror-images.sh decorator-charts [OUTDIR]
+#                                   the Argo CD decorator install's two charts (argocd/coder-decorated-application.yaml),
+#                                   packaged from ./coder-airgapped into OUTDIR (default argocd/charts/; the bundle
+#                                   ships them there): coder-airgapped-base-<version>.tgz, a plain Coder (its database,
+#                                   its first owner), and coder-airgapped-layer-<version>.tgz, the customization layer
+#                                   that decorates it (values.yaml > global.decorator)
 #
 #   ./mirror-images.sh seed-builder [NAMESPACE]
 #                                   the image builder's base: pushes the workspace image into the in-cluster registry
@@ -97,6 +104,66 @@ ensure() { # index: the image in the local docker - from its archive when the bu
 	fi
 }
 
+# The decorator install's two charts, packaged from ./coder-airgapped into $1: the part (global.decorator.part), the
+# chart's name and description, and without the other part's subcharts. Prints the two packages' paths.
+decorator_charts() {
+	local out="$1" part d tmp; tmp=$(mktemp -d)
+	mkdir -p "$out"
+	for part in base layer; do
+		d="${tmp}/coder-airgapped-${part}"; cp -r "${here}/coder-airgapped" "$d"
+		find "$d" -name __pycache__ -type d -prune -exec rm -rf {} +
+		sed -i "s/^    part: all$/    part: ${part}/" "$d/values.yaml"
+		[[ "$part" == layer ]] || sed -i 's/^    layer: true$/    layer: false/' "$d/values.yaml"
+		grep -q "^    part: ${part}$" "$d/values.yaml" || { echo "ERROR: values.yaml has no global.decorator.part" >&2; return 1; }
+		python3 - "$d/Chart.yaml" "$part" <<'PY' || return 1
+import re, sys
+path, part = sys.argv[1], sys.argv[2]
+drop = {"base": {"coder-banner", "coder-workspace"}, "layer": {"coder"}}[part]
+desc = {
+    "base": "Plain Coder for air-gapped Kubernetes, the base of the coder-airgapped Argo CD decorator install: the "
+            "upstream Coder chart 2.37.3 running upstream Coder (main at the fork's base, with a Terraform provider "
+            "mirror), its CloudNativePG database and its first owner. coder-airgapped-layer decorates it (set "
+            "global.decorator.layer: true here, and Coder runs the fork's image).",
+    "layer": "The coder-airgapped customization layer, decorating coder-airgapped-base in the same Argo CD "
+             "Application: the coder-ui-updates platform service, the coder-banner announcement service, the "
+             "ubuntu-vnc-desktop workspace template and its icons, the image builder, metrics-server and admins' "
+             "cluster access. Remove it (and set the base's global.decorator.layer to false) to go back to plain Coder.",
+}[part]
+s = open(path).read()
+s = re.sub(r"^name: coder-airgapped$", "name: coder-airgapped-" + part, s, count=1, flags=re.M)
+s = re.sub(r"^description: >-\n(?:  .*\n)+", "description: >-\n  " + desc + "\n", s, count=1, flags=re.M)
+out, pending, skip, deps = [], [], False, False
+for line in s.split("\n"):
+    if line.startswith("dependencies:"):
+        deps = True
+        out.append(line)
+        continue
+    if deps:
+        m = re.match(r"  - name: (\S+)", line)
+        if line.startswith("  #"):
+            pending.append(line)
+            continue
+        if m:
+            skip = m.group(1) in drop
+            if not skip:
+                out += pending + [line]
+            pending = []
+            continue
+        if line.startswith("    "):
+            if not skip:
+                out.append(line)
+            continue
+        out += pending
+        pending, deps = [], False
+    out.append(line)
+open(path, "w").write("\n".join(out))
+PY
+		if [[ "$part" == base ]]; then rm -rf "$d/charts/coder-banner" "$d/charts/coder-workspace"; else rm -rf "$d/charts/coder"; fi
+		helm package "$d" -d "$out" | sed -n 's/.*saved it to: //p' || return 1
+	done
+	rm -rf "$tmp"
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
 save)
@@ -145,7 +212,16 @@ chart | charts)
 	command -v helm >/dev/null || { echo "ERROR: helm not found" >&2; exit 1; }
 	tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 	pkgs=("$(helm package "${here}/coder-airgapped" -d "$tmp" | sed -n 's/.*saved it to: //p')")
-	[[ "$cmd" == chart ]] || pkgs+=("${here}"/prereqs/*.tgz)
+	if [[ "$cmd" == charts ]]; then
+		# the decorator install's two charts: the bundle's (argocd/charts/), else packaged now
+		version=$(sed -n 's/^version: *//p' "${here}/coder-airgapped/Chart.yaml")
+		if [[ -f "${here}/argocd/charts/coder-airgapped-base-${version}.tgz" && -f "${here}/argocd/charts/coder-airgapped-layer-${version}.tgz" ]]; then
+			pkgs+=("${here}/argocd/charts/coder-airgapped-base-${version}.tgz" "${here}/argocd/charts/coder-airgapped-layer-${version}.tgz")
+		else
+			mapfile -t -O "${#pkgs[@]}" pkgs < <(decorator_charts "$tmp/decorator")
+		fi
+		shopt -s nullglob; pkgs+=("${here}"/prereqs/*.tgz); shopt -u nullglob   # none in a layer bundle (unchanged)
+	fi
 	read -r -a extra <<<"${HELM_PUSH_ARGS:-}"
 	[[ "${PLAIN_HTTP:-0}" == 1 ]] && extra+=(--plain-http)
 	for pkg in "${pkgs[@]}"; do
@@ -160,9 +236,17 @@ chart | charts)
 	done
 	;;
 charts-list)
+	shopt -s nullglob   # a layer bundle carries no unchanged prerequisite chart
 	for c in "${here}/coder-airgapped" "${here}"/prereqs/*.tgz; do
 		helm show chart "$c" | awk '/^name:/ {n=$2} /^version:/ {v=$2} END {print n, v}'
 	done
+	version=$(sed -n 's/^version: *//p' "${here}/coder-airgapped/Chart.yaml")
+	echo "coder-airgapped-base ${version}"
+	echo "coder-airgapped-layer ${version}"
+	;;
+decorator-charts)
+	command -v helm >/dev/null || { echo "ERROR: helm not found" >&2; exit 1; }
+	decorator_charts "${1:-${here}/argocd/charts}"
 	;;
 seed-builder)
 	ns="${1:-coder}"
@@ -176,7 +260,8 @@ seed-builder)
 	trap 'kill "$pf" 2>/dev/null || true' EXIT
 	for _ in $(seq 60); do curl -fs -o /dev/null "http://127.0.0.1:${port}/v2/" && break; sleep 1; done
 	curl -fs -o /dev/null "http://127.0.0.1:${port}/v2/" || { echo "ERROR: the registry does not answer through port-forward" >&2; exit 1; }
-	if curl -fs -o /dev/null -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	# (any manifest type: docker pushes from its containerd store as an OCI index)
+	if curl -fs -o /dev/null -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
 		"http://127.0.0.1:${port}/v2/coder-images/base/${name%%:*}/manifests/${name##*:}"; then
 		echo "the image builder's registry has coder-images/base/${name} already"; exit 0
 	fi

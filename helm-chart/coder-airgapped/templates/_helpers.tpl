@@ -71,6 +71,31 @@ https://{{ include "platform.coderHost" . }}
 {{- end -}}
 {{- end -}}
 
+{{/* The Argo CD decorator install (values.yaml > global.decorator): which part of the platform this chart installs,
+     and whether Coder is decorated by the customization layer (the fork's image and settings). Each gives "true" or
+     "", so `if include ...` works, from the subcharts' templated values too (global). */}}
+{{- define "platform.hasBase" -}}
+{{- if has ((.Values.global.decorator | default dict).part | default "all") (list "all" "base") -}}true{{- end -}}
+{{- end -}}
+
+{{- define "platform.hasLayer" -}}
+{{- if has ((.Values.global.decorator | default dict).part | default "all") (list "all" "layer") -}}true{{- end -}}
+{{- end -}}
+
+{{- define "platform.decorated" -}}
+{{- $d := .Values.global.decorator | default dict -}}
+{{- if or (eq ($d.part | default "all") "all") $d.layer -}}true{{- end -}}
+{{- end -}}
+
+{{/* (list $ "repo"|"tag"): Coder's server image: global.coderImages.fork when decorated, else .upstream (the repo
+     with global.registry, as platform.image). */}}
+{{- define "platform.coderImage" -}}
+{{- $ctx := index . 0 -}}{{- $key := index . 1 -}}
+{{- $imgs := $ctx.Values.global.coderImages -}}
+{{- $img := ternary $imgs.fork $imgs.upstream (eq (include "platform.decorated" $ctx) "true") -}}
+{{- if eq $key "repo" -}}{{ include "platform.image" (list $ctx $img.repo) }}{{- else -}}{{ $img.tag }}{{- end -}}
+{{- end -}}
+
 {{/* (list $ "default.registry.host"): global.registry when set, else the default. */}}
 {{- define "platform.registryHost" -}}
 {{- trimSuffix "/" ((index . 0).Values.global.registry | default (index . 1)) -}}

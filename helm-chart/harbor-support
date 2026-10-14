@@ -209,7 +209,8 @@ harbor_push() {
 	[[ "$PLAIN" == 1 ]] && helm_args+=(--plain-http)
 	step "Images -> ${reg} (${PUSH_GROUPS}; the large ones take minutes)"
 	# shellcheck disable=SC2086
-	"${here}/mirror-images.sh" push "$reg" $PUSH_GROUPS 2>&1 | grep -E '^(loading|using|pulling|push failed|ERROR|.* -> )' | sed 's/^/    /'
+	# (grep finds nothing when a layer bundle carries no image: every line is "in <registry> since ...", shown too)
+	"${here}/mirror-images.sh" push "$reg" $PUSH_GROUPS 2>&1 | { grep -E '^(loading|using|pulling|push failed|ERROR|in .* since |.* -> )' || true; } | sed 's/^/    /'
 	((PIPESTATUS[0] == 0)) || die "pushing the images failed (see above)"
 
 	step "Charts -> oci://${reg}/charts"

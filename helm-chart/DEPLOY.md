@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.37.1.tar.gz && cd coder-airgapped-1.37.1
+tar -xzf coder-airgapped-1.38.0.tar.gz && cd coder-airgapped-1.38.0
 ./make --deploy
 ```
 
@@ -38,8 +38,8 @@ just the layers their previous version lacks; Traefik, CloudNativePG, the Gatewa
 images are not in it at all.
 
 ```bash
-sha256sum -c coder-airgapped-1.37.1-layer.tar.gz.sha256
-tar -xzf coder-airgapped-1.37.1-layer.tar.gz && cd coder-airgapped-1.37.1
+sha256sum -c coder-airgapped-1.38.0-layer.tar.gz.sha256
+tar -xzf coder-airgapped-1.38.0-layer.tar.gz && cd coder-airgapped-1.38.0
 ./layer-support info                                   # what it carries, and what the cluster must have
 ./make --deploy                                        # asks for the folder you installed from
 ```
@@ -91,6 +91,61 @@ Non-interactive: `HARBOR_USER=robot\$coder HARBOR_PASSWORD=... DOCKERHUB_LOGIN=n
 harbor.example.com/coder --yes` (`PUSH_GROUPS="custom chart prereqs platform"` adds the reference Argo CD and
 Keycloak images). Any other registry works too: without Harbor's API, the project steps are skipped.
 
+## Argo CD: Coder decorated by the customization layer
+
+The bundle also installs as **two charts in one Argo CD Application**, the customization layer decorating a plain
+Coder that it can be taken off again:
+
+| | Chart (`argocd/charts/`) | What it installs |
+|---|---|---|
+| 1 | `coder-airgapped-base-<version>.tgz` | The Coder installation: the upstream Coder chart running **upstream Coder** (at the fork's base, with a Terraform provider mirror), its CloudNativePG database and its first owner |
+| 2 | `coder-airgapped-layer-<version>.tgz` | The customization layer: the platform service, the announcement banner, the ubuntu-vnc-desktop template and its icons, the image builder, metrics-server, admins' kubectl |
+| 3 | `argocd/coder-decorated-application.yaml` | The Application with both (`argocd/coder-plain-application.yaml`: the base alone) |
+| 4 | `./make --argocd` | Pushes everything to Harbor and deploys it with Argo CD (below) |
+
+The layer's one hook into the base is `global.decorator.layer: true` in the Application's shared `global` block:
+with it, the base runs the fork's Coder image with the platform's settings; without it, upstream Coder. Both charts
+are packaged from `coder-airgapped/` (`./mirror-images.sh decorator-charts`), so together they are exactly that chart.
+
+```bash
+./make --argocd harbor.example.com/coder-airgapped      # <harbor host>[/<project>]; kubectl's context: the cluster with Argo CD
+```
+
+1. **Harbor:** as `./make --push-images` (above): logins, project, every image and chart (both of these, the
+   prerequisites') to `oci://<harbor>/<project>/charts`, all checked;
+2. **the cluster:** the Gateway API CRDs (v1.6.0, from `prereqs/`), a Gateway `traefik/traefik-gateway` (Traefik
+   from `prereqs/`) and the CloudNativePG operator, each installed only when missing, after asking;
+3. **the domain, certificates, OIDC provider and storage class**, then the Secrets the charts read
+   (`install.sh --prepare-only`), and a pull secret if the Harbor project is private;
+4. **Argo CD:** the chart repository's credentials (a Secret in `argocd`; a robot account with pull rights is
+   enough; the password goes to kubectl on stdin, never into a file), Harbor's CA if it has a private one
+   (`argocd-tls-certs-cm`), and the Application filled in with your values, in `.deploy/argocd-<domain>/`;
+5. it applies the Application (asked first; or tells you how to add it in Argo CD's UI), waits until it is Synced
+   and Healthy, and seeds the image builder.
+
+Without the script: push with `./make --push-images`, install the prerequisites and Secrets as steps 3–5 of "By
+hand" below, fill in the CHANGE-MEs of `argocd/coder-decorated-application.yaml` and `kubectl apply -f` it.
+
+**Taking the layer off:** `./make --argocd harbor.example.com/coder-airgapped --plain` (or `kubectl apply -f
+.deploy/argocd-<domain>/coder-plain-application.yaml`). Argo CD prunes everything the layer added and restarts Coder
+as upstream Coder; the database, users, templates, workspaces and their homes stay. Running workspaces keep running
+on their image. Without the layer, Coder has no platform service, banner or template push; the fork's own dashboard
+features go with its image. The layer's own data is kept too: the platform service's volume and log database
+password, and the image builder's two volumes (built images, uploads) may never be pruned (`Prune=false`), so
+`--plain` takes them out of the Application (Argo CD then reports it Synced) and they wait, as they are, for the
+layer. **Putting it back:** `./make --argocd …` again (or apply the decorated file): Argo CD adopts those again,
+data intact.
+
+**Updating:** carry the next release's layer bundle (or full bundle), run `./make --argocd …` from it: it pushes the
+new images and charts and moves the Application to the new version.
+
+Notes: the nodes pull the images straight from Harbor, so a private project also needs the nodes' container runtime
+to have credentials (the workspace pods have no pull secret of their own), and a private CA must be trusted by the
+nodes. `ARGOCD_REPO=<host>/<project>/charts` tells Argo CD another address for the charts (e.g. Harbor through an
+internal name). Non-interactive: `HARBOR_USER=... HARBOR_PASSWORD=... ARGOCD_USER=... ARGOCD_PASSWORD=...
+DOMAIN=... CERTS=existing TLS_CRT=... TLS_KEY=... CA_BUNDLE=... OIDC_ISSUER=... OIDC_SECRET_FILE=... OIDC_CA=...
+STORAGE_CLASS=... ./make --argocd harbor.example.com/coder-airgapped --yes`.
+
 The steps below are the same install done by hand.
 
 ---
@@ -106,7 +161,7 @@ No internet is needed – every image is in the bundle.
 The air-gapped cluster needs these already running:
 
 - [ ] **Kubernetes** 1.27 or newer (EKS is fine) with **amd64 (x86_64) nodes** – the images are amd64 only
-- [ ] **Gateway API CRDs** v1.5.1 – `kubectl apply --server-side -f prereqs/gateway-api-v1.5.1-standard-install.yaml`
+- [ ] **Gateway API CRDs** v1.6.0 – `kubectl apply --server-side -f prereqs/gateway-api-v1.6.0-standard-install.yaml`
 - [ ] **Traefik v3** with a **Gateway** that serves HTTPS for `coder.<your-domain>` and `*.<your-domain>`
       (plus Traefik's `rewrite-body` plugin – see `prereqs/traefik-41.4.0.reference-values.yaml`)
 - [ ] **Keycloak** (or another OIDC login) with a client called `coder`
@@ -131,8 +186,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.37.1.tar.gz
-cd coder-airgapped-1.37.1
+tar -xzf coder-airgapped-1.38.0.tar.gz
+cd coder-airgapped-1.38.0
 ./mirror-images.sh list
 ```
 
@@ -143,14 +198,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.37.1` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.38.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.37.1
+cd coder-airgapped-1.38.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY

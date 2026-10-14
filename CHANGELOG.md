@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.38.0 – 2026-10-14
+
+Coder `2.0.0-platform.43` (fork `9cb97bba8`, unchanged), workspace image `coder-workspace:1.8.5` (unchanged).
+
+* **Argo CD: Coder decorated by the customization layer.** The release installs as two charts in one Argo CD
+  Application, the customization layer decorating a plain Coder that it can be taken off again:
+  1. `argocd/charts/coder-airgapped-base-<version>.tgz`, the Coder installation: the upstream Coder chart running
+     upstream Coder (`coder-upstream`, at the fork's base, with the Terraform provider mirror), its CloudNativePG
+     database and its first owner;
+  2. `argocd/charts/coder-airgapped-layer-<version>.tgz`, the customization layer: the platform service, the
+     announcement banner, the ubuntu-vnc-desktop template and its icons, the image builder, metrics-server and
+     admins' kubectl;
+  3. `argocd/coder-decorated-application.yaml`, the Application with both (one shared `global` block), and
+     `argocd/coder-plain-application.yaml`, the same without the layer;
+  4. **`./make --argocd <harbor>[/<project>] [--plain]`**: pushes every image and chart to Harbor (as
+     `--push-images`), installs what the cluster lacks (Gateway API CRDs, Traefik, CloudNativePG; asked first),
+     makes the Secrets, gives Argo CD the chart repository (the password on stdin, never in a file; Harbor's private
+     CA in `argocd-tls-certs-cm`), writes the Application with your values (`.deploy/argocd-<domain>/`), applies it
+     (asked, or tells you how to add it yourself), waits until it is Synced and Healthy and seeds the image builder.
+
+  The layer's one hook into the base is `global.decorator.layer: true` (the base then runs the fork's image with the
+  platform's two settings). `--plain` takes the layer off: Argo CD prunes what the layer added, Coder restarts as
+  upstream Coder, and the database, users, templates and workspaces stay; applying the decorated Application puts it
+  back. The layer's own data (the platform service's and the image builder's volumes) is kept meanwhile, out of the
+  Application, and adopted again. Both charts are packaged from `coder-airgapped` (`./mirror-images.sh
+  decorator-charts`): the static checks verify they share no object and together are exactly that chart.
+  `coder-airgapped` itself and `./make --deploy` are unchanged.
+* **Gateway API CRDs v1.6.0** (was v1.5.1; `prereqs/gateway-api-v1.6.0-standard-install.yaml`), installed only where
+  the cluster has none. Traefik 41.4.0 works with them unchanged.
+* **Fixed: the image builder's volumes were pruned by Argo CD** (built images, uploads): like the platform
+  service's, they now carry `Prune=false,Delete=false` (Helm's `resource-policy: keep` only holds for Helm).
+* **Fixed:** `./make --push-images` and `./make --deploy` (EKS) from a layer bundle that carries no image stopped
+  after the push (nothing left to show), and pushed a chart named `*.tgz` when the bundle had no prerequisite chart;
+  the image builder's base (the 5 GB workspace image) was pushed again at every deploy, as the check missed images
+  stored as an OCI index.
+* Tested on kind with egress blocked, Gateway API v1.6.0 and Argo CD 3.5.2: `./make --argocd` from scratch
+  (Synced / Healthy in about 3 minutes), the layer taken off and put back twice; every volume kept its UID.
+
 ## 1.37.1 – 2026-10-14
 
 Coder `2.0.0-platform.43` (fork `9cb97bba8`), workspace image `coder-workspace:1.8.5` (unchanged; the template has a

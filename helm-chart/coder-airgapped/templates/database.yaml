@@ -1,5 +1,5 @@
 {{- include "ca.values" . -}}
-{{- if .Values.database.enabled }}
+{{- if and .Values.database.enabled (include "platform.hasBase" .) }}
 {{- $db := .Values.database }}
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster

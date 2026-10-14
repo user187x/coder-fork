@@ -10,7 +10,7 @@ Images view (Templates > Images): admins build workspace images in the cluster.
 */ -}}
 {{- include "ca.values" . -}}
 {{- $ib := .Values.imageBuilder }}
-{{- if and .Values.uiUpdates.enabled $ib.enabled }}
+{{- if and .Values.uiUpdates.enabled $ib.enabled (include "platform.hasLayer" .) }}
 {{- $ns := .Release.Namespace }}
 {{- $ui := .Values.uiUpdates }}
 {{- if $ib.registry.deploy }}
@@ -23,7 +23,9 @@ metadata:
     {{- include "ca.labels" . | nindent 4 }}
     app.kubernetes.io/name: coder-image-registry
   annotations:
+    # The built workspace images (workspaces pull them from here): kept by helm uninstall and by Argo CD alike.
     helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   accessModes: [ReadWriteOnce]
   {{- with $ib.registry.storageClass }}
@@ -208,7 +210,9 @@ metadata:
   labels:
     {{- include "ca.uiLabels" . | nindent 4 }}
   annotations:
+    # Uploads (.deb files, installation files) and build contexts: kept by helm uninstall and by Argo CD alike.
     helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   accessModes: [ReadWriteOnce]
   {{- with $ib.files.storageClass }}

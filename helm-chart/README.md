@@ -1,4 +1,4 @@
-# coder-airgapped 1.37.1: portable Helm chart of the live Coder fork
+# coder-airgapped 1.38.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -22,6 +22,13 @@ Gateway) configures everything, from a values file or from an Argo CD Applicatio
 ```
 coder-airgapped/                 the chart (helm install target)
 argocd/coder-airgapped-application.yaml   Argo CD Application (+ OCI repository Secret) installing the chart from the registry
+argocd/coder-decorated-application.yaml   Argo CD decorator install: the Coder installation (coder-airgapped-base) and the
+                                 customization layer (coder-airgapped-layer) in one Application; coder-plain-application.yaml
+                                 is the same without the layer (application.py --plain derives it)
+argocd/charts/                   those two charts, packaged from coder-airgapped/ (mirror-images.sh decorator-charts)
+argocd-support                   the steps of `./make --argocd <harbor>[/<project>] [--plain]`: Harbor push, prerequisites,
+                                 Secrets, Argo CD's repository and the Application (DEPLOY.md › Argo CD)
+layer-support                    the layer bundle (update a cluster from the previous release): build, check, restore
 values-eks-airgap.example.yaml   the same settings as a values file for plain Helm / install.sh
 make                             `./make --deploy`: the guided install (Minikube or EKS; domain, certificates, ...);
                                  `./make --push-images <harbor>[/<project>]`: images + charts into your Harbor
@@ -74,10 +81,17 @@ it, e.g. `'coder.{{ .Values.global.domain }}'`. The defaults reproduce the refer
 | `global.firstUser.{username,email,password}` | `admin` / `admin@admin.com` / `admin` | first owner, created on a fresh database (password set once, never reset). With `disablePasswordAuth: "true"`: the Keycloak account with this email |
 | `global.database.name` | `coder-db` | CNPG Cluster; Secrets `<name>-app`, `<name>-ca` |
 | `global.secretNames.*` | `coder-init-auth`, `coder-ui-logs-db`, `tls-ca`, `keycloaking-coder-ca`, `keycloaking-coder-oidc`, `tls-wild-cert` | every reference to those Secrets, including the workspace template's `tls-ca` |
+| `global.coderImages.{fork,upstream}.{repo,tag}` | the fork's `coder-platform:2.0.0-platform.N-airgap` / `coder-upstream:2.38.0-main.70bc2e554-airgap` | Coder's server image: the fork's here and on a decorated base; upstream Coder on a base without the layer |
+| `global.decorator.part` | `all` (set by packaging: `base`, `layer`) | which part of the platform a chart installs (DEPLOY.md › Argo CD) |
+| `global.decorator.layer` | `true` (`false` in coder-airgapped-base) | the base only: the customization layer is installed alongside, so Coder runs the fork's image with the platform's settings |
 
 Extra Coder environment goes in `coder.coder.extraEnv` (appended), so you never have to repeat the chart's `env` list.
 
 ## Argo CD
+
+Two ways: this chart as one Application (below), or Coder and the customization layer as two charts in one
+Application, the layer decorating a plain Coder that it can be taken off again (`argocd/coder-decorated-application.yaml`,
+`./make --argocd`: DEPLOY.md › Argo CD). The settings below apply to both.
 
 1. Images: `./mirror-images.sh push <REGISTRY>` (from `images/`; `push <REGISTRY> custom` when the public ones are already there)
 2. Chart: `helm registry login <REGISTRY>`, then `./mirror-images.sh chart <REGISTRY>/charts` (`ECR=1` creates the
@@ -202,7 +216,7 @@ DEPLOY.md was followed step by step, from a fresh extraction of `coder-airgapped
 kind cluster (Kubernetes 1.37) whose node had **all non-private egress blocked** (both pulls from Docker Hub and pod
 traffic to github.com fail). The registry was empty and the node had no cached images. Step 3 ran in a docker with
 no images at all: all 7 images were loaded from `images/` (none pulled). Prerequisites in place beforehand: Gateway
-API v1.5.1 CRDs, Traefik 41.4.0 (`prereqs/`) with the rewrite-body plugin, Argo CD 3.5.2, Keycloak 26.4 with client
+API v1.6.0 CRDs, Traefik 41.4.0 (`prereqs/`) with the rewrite-body plugin, Argo CD 3.5.2, Keycloak 26.4 with client
 `coder`, and wildcard DNS.
 
 * Steps 1–7: every step succeeded. Argo CD reached **Synced / Healthy / Succeeded** in under 3 minutes. Every

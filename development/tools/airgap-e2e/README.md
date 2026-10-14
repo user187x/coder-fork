@@ -12,7 +12,7 @@ docker run -d --name airgap-registry -p 127.0.0.1:5001:5000 registry:2 && docker
 docker exec airgap-test-control-plane sh -c 'for h in localhost:5001 airgap-registry:5000; do mkdir -p /etc/containerd/certs.d/$h; printf "[host.\"http://airgap-registry:5000\"]\n" > /etc/containerd/certs.d/$h/hosts.toml; done'
 export KUBECONFIG=$PWD/kubeconfig
 # test CA (with keyUsage!) + *.airgap.test cert in pki/; Secret traefik/airgap-tls from it
-kubectl apply --server-side -f ../../../helm-chart/prereqs/gateway-api-v1.5.1-standard-install.yaml
+kubectl apply --server-side -f ../../../helm-chart/prereqs/gateway-api-v1.6.0-standard-install.yaml
 helm install traefik ../../../helm-chart/prereqs/traefik-41.4.0.tgz -n traefik --create-namespace \
   -f <(sed 's/grey-marshall-tls/airgap-tls/' ../../../helm-chart/prereqs/traefik-41.4.0.reference-values.yaml) --set service.type=ClusterIP
 helm install argocd argo-cd --repo https://argoproj.github.io/argo-helm --version 10.8.1 -n argocd --create-namespace --set dex.enabled=false

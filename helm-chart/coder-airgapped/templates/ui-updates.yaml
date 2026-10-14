@@ -1,5 +1,5 @@
 {{- include "ca.values" . -}}
-{{- if .Values.uiUpdates.enabled }}
+{{- if and .Values.uiUpdates.enabled (include "platform.hasLayer" .) }}
 {{- $ui := .Values.uiUpdates }}
 {{- $ns := .Release.Namespace }}
 {{- $code := list "ui-service.py" "pgwire.py" "certinfo.py" "imagebuilder.py" "workspacevolumes.py" "securitydata.py" "lockdown.py" "lockdown.sh" "fips-rules.json" }}

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Builds the delivery tarballs from ../../helm-chart into ../../dist/:
-#   coder-airgapped-<version>.tar.gz        everything, every image (images/custom + images/public)
+#   coder-airgapped-<version>.tar.gz        everything, every image (images/custom + images/public), and the Argo CD
+#                                           decorator install: argocd/charts/coder-airgapped-{base,layer}-<version>.tgz
+#                                           (packaged here), its Applications and ./make --argocd
 #   coder-airgapped-<version>-slim.tar.gz   the same without images/public (only the custom Coder image)
 #   coder-airgapped-<version>-layer.tar.gz  the customization layer alone, for a cluster that runs an earlier release
 #                                           (the base, by default the newest release tag before <version>): this chart
@@ -33,6 +35,10 @@ fi
 
 helm lint "$chart" >/dev/null && echo "lint ok"
 helm template coder "$chart" -n coder >/dev/null && echo "render ok"
+# The Argo CD decorator install's two charts (the Coder installation and the customization layer), packaged from
+# the chart into argocd/charts/, which every bundle ships (git ignores it)
+find "${bundle}/argocd/charts" -maxdepth 1 -name 'coder-airgapped-*.tgz' -delete 2>/dev/null || true
+"${bundle}/mirror-images.sh" decorator-charts "${bundle}/argocd/charts" | sed "s|^${bundle}/|packaged |"
 
 mapfile -t absent < <("${bundle}/mirror-images.sh" list | awk '$2 == "absent" {print $1}' | sort -u)
 for g in "${absent[@]}"; do

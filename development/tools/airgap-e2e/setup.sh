@@ -28,7 +28,7 @@ if [[ ! -s $P/ca.crt ]]; then
 fi
 
 say "Gateway API, Traefik (prereqs/), TLS"
-kubectl apply --server-side -f "$B/prereqs/gateway-api-v1.5.1-standard-install.yaml" >/dev/null
+kubectl apply --server-side -f "$B/prereqs/gateway-api-v1.6.0-standard-install.yaml" >/dev/null
 kubectl create ns traefik --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n traefik create secret tls airgap-tls --cert="$P/wildcard.crt" --key="$P/wildcard.key" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 helm upgrade --install traefik "$B/prereqs/traefik-41.4.0.tgz" -n traefik \

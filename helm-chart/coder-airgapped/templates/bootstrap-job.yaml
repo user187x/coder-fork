@@ -1,5 +1,5 @@
 {{- include "ca.values" . -}}
-{{- if .Values.bootstrap.enabled }}
+{{- if and .Values.bootstrap.enabled (include "platform.hasBase" .) }}
 {{- $auth := .Values.secrets.initAuth }}
 {{- $tokenSecret := index .Values "coder-workspace" "coder" "tokenSecret" }}
 {{- $ns := .Release.Namespace }}
