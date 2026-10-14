@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.36.0 – 2026-10-14
+
+Coder `2.0.0-platform.39` (fork `7cf80f05d`), workspace image **`coder-workspace:1.8.5`** (the template has a new
+version: update workspaces to get the new image).
+
+* **Workspace image: 223 → 83 medium findings** (still no critical and no high; grade B). Every one left had no fix
+  released, so 1.8.5 removes the packages a workspace pod has no use for, and nothing else:
+  * **PulseAudio** and its ALSA plugins: no sound reaches the browser over VNC. With them go **ffmpeg's libraries**
+    (libavcodec, libavutil, libswresample, x264: 97 findings) and snapd's GLib library with **libsoup** (18), which
+    XFCE's weather panel plugin also needed (it needs the internet; it goes too). Firefox still plays WebM, VP9, AV1
+    and Opus with its own decoders; H.264 and AAC (MP4) videos need ffmpeg;
+  * **GNU coreutils instead of Rust coreutils** (uutils, 20): Ubuntu's own switch (`coreutils-from-gnu`), the
+    coreutils every script was written for. The `build-essential` metapackage goes (Ubuntu 26.04's requires the Rust
+    ones); gcc, g++, make and the rest it names stay;
+  * `ipp-usb` and `avahi-daemon` (USB printers), `dmsetup`, `nodejs-doc`, gstreamer's GL plugin.
+
+  XFCE's other goodies stay, as does everything the template and Lock Down use. The build checks that none of the
+  removed packages come back and that the kept ones are still there. No program or library in the image links to a
+  library that is missing (as in 1.8.4). What is left: glibc, GLib, jq, Vim, git, tar, poppler, PyJWT (for
+  add-apt-repository), pip (for every venv) and others in use, waiting on Ubuntu's fixes.
+* **Admin Settings:** each category in General's sidebar shows the icon its quick link has in the Admin menu (Super
+  Intelligence and Health too), and so does the breadcrumb (Admin Settings with the Settings icon, then the
+  category's).
+* **Account view (User Settings):** an icon before every page, in the style of the rest: Account (the avatar menu's),
+  Security, SSH Keys, Tokens, Secrets, Certificates, Notifications (and Schedule, OAuth2 Applications where offered);
+  User Settings in the breadcrumb has the Account icon.
+* **Workspace terminal:** the columns x rows readout is a small pill, further from the top and right edges, shown only
+  while the text size is being changed (it fades out 2.5 seconds after the last change).
+* **HUD:** an icon before each figure's name, for what it measures: CPU, memory, GPU, users, workspaces, running,
+  online time, failures, ping, disconnected agents, unhealthy apps (every CPU figure has the CPU icon, and so on).
+* **No classification bars on the terminal page** (the terminal in a browser window of its own): the terminal fills
+  the whole window. Every other page keeps them.
+
 ## 1.35.0 – 2026-10-14
 
 Coder `2.0.0-platform.35` (fork `ac6508b0e`), workspace image **`coder-workspace:1.8.4`** (the template has a new

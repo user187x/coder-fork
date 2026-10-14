@@ -27,7 +27,9 @@
 #   - security: every package upgraded at build time; Docker's engine and plugins (dockerd, containerd, buildx,
 #     compose) removed - a workspace pod has no privileges to run them, and their Go builds carried known
 #     vulnerabilities - as is the base's stray /usr/bin/pebble (no package owns it, nothing uses it); the docker CLI
-#     stays, for a remote daemon;
+#     stays, for a remote daemon; packages a workspace pod has no use for, whose known vulnerabilities have no fix
+#     yet, removed last (PulseAudio with ffmpeg's libraries, libsoup, the weather plugin, ...), and GNU coreutils
+#     instead of Rust coreutils (see the step before addons.json);
 #   - /usr/share/coder-workspace/addons.json: what it adds over the base, with every version (addons/addons.py), for
 #     the Images view, which lists it next to the image's security report.
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
@@ -213,6 +215,32 @@ RUN curl -fsSL -o /tmp/basic-ftp.tgz "https://registry.npmjs.org/basic-ftp/-/bas
 	&& /usr/lib/code-server/lib/node -e 'const f = require(process.argv[1]); if (require(process.argv[1] + "/package.json").version !== process.argv[2] || typeof f.Client !== "function") process.exit(1); require("/usr/lib/code-server/node_modules/get-uri")' "$d" "${BASIC_FTP_VERSION}"
 COPY --from=filebrowser /out/filebrowser /usr/local/bin/filebrowser
 RUN chmod 0755 /usr/local/bin/filebrowser && filebrowser version
+
+# Security, last (no later step may pull these back): medium findings with no fix released, in packages a workspace
+# pod has no use for.
+#   - PulseAudio and its ALSA plugins: no sound reaches the browser over VNC. With them go ffmpeg's libraries (96
+#     findings) and snapd's GLib library with libsoup (18), which the weather panel plugin also needs (it needs the
+#     internet). Firefox still plays WebM, VP9, AV1 and Opus with its own decoders; H.264 and AAC (MP4) need ffmpeg.
+#   - GNU coreutils in place of Ubuntu 26.04's Rust coreutils (uutils, 20): Ubuntu's own switch, coreutils-from-gnu.
+#     build-essential goes (a metapackage that requires the Rust ones); the compilers and tools it names stay.
+#   - ipp-usb and avahi-daemon (USB printers), dmsetup (device mapper), nodejs-doc, gstreamer's GL plugin.
+# Kept: XFCE's goodies (xfce4-goodies is a metapackage: every plugin it names but the weather one stays) and
+# glib-networking (TLS for GLib programs). The checks after it: none of them back, the rest still there.
+RUN apt-get update \
+	&& apt-mark manual glib-networking $(apt-cache depends --installed xfce4-goodies build-essential \
+		| awk '/(Depends|Recommends):/ && $2 !~ /^</ {print $2}' | grep -vxE 'xfce4-weather-plugin|coreutils-from-uutils') >/dev/null \
+	&& apt-get install -y --allow-remove-essential coreutils-from-gnu coreutils-from-uutils- \
+	&& apt-get purge -y pulseaudio pulseaudio-utils libasound2-plugins libsnapd-glib-2-1 libsoup-3.0-0 libsoup-3.0-common \
+		xfce4-weather-plugin xfce4-goodies ipp-usb avahi-daemon dmsetup nodejs-doc gstreamer1.0-gl rust-coreutils \
+	&& apt-get autoremove -y --purge \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& ls --version | grep -q 'GNU coreutils' && test ! -e /usr/lib/cargo/bin/coreutils \
+	&& for p in pulseaudio libavcodec62 libavutil60 libswresample6 libsoup-3.0-0 rust-coreutils avahi-daemon; do \
+		! dpkg -s "$p" >/dev/null 2>&1 || { echo "still installed: $p"; exit 1; }; done \
+	&& for p in xfce4-power-manager xfce4-whiskermenu-plugin xfce4-pulseaudio-plugin glib-networking libpulse0 gcc g++ make dpkg-dev \
+		libc6-dev linux-libc-dev; do dpkg -s "$p" >/dev/null 2>&1 || { echo "removed: $p"; exit 1; }; done \
+	&& gcc --version >/dev/null && g++ --version >/dev/null && make --version >/dev/null \
+	&& iptables --version && ip6tables --version && getent hosts localhost >/dev/null
 
 # What it adds over the base, every version as the installed programs say it: /usr/share/coder-workspace/addons.json.
 COPY addons/addons.py /tmp/addons.py

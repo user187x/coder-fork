@@ -56,13 +56,14 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Apps and terminal open only once the workspace is ready, after the apps' health checks; "Workspace initializing" panel with real progress | fork | vitest, e2e step 8 |
 | Reorderable drop-down panels (Logs, Terminal, any app embedded); app panels pop out to a window and back; a half-moon "+" tab (the plus in the theme's accent colour) adds an app panel | fork | vitest |
 | Workspace page: the apps centred in equal columns across the card, as wide as the metrics; metrics a little wider, readings to one decimal place | fork | vitest, verify UI |
-| Terminal: tmux with btop, pop-out window, text size, custom command, JetBrains Mono Nerd Font | fork, image | vitest |
+| Terminal: tmux with btop, pop-out window, text size (its columns x rows in a pill for a few seconds after each change), custom command, JetBrains Mono Nerd Font | fork, image | vitest |
 | Workspace metrics in two groups (Workspace, Cluster) with live bar graphs coloured by magnitude, a gauge of the current reading, the percentage in a chip; Metrics Interval menu (1 s – 5 min, off); memory and disks in GB | fork, image | vitest, verify UI |
 | Agent Update pill (another build, a newer template, an older agent) | fork | vitest |
 | Admins' post-it notes on workspace pages and in the users table | fork, service | vitest |
 | Workspace icons; home backups (S3 or download); disk growth (in place, or a copy to a bigger volume) | fork, service | verify |
 | Global Workspace Scheduler: required start/stop schedules, enforced | fork, service | e2e step 8 |
 | Image scans set apart what cannot apply to a container (the kernel's header package; Ubuntu's snap advisories on Mozilla's Firefox, two years old or more), each rule with its reason and findings, not graded | service, fork | platform unit tests, vitest |
+| Workspace image without what a pod cannot use (PulseAudio with ffmpeg's libraries, libsoup, Docker's engine, ...) and with GNU coreutils: no critical or high finding, the rest waiting on Ubuntu's fixes | workspace image | build checks, scan, verify |
 | **Lock Down**: admins jail a workspace (Network: only Coder reachable; Sudo Command: no sudo; Complete: both; Freeze: Complete and everything paused, with a snapshot of its disk), live while it runs or from its next start, and again after every restart until lifted; a centred notice for everyone who sees it; red, still network lights | fork, service, chart | platform unit tests, vitest, live Lock Down test |
 | Per-user quota | fork, service | e2e step 8 |
 | "Animations" switch; no Favorite; no links to Coder's online docs | fork | vitest |
@@ -83,13 +84,13 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 
 | Feature | Where | Test |
 |---|---|---|
-| HUD: live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users, failures) and Coder's System Uptime | fork, service | e2e step 8 |
+| HUD: live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users, failures) and Coder's System Uptime; an icon before each figure for what it measures | fork, service | e2e step 8 |
 | Health view, monitoring and security posture (zero-trust checks, runtime signals) | fork, service | e2e step 8 |
 | Network and persistence maps | fork, service | vitest |
 | Inbox (the bell): Clear all (deletes the user's notifications, asks twice) beside an icon-only Mark all as read | fork, service | vitest |
-| Classification banners (e.g. UNCLASSIFIED), announcement banner (typewriter, crawl, fonts, Viewed box; a terminal view with an easter egg) | fork, service | verify |
+| Classification banners (e.g. UNCLASSIFIED; not on the terminal page, which the terminal fills), announcement banner (typewriter, crawl, fonts, Viewed box; a terminal view with an easter egg) | fork, service | verify |
 | Chat between users and admins, with screenshots, and the admins' chat console | fork, service | vitest |
-| Admin menu quick links, breadcrumb, arrangeable top bar, Resources menu; an icon before every item of both menus | fork | vitest |
+| Admin menu quick links, breadcrumb, arrangeable top bar, Resources menu; an icon before every item of both menus, each category's quick-link icon in General's sidebar and the breadcrumb, and an icon before every page of the account view | fork | vitest |
 | Logo and avatar (uploaded, a gallery, defaults) | fork, service | verify |
 | Agent Activity (optional `agent-audit.tf`): every command run in a workspace | chart, service | manual |
 | metrics-server where the cluster has none | chart | verify |
