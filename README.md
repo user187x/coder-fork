@@ -8,7 +8,7 @@ your network.
 
 | | Current release: [**v1.37.1**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
-| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.42-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
+| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.43-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.8.5` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
 | Image tools | `ghcr.io/user187x/coder-image-tools:1.0.0` (the platform service, BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |

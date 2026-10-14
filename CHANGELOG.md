@@ -2,7 +2,7 @@
 
 ## 1.37.1 – 2026-10-14
 
-Coder `2.0.0-platform.42` (fork `60a0b781b`), workspace image `coder-workspace:1.8.5` (unchanged; the template has a
+Coder `2.0.0-platform.43` (fork `9cb97bba8`), workspace image `coder-workspace:1.8.5` (unchanged; the template has a
 new version: update workspaces to get its startup log).
 
 * **Fixed: the workspace page's Logs panel showed only a spinner.** The workspace's startup scripts printed nothing
@@ -11,6 +11,8 @@ new version: update workspaces to get its startup log).
   certificate, Lock Down), so the panel shows the workspace's startup; and an agent with no log lines at all gets
   "No logs yet" instead of the spinner. The Certificates and Lock Down scripts have their own icons in the panel's
   tabs (they pointed at an icon Coder does not have).
+* **Lock Down menu icons:** Network is a pulled plug and Sudo Command passport control (🛂); Complete keeps the red
+  shield and Freeze the snowflake.
 
 ## 1.37.0 – 2026-10-14
 

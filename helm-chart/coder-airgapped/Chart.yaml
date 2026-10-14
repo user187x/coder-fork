@@ -8,7 +8,7 @@ description: >-
   so the chart installs with no network access.
 type: application
 version: 1.37.1
-appVersion: "2.0.0-platform.42"
+appVersion: "2.0.0-platform.43"
 kubeVersion: ">=1.27.0-0"
 keywords:
   - coder
