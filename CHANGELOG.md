@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.38.1 – 2026-10-14
+
+Coder `2.0.0-platform.43` (fork `9cb97bba8`, unchanged), workspace image `coder-workspace:1.8.5` (unchanged).
+
+* **Fixed: the single-chart Argo CD Application lost the workspaces' storage class.**
+  `argocd/coder-airgapped-application.yaml` set `coder-workspace:` twice, and kubectl (like Argo CD) keeps only the
+  last of two equal keys, without a word: `coder-workspace.storageClass` never reached the chart, so on a cluster
+  without a default StorageClass (EKS) new workspace homes would not bind. Now one block. A static check makes sure no
+  Application or values file gives a key twice.
+* **Tested against a real Harbor** (2.15.2, the official chart, private CA; `development/tools/airgap-e2e/harbor-setup.sh`,
+  the installing machine a docker-in-docker with no images): `./make --push-images` trusted the CA (docker's
+  `certs.d`, through sudo), logged docker and helm in, created the project and pushed all 11 images (every one from
+  the bundle) and 5 charts; a single-chart Argo CD install from Harbor (robot account, Harbor's CA in Argo CD) then
+  moved to the decorated install with `./make --argocd` **in place**: all 23 of its objects (database, volumes,
+  Secrets, Deployments) kept, the data with them.
+
 ## 1.38.0 – 2026-10-14
 
 Coder `2.0.0-platform.43` (fork `9cb97bba8`, unchanged), workspace image `coder-workspace:1.8.5` (unchanged).

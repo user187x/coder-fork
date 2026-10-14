@@ -46,7 +46,7 @@ spec:
   source:
     repoURL: 123456789012.dkr.ecr.us-east-1.amazonaws.com/charts  # CHANGE-ME: same as the repository url above
     chart: coder-airgapped
-    targetRevision: 1.38.0
+    targetRevision: 1.38.1
     helm:
       releaseName: coder
       valuesObject:
@@ -114,6 +114,8 @@ spec:
 
         coder-workspace:
           storageClass: gp3                         # CHANGE-ME: workspaces' home volumes (new ones)
+          template:
+            name: ubuntu-vnc-desktop
 
         uiUpdates:
           adminRoles: owner
@@ -132,10 +134,6 @@ spec:
           admin:
             roles:
             - owner
-
-        coder-workspace:
-          template:
-            name: ubuntu-vnc-desktop
 
   destination:
     server: https://kubernetes.default.svc

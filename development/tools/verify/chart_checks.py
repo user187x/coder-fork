@@ -100,6 +100,31 @@ def decorator_checks(B, chart, full_render):
               all(detail.values()), detail)
     except ImportError:
         check("decorator: the Applications parse (needs PyYAML: skipped)", True, "skipped")
+    # kubectl (and Argo CD) keep only the last of two equal keys, silently: a value given twice is a value lost
+    try:
+        import yaml
+
+        class Strict(yaml.SafeLoader):
+            pass
+
+        def mapping(loader, node, deep=False):
+            seen = set()
+            for k, _ in node.value:
+                key = loader.construct_object(k, deep=deep)
+                if key in seen:
+                    raise yaml.constructor.ConstructorError(None, None, "duplicate key %r (line %d)" % (key, k.start_mark.line + 1), k.start_mark)
+                seen.add(key)
+            return yaml.SafeLoader.construct_mapping(loader, node, deep)
+        Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+        dups = {}
+        for f in sorted(glob.glob(os.path.join(argo, "*.yaml")) + glob.glob(os.path.join(B, "values-*.yaml")) + [os.path.join(chart, "values.yaml")]):
+            try:
+                list(yaml.load_all(open(f), Loader=Strict))
+            except yaml.YAMLError as e:
+                dups[os.path.relpath(f, B)] = str(e).splitlines()[0]
+        check("the Applications and values files: no key given twice (kubectl would keep only the last)", not dups, dups or "")
+    except ImportError:
+        pass
 
 
 def main():

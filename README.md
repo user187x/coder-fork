@@ -6,7 +6,7 @@ announcement banner and a full-featured workspace template, packaged as **one He
 every container image it needs**. Nothing is downloaded during the install, and nothing at run time reaches outside
 your network.
 
-| | Current release: [**v1.38.0**](https://github.com/user187x/coder-fork/releases/latest) |
+| | Current release: [**v1.38.1**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
 | Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.43-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.8.5` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
@@ -26,11 +26,11 @@ your network.
 Download the release's parts, verify and join them, then install from inside the air-gapped network:
 
 ```bash
-sha256sum -c coder-airgapped-1.38.0.parts.sha256           # every part: OK
-cat coder-airgapped-1.38.0.tar.gz.part-0* > coder-airgapped-1.38.0.tar.gz
-sha256sum -c coder-airgapped-1.38.0.tar.gz.sha256          # the bundle: OK
+sha256sum -c coder-airgapped-1.38.1.parts.sha256           # every part: OK
+cat coder-airgapped-1.38.1.tar.gz.part-0* > coder-airgapped-1.38.1.tar.gz
+sha256sum -c coder-airgapped-1.38.1.tar.gz.sha256          # the bundle: OK
 
-tar -xzf coder-airgapped-1.38.0.tar.gz && cd coder-airgapped-1.38.0
+tar -xzf coder-airgapped-1.38.1.tar.gz && cd coder-airgapped-1.38.1
 ./make --deploy
 ```
 
@@ -48,9 +48,9 @@ images changed since the previous release, our own ones as thin deltas of the im
 no third-party chart or image. Carry that one file across instead of the whole bundle:
 
 ```bash
-sha256sum -c coder-airgapped-1.38.0-layer.tar.gz.sha256
-tar -xzf coder-airgapped-1.38.0-layer.tar.gz && cd coder-airgapped-1.38.0
-PREVIOUS=../coder-airgapped-1.37.1 ./make --deploy      # the folder you installed from (its .deploy settings)
+sha256sum -c coder-airgapped-1.38.1-layer.tar.gz.sha256
+tar -xzf coder-airgapped-1.38.1-layer.tar.gz && cd coder-airgapped-1.38.1
+PREVIOUS=../coder-airgapped-1.38.0 ./make --deploy      # the folder you installed from (its .deploy settings)
 ```
 
 It first checks that the cluster has what the layer does not carry: Coder installed from a full bundle, Traefik,
@@ -369,10 +369,11 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **46/46** (1.38.0) |
-| Platform service unit tests | **33/33** (1.38.0) |
+| Static checks | **47/47** (1.38.1) |
+| Platform service unit tests | **33/33** (1.38.1) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Argo CD decorator install (`./make --argocd`; kind, egress blocked, Gateway API v1.6.0, Argo CD 3.5.2) | decorated: Synced / Healthy in ~3 min, **7/7**; layer off: **7/7** (upstream Coder, data kept); layer back: **7/7**, every volume the same (1.38.0) |
+| A real Harbor 2.15.2 with a private CA (`harbor-setup.sh`; installing machine: docker-in-docker, no images) | `./make --push-images`: CA trusted, project created, 11 images (all from the bundle) and 5 charts, all checked; a single-chart Argo CD install (robot account, Harbor's CA) migrated to the decorated one by `./make --argocd` in place: **23/23** objects kept, **7/7** (1.38.1) |
 | Live conformance | **76/76** (1.28.0) |
 | Load, ~1,050 dashboard tabs for 8 minutes | **0 errors** of 157,626 requests, worst p95 0.28 s, no restarts (1.28.0) |
 | Browser memory soak, 8 minutes | JS heap +0.3 MB; no external requests (1.28.0) |

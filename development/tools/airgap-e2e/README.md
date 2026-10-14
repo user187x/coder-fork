@@ -25,3 +25,25 @@ kubectl apply -f keycloak.yaml   # client "coder" + user tester: ./keycloak-setu
 Then: `./e2e.sh /path/to/coder-airgapped-<version>.tar.gz`, and run `step8.py` in a pod (image
 `localhost:5001/library/python:3.13-alpine`, ConfigMap with step8.py at /t, the test CA at /ca/ca.crt).
 Clean up: `kind delete cluster --name airgap-test; docker rm -f airgap-registry`.
+
+## A real Harbor with a private CA: `harbor-setup.sh`
+
+After `./setup.sh`: `./harbor-setup.sh` adds Harbor 2.15 (the official chart) at `https://harbor.airgap.test`, behind the
+Gateway with the test CA's certificate (Traefik on hostPort 443, so the same address works from the node, the pods
+and outside), makes the node trust the CA (containerd `certs.d`), creates the system robot `robot$argocd` (pull
+rights; `harbor/argocd.env`), and starts the installing machine `harbor-installer`: a docker-in-docker with no images
+and logins of its own, a copy of the bundle at `/bundle` (without its `.deploy`), `pki/` at `/pki`. Then run the
+installers in it as a customer would, e.g.:
+
+```bash
+docker exec --env-file harbor/push.env -e HARBOR_USER=admin -e HARBOR_CA=/pki/ca.crt -e DOCKERHUB_LOGIN=n \
+  -w /bundle harbor-installer ./make --push-images https://harbor.airgap.test/coder-test --yes
+docker exec --env-file harbor/push.env --env-file harbor/argocd.env -e HARBOR_USER=admin -e HARBOR_CA=/pki/ca.crt \
+  -e DOCKERHUB_LOGIN=n -e DOMAIN=airgap.test -e CERTS=existing -e TLS_CRT=/pki/wildcard.crt -e TLS_KEY=/pki/wildcard.key \
+  -e CA_BUNDLE=/pki/ca.crt -e OIDC_ISSUER=https://keycloak.airgap.test/realms/master \
+  -e OIDC_SECRET_FILE=/pki/oidc-client-secret.txt -e OIDC_CA=/pki/ca.crt -e STORAGE_CLASS=standard \
+  -w /bundle harbor-installer ./make --argocd https://harbor.airgap.test/coder-test --yes
+```
+
+(`--env-file` keeps `robot$argocd` as it is; a shell would expand `$argocd`.) Clean up: `docker rm -f -v harbor-installer`,
+then the cluster as above.
