@@ -7,7 +7,10 @@
 modes=$(cat '/etc/coder-lockdown/${workspace_id}' 2>/dev/null || echo off)
 case ",$modes," in
 *,sudo,*) ;;
-*) exit 0 ;;
+*)
+ echo "Lock Down: sudo works as usual (not locked)"
+ exit 0
+ ;;
 esac
 printf '%s\n' "# Lock Down: an admin took sudo away in this workspace (Workspace page > Lock Down)." \
  'ALL ALL=(ALL:ALL) !ALL' | sudo -n tee /etc/sudoers.d/zz-coder-lockdown.new >/dev/null &&

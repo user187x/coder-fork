@@ -37,6 +37,7 @@ for encoded in "$dir"/.*.p12.b64; do
 done
 
 ok=""
+if [ -z "$source" ]; then echo "No certificate uploaded (Settings > Certificates): ~/.cert has none from Coder"; fi
 if [ -n "$source" ]; then
  tmp=$(mktemp "$dir/.install.XXXXXX")
  if base64 -d <"$source" >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then

@@ -15,6 +15,9 @@ CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
 # Path-based apps are proxied under this prefix ("main" = the agent's name).
 APPS="/@$OWNER_NAME/$WORKSPACE_NAME.main/apps"
+# One line per step, for the workspace page's Logs panel (the agent keeps this script's output, with the time).
+log() { printf '%s\n' "$*"; }
+log "Starting workspace $WORKSPACE_NAME of $OWNER_NAME"
 
 # No core dumps (the pod's command already sets this for the agent and all it starts), and remove the ones an
 # earlier workspace image left in the home directory: light-locker crashed at every desktop start, writing
@@ -105,6 +108,7 @@ KUBECONFIG_FILE
 else
  rm -f "$CLUSTER_KUBECONFIG"
 fi
+[ "$CLUSTER_ADMIN" = "true" ] && log "kubectl and k9s: signed in to this cluster as you on first use (~/.kube/coder-cluster.yaml)"
 
 # 1. Desktop Environment & noVNC, first: it needs no network. It is in the workspace image
 # (ghcr.io/user187x/coder-workspace, without light-locker); installed here only on an image without it.
@@ -164,6 +168,11 @@ if [ "$IMAGE_DESKTOP" != none ] && ! pgrep -f "^Xtigervnc :1 " >/dev/null; then
   sleep 0.2
  done
  DISPLAY=:1 XAUTHORITY=~/.Xauthority setsid ~/.config/tigervnc/xstartup >/tmp/xstartup.log 2>&1 </dev/null &
+ log "Desktop: started ($IMAGE_DESKTOP on display :1)"
+elif [ "$IMAGE_DESKTOP" = none ]; then
+ log "Desktop: none in this image (the Desktop app stays down)"
+else
+ log "Desktop: running already"
 fi
 
 # websockify serves noVNC on 127.0.0.1 only and connects to the VNC socket: the only way in is Coder's app proxy,
@@ -172,6 +181,7 @@ fi
 # (By its port: pgrep -f would match this script, whose text contains the pattern.)
 if [ "$IMAGE_DESKTOP" != none ] && ! curl -s -o /dev/null http://127.0.0.1:6901/; then
  websockify --web=/usr/share/novnc/ --unix-target="$VNC_SOCK" 127.0.0.1:6901 >/tmp/novnc.log 2>&1 &
+ log "Desktop app (noVNC): started"
 fi
 
 # Windows of marimo notebooks (tkinter): a second, private X display (:2: no desktop, no window manager, on its
@@ -237,6 +247,9 @@ fi
 # so `pgrep -f` matches the script's own command line and never starts anything.
 if [ -x "$CODE_SERVER" ] && ! curl -fs http://localhost:13337/healthz >/dev/null; then
  "$CODE_SERVER" --auth none --port 13337 --disable-telemetry --disable-update-check >/tmp/code-server.log 2>&1 &
+ log "code-server: started (log: /tmp/code-server.log)"
+elif [ -x "$CODE_SERVER" ]; then
+ log "code-server: running already"
 fi
 
 # 3. File Browser: the workspace image's as well; downloaded only on an image without it (needs internet).
@@ -251,6 +264,9 @@ if ! pgrep -x filebrowser >/dev/null; then
  filebrowser --noauth --root /home/coder --port 13339 \
   --baseurl "$APPS/filebrowser" \
   >/tmp/filebrowser.log 2>&1 &
+ log "File Browser: started (log: /tmp/filebrowser.log)"
+else
+ log "File Browser: running already"
 fi
 
 # 4. marimo (Python notebooks), with no network: the workspace image has it with everything it needs in /opt/marimo
@@ -444,7 +460,11 @@ MARIMO_DARK
    PATH="$MARIMO_VENV/bin:/opt/marimo/bin:$PATH" PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_RETRIES=0 PIP_TIMEOUT=10 \
    UV_HTTP_TIMEOUT=10 "$MARIMO_VENV/bin/python" -m marimo edit --headless --host 127.0.0.1 --port 2718 \
    --no-token --skip-update-check --base-url "$MARIMO_BASE" /home/coder/notebooks >/tmp/marimo.log 2>&1 &
+  log "marimo: started (log: /tmp/marimo.log)"
+ else
+  log "marimo: running already"
  fi
 else
- echo "marimo is not in this image (/opt/marimo): skipped"
+ log "marimo is not in this image (/opt/marimo): skipped"
 fi
+log "Startup done: the apps open once they answer their health checks"

@@ -14,7 +14,7 @@
 resource "coder_script" "user_certificates" {
   agent_id           = coder_agent.main.id
   display_name       = "Certificates"
-  icon               = "/icon/lock.svg"
+  icon               = "/__icons/certificate.svg" # files/icons/certificate.svg, served by templates/icons.yaml
   run_on_start       = true
   start_blocks_login = true # nobody gets a shell before the certificate is in place
   script = templatefile("${path.module}/scripts/certificates.sh", {

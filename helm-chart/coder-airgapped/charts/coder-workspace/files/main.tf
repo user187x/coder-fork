@@ -247,7 +247,7 @@ resource "coder_agent" "main" {
 resource "coder_script" "lockdown" {
   agent_id           = coder_agent.main.id
   display_name       = "Lock Down"
-  icon               = "/icon/lock.svg"
+  icon               = "/__icons/lockdown.svg" # files/icons/lockdown.svg, served by templates/icons.yaml
   run_on_start       = true
   start_blocks_login = true
   script = templatefile("${path.module}/scripts/lockdown-start.sh", {
