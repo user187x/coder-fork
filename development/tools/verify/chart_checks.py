@@ -171,7 +171,7 @@ def main():
 
     rc, out, err = run([sys.executable, "-m", "unittest", "discover", "-s", here, "-p", "platform_unit_test.py", "-q"])
     check("platform service unit tests", rc == 0, (err or out).strip().splitlines()[-1] if (err or out).strip() else "")
-    for sh in ("install.sh", "make", "mirror-images.sh", "minikube-support"):
+    for sh in ("install.sh", "make", "mirror-images.sh", "minikube-support", "harbor-support"):
         rc, _, err = run(["bash", "-n", os.path.join(B, sh)])
         check("shell syntax: %s" % sh, rc == 0, err.strip())
     passed = sum(x["ok"] for x in RESULTS)

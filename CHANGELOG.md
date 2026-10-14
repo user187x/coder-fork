@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.34.0 – 2026-10-14
+
+Coder `2.0.0-platform.34` (fork `4885d2c81`), workspace image `coder-workspace:1.8.3` (unchanged); the workspace
+template has a new version (Lock Down's Freeze; update workspaces to it).
+
+* **Lock Down: Freeze.** A fourth mode: Complete (no network but Coder, no sudo) and every process in the workspace
+  paused where it is, Coder's agent too, so nothing in it runs and nobody can open a session in it. Its disk is
+  snapshotted at that moment: a VolumeSnapshot where the cluster can make one (the snapshot API and a
+  VolumeSnapshotClass for the volume's CSI driver, as on EKS with the EBS CSI driver), else a copy of the home volume
+  in a new volume (`coder-freeze-<workspace>-<time>`) by a Job on the workspace's node. The processes that were
+  running are kept with it. Lifting Freeze resumes exactly what it paused, and the agent reconnects. The snapshot
+  stays until an admin deletes it from the Lock Down menu, or until the next Freeze replaces it. A stopped workspace
+  can be frozen too: its disk is copied as it was left, and it is frozen from its next start.
+* **Every lock comes back after a restart**, until an admin lifts it: Network and Sudo at start (as before), and
+  Freeze right after (the watcher pauses the new pod's processes within seconds).
+* **The Lock Down notice** is centred, between two shields.
+* **The network lights while the network is locked** (Network, Complete or Freeze): both red and still, and the
+  hover graph starts afresh and records no traffic ("Locked down: no traffic"), whether or not the agent still
+  reports (Freeze pauses it).
+* **Fixed (Lock Down):** lifting a lock right after a restart, before the watcher had seen the new pod, left what the
+  pod's start had set (sudo) in place; Freeze now also pauses the sandboxes programs start in the workspace
+  (bubblewrap's, with a root of their own).
+* **Workspace page:**
+  * the apps' box and the metrics' boxes fill the card's width, and the box of apps is as wide as the metrics under it;
+  * the apps are centred in equal columns spread across that width;
+  * each metric's graph is a little wider (up to 136 px);
+  * both groups, Workspace and Cluster, show their metrics in the same order: CPU, RAM, Disk, Ø Load (the load
+    average, "Load Avg" before). The template orders them so (the workspace's Disk now comes before its load), and the
+    dashboard does too, for workspaces built from older template versions;
+  * readings show one decimal place (`0.6/6 cores`, `19.5/98.6 GB`, rounded half up).
+* **The Add Panel tab** is a half-moon above the top panel, with the "+" in a small circle in the theme's accent colour
+  (it follows the theme), sitting at the half-moon's foot, centred on the panel's border.
+* **The announcement's Viewed badge** sits a little further right and is bigger, its ribbons hanging past the banner
+  into the navigation bar.
+* **Resources and Admin menus:** an icon before every item: Workspaces, Templates, Images; Settings, each quick link
+  (and each page in its add menu), Organizations, Audit logs, Connection logs, AI sessions.
+* **`./make --push-images <harbor>[/<project>]`** (new helper `harbor-support`): every image the solution needs and
+  its Helm charts into your Harbor. It reaches Harbor's API (a private CA: helm and docker are set up to trust it,
+  docker's with sudo after asking), logs your docker and helm in to Harbor (a user or a robot account) and, on
+  request, to Docker Hub (passwords on stdin only, never stored), checks or creates the project (public or private,
+  with what each means for the cluster), pushes the images and the charts (`coder-airgapped`, CloudNativePG,
+  Traefik: `oci://<harbor>/<project>/charts`, new `mirror-images.sh charts`), checks each one is there, and
+  remembers the registry for `./make --deploy`.
+* **Fixed:** the announcement banner showed inside marimo (and could in any path-based workspace app): Traefik ranked
+  the banner's page-load rule (prefix `/` with an Accept header) above the apps' passthrough (`/@`, no header), so
+  the loader was injected into marimo's page. App page loads now have a rule of their own, and the loader does
+  nothing on a workspace app's page.
+* **Templates:** the Embed tab is gone, along with the ⋮ menu's Share entries and Export as TAR. **Export as ZIP** now
+  holds the whole template: its Terraform, its scripts and other files, and every icon it uses that this deployment
+  serves (the template's own, its apps', parameters' and metadata's), under `icons/`, with `icons/index.json` saying
+  where each one is served. The ⋮ menu shows only to template editors. Old `…/embed` links open the template.
+* **Customize > Sign-in and sign-out page:** the sign-in page's title (the deployment's name by default), the text
+  effect it is drawn with (Wireframe, the traced outline it has always had; Neon; or Plain), that effect's colour and
+  speed, and a message under it, with a different one right after signing out. With a live preview of both. Saved by
+  the platform service (`/__coder-ui/api/login-page`, public to read) and handed to every page in `boot.js`, so the
+  page never flickers.
+* The live Lock Down test (`verify/lockdown_live.py`) checks Freeze, its snapshot's contents, restarts with each mode,
+  and lifting.
+
 ## 1.33.0 – 2026-10-13
 
 Coder `2.0.0-platform.33` (fork `599afe8ed`), workspace image `coder-workspace:1.8.3` (unchanged).

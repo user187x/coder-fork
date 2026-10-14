@@ -24,6 +24,8 @@
 #   ./mirror-images.sh chart REPO   package ./coder-airgapped and helm push it to oci://REPO (e.g. <registry>/charts),
 #                                   the repository argocd/coder-airgapped-application.yaml pulls from
 #                                   (helm registry login <registry> first; ECR=1 creates the ECR repository)
+#   ./mirror-images.sh charts REPO  the same, and the prerequisites' charts (prereqs/*.tgz: CloudNativePG, Traefik)
+#   ./mirror-images.sh charts-list  name and version of each of those charts
 #
 #   ./mirror-images.sh seed-builder [NAMESPACE]
 #                                   the image builder's base: pushes the workspace image into the in-cluster registry
@@ -33,6 +35,7 @@
 #
 #   ECR=1 ./mirror-images.sh push ...    create missing ECR repositories first (needs the aws CLI)
 #   PLAIN_HTTP=1 ./mirror-images.sh chart ...   registry without TLS
+#   HELM_PUSH_ARGS="--ca-file ca.pem" ./mirror-images.sh chart(s) ...   more helm push options (a private CA)
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -129,17 +132,29 @@ verify)
 	done
 	echo "$n archives verified"
 	;;
-chart)
-	repo="${1:?usage: chart REPO}"; repo="${repo#oci://}"; repo="${repo%/}"
+chart | charts)
+	repo="${1:?usage: $cmd REPO}"; repo="${repo#oci://}"; repo="${repo%/}"
 	command -v helm >/dev/null || { echo "ERROR: helm not found" >&2; exit 1; }
 	tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-	pkg=$(helm package "${here}/coder-airgapped" -d "$tmp" | sed -n 's/.*saved it to: //p')
-	if [[ "${ECR:-0}" == 1 ]]; then
-		name=$(basename "$pkg"); name="${name%-*}"; ecr_repo="${repo#*/}/${name}"
-		aws ecr describe-repositories --repository-names "$ecr_repo" >/dev/null 2>&1 ||
-			aws ecr create-repository --repository-name "$ecr_repo" >/dev/null
-	fi
-	helm push "$pkg" "oci://${repo}" $([[ "${PLAIN_HTTP:-0}" == 1 ]] && echo --plain-http)
+	pkgs=("$(helm package "${here}/coder-airgapped" -d "$tmp" | sed -n 's/.*saved it to: //p')")
+	[[ "$cmd" == chart ]] || pkgs+=("${here}"/prereqs/*.tgz)
+	read -r -a extra <<<"${HELM_PUSH_ARGS:-}"
+	[[ "${PLAIN_HTTP:-0}" == 1 ]] && extra+=(--plain-http)
+	for pkg in "${pkgs[@]}"; do
+		if [[ "${ECR:-0}" == 1 ]]; then
+			name=$(basename "$pkg"); name="${name%-*}"; ecr_repo="${repo#*/}/${name}"
+			aws ecr describe-repositories --repository-names "$ecr_repo" >/dev/null 2>&1 ||
+				aws ecr create-repository --repository-name "$ecr_repo" >/dev/null
+		fi
+		echo "$(basename "$pkg") -> oci://${repo}"
+		helm push "$pkg" "oci://${repo}" "${extra[@]}" 2>&1 | grep -v '^Pushed:\|^Digest:' || true
+		((PIPESTATUS[0] == 0)) || exit 1
+	done
+	;;
+charts-list)
+	for c in "${here}/coder-airgapped" "${here}"/prereqs/*.tgz; do
+		helm show chart "$c" | awk '/^name:/ {n=$2} /^version:/ {v=$2} END {print n, v}'
+	done
 	;;
 seed-builder)
 	ns="${1:-coder}"

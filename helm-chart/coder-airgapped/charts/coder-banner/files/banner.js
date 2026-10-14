@@ -467,6 +467,11 @@
     return;
   }
 
+  // A workspace app (marimo, File Browser, code-server, ... at /@<user>/<workspace>[.<agent>]/apps/<slug>/) is the
+  // workspace's own page, not Coder's: no banner in it. The HTTPRoute sends those straight to Coder, unrewritten;
+  // this covers a gateway that ranks the routes otherwise.
+  if (/^\/@[^/]+\/[^/]+\/apps\//.test(window.location.pathname)) return;
+
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start);
 })();

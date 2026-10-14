@@ -100,6 +100,17 @@ rules:
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [create]
+  # Lock Down > Freeze: the snapshot of the workspace's home volume, a VolumeSnapshot where the cluster has the API,
+  # else a copy in a new volume by a Job (both named coder-freeze-*); deleted by admins or by the next freeze.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, create, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, create, delete]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
+    verbs: [get, create, delete]
   # Monitoring > Security posture: are workspaces segmented?
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
@@ -139,6 +150,10 @@ rules:
   - apiGroups: [snapshot.storage.k8s.io]
     resources: [volumesnapshotclasses]
     verbs: [get, list]
+  # Lock Down > Freeze: the home volume's CSI driver, for a VolumeSnapshotClass that fits it.
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get]
   - apiGroups: [apiextensions.k8s.io]
     resources: [customresourcedefinitions]
     resourceNames: [clusters.postgresql.cnpg.io]

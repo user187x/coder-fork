@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.33.0.tar.gz && cd coder-airgapped-1.33.0
+tar -xzf coder-airgapped-1.34.0.tar.gz && cd coder-airgapped-1.34.0
 ./make --deploy
 ```
 
@@ -32,6 +32,31 @@ Progress shows in the terminal and in `.deploy/deploy.log` (from a second termin
 `./make --deploy --yes` takes every remembered answer without asking. Helpers it uses, which also work on their own:
 `./x509-support` (certificates), `./minikube-support` (e.g. `./minikube-support expose coder <domain>` after a
 reboot), `./install.sh`, `./mirror-images.sh`.
+
+### Your Harbor first: `./make --push-images`
+
+```bash
+./make --push-images harbor.example.com/coder      # <harbor host>[/<project>]
+```
+
+Takes every image the solution needs (from the bundle) and its Helm charts into your Harbor, helping along the way:
+
+1. it reaches Harbor's API; a private CA: give the CA file, and it sets up helm (`--ca-file`) and docker
+   (`/etc/docker/certs.d/<host>/ca.crt`, with sudo, asked first) to trust it;
+2. it logs your **docker and helm** in to Harbor (a user, or a robot account with push rights, `robot$<name>`), and
+   on request to **Docker Hub** too (the public images the bundle does not carry are pulled from there, and Docker
+   Hub limits anonymous pulls). Passwords and tokens go to docker and helm on stdin, never on a command line, and the
+   script never writes them anywhere;
+3. it checks the project, and offers to create it (public: nothing in the cluster needs a pull secret; private: the
+   cluster needs one, and the nodes credentials for the workspace pods);
+4. it pushes the images (as `<harbor>/<project>/<path>`, what `global.registry: <harbor>/<project>` expects) and the
+   charts (`coder-airgapped`, CloudNativePG's and Traefik's) to `oci://<harbor>/<project>/charts`;
+5. it checks every image and chart is there, and remembers `<harbor>/<project>` as the registry for
+   `./make --deploy` (EKS).
+
+Non-interactive: `HARBOR_USER=robot\$coder HARBOR_PASSWORD=... DOCKERHUB_LOGIN=n ./make --push-images
+harbor.example.com/coder --yes` (`PUSH_GROUPS="custom chart prereqs platform"` adds the reference Argo CD and
+Keycloak images). Any other registry works too: without Harbor's API, the project steps are skipped.
 
 The steps below are the same install done by hand.
 
@@ -73,8 +98,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.33.0.tar.gz
-cd coder-airgapped-1.33.0
+tar -xzf coder-airgapped-1.34.0.tar.gz
+cd coder-airgapped-1.34.0
 ./mirror-images.sh list
 ```
 
@@ -85,14 +110,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.33.0` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.34.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.33.0
+cd coder-airgapped-1.34.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -100,6 +125,7 @@ ECR=1 ./mirror-images.sh push $REGISTRY                    # drop ECR=1 if not u
 ```
 
 Public images already in your registry? Push only the custom one: `./mirror-images.sh push $REGISTRY custom`.
+Harbor: `./make --push-images <harbor>/<project>` does this step and the next, logins included.
 
 ## Step 4 – Push the chart to your registry
 

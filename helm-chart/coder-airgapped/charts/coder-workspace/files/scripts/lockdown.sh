@@ -2,8 +2,8 @@
 # Lock Down: jails a workspace, as an admin set it (Workspace page > Lock Down; the platform service's lockdown.py).
 #   lockdown.sh MODES CODER_HOST [ROOT]
 #
-# MODES     a comma list of network and sudo, or off; or file:PATH, to read it from that file (missing: off). It sets
-#           exactly MODES: what is not in it is lifted, so running it again changes nothing.
+# MODES     a comma list of network, sudo and freeze, or off; or file:PATH, to read it from that file (missing: off).
+#           It sets exactly MODES: what is not in it is lifted, so running it again changes nothing.
 # CODER_HOST  the host the workspace's agent reaches Coder on (the access URL's): Network keeps it, so the agent stays
 #           connected and admins can still open the workspace's terminal and apps, and inspect what runs there.
 # ROOT      where the workspace container's / is, for Sudo (/proc/1/root from a container sharing its processes);
@@ -17,6 +17,12 @@
 #
 # Network: everything in or out is refused but loopback, DNS (the pod's name servers) and Coder (CODER_HOST's
 # addresses), IPv6 entirely. Connections that are open already, to anything else, stop at once.
+#
+# Freeze (needs ROOT, so only from a container sharing the workspace container's processes): every process of the
+# workspace container is paused where it is (SIGSTOP), Coder's agent too, so nothing in it runs and nobody can open
+# a session in it any more; its PID 1 cannot be paused from inside and only waits for its children. The paused ones
+# are listed in ROOT/run/coder-lockdown-frozen, so lifting Freeze resumes exactly those (SIGCONT) and nothing a user
+# had stopped on purpose. The platform service copies the workspace's disk while it is frozen (the snapshot).
 set -eu
 modes=$1
 host=$2
@@ -25,8 +31,10 @@ root=${3-}
 case $modes in file:*) modes=$(cat "${modes#file:}" 2>/dev/null || echo off) ;; esac
 net=
 sudo_=
+freeze=
 case ",$modes," in *,network,*) net=1 ;; esac
 case ",$modes," in *,sudo,*) sudo_=1 ;; esac
+case ",$modes," in *,freeze,*) freeze=1 ;; esac
 
 out=CODER-LOCKDOWN
 in=CODER-LOCKDOWN-IN
@@ -92,9 +100,47 @@ if [ -n "$root" ]; then
  fi
 fi
 
+# Freeze: every process but PID 1 and this container's own (theirs is this root): the workspace container's, and
+# the sandboxes its programs start (bubblewrap's have a root of their own).
+frozen=
+if [ -n "$root" ]; then
+ list="$root/run/coder-lockdown-frozen"
+ if [ -n "$freeze" ]; then
+  # a few rounds: a process may start a child while the others are being paused
+  for round in 1 2 3; do
+   for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    [ "$pid" = 1 ] && continue
+    [ "$d/root" -ef /proc/self/root ] 2>/dev/null && continue
+    state=$(awk '{ print $3 }' "$d/stat" 2>/dev/null || true)
+    case $state in T | t | Z | "") continue ;; esac
+    kill -STOP "$pid" 2>/dev/null && echo "$pid" >>"$list.new" || true
+   done
+  done
+  if [ -f "$list.new" ]; then
+   cat "$list.new" "$list" 2>/dev/null | sort -un >"$list.all"
+   mv -f "$list.all" "$list"
+   rm -f "$list.new"
+  fi
+  frozen=$(wc -l <"$list" 2>/dev/null || echo 0)
+  # what was running at that moment, for the admins (the platform service keeps it with the snapshot)
+  echo "lockdown: frozen processes:"
+  for pid in $(cat "$list" 2>/dev/null); do
+   [ -r "/proc/$pid/cmdline" ] || continue
+   printf 'lockdown:   %s %s %s\n' "$pid" "$(stat -c %U "/proc/$pid" 2>/dev/null || echo ?)" \
+    "$(tr '\0' ' ' <"/proc/$pid/cmdline" | cut -c1-200)"
+  done
+ elif [ -f "$list" ]; then
+  for pid in $(cat "$list"); do kill -CONT "$pid" 2>/dev/null || true; done
+  rm -f "$list"
+ fi
+fi
+
+# what was asked, for the platform service (a pod's lock at start: the init container's log)
+echo "lockdown: modes ${modes:-off}"
 state() { if [ -n "$1" ]; then echo on; else echo off; fi; }
 if [ -n "$root" ]; then
- echo "lockdown: network $(state "$net"), sudo $(state "$sudo_")"
+ echo "lockdown: network $(state "$net"), sudo $(state "$sudo_"), freeze $(state "$freeze")${frozen:+ ($frozen processes paused)}"
 else
- echo "lockdown: network $(state "$net") (sudo is set by the workspace's start script)"
+ echo "lockdown: network $(state "$net") (sudo is set by the workspace's start script, freeze by the platform service)"
 fi

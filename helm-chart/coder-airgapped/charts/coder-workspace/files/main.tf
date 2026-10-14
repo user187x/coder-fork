@@ -165,9 +165,9 @@ resource "coder_agent" "main" {
     cluster_oidc_client_id = var.cluster_oidc_client_id
   })
 
-  # The metrics: the workspace's (CPU, RAM, load, home disk) and, in the dashboard's Cluster group, the node's (keys
-  # ending in "_host"). Each but CPU is a function of scripts/metadata.sh, which explains it: the file runs with the
-  # function's name appended.
+  # The metrics, in the same order in both of the dashboard's groups (the keys order them): CPU, RAM, Disk and Ø Load
+  # (the load average) of the workspace, then of the node it runs on (the Cluster group: keys ending in "_host"). Each
+  # but CPU is a function of scripts/metadata.sh, which explains it: the file runs with the function's name appended.
   metadata {
     display_name = "CPU"
     key          = "0_cpu_usage"
@@ -185,19 +185,19 @@ resource "coder_agent" "main" {
   }
 
   metadata {
-    display_name = "Load Avg"
-    key          = "2_load"
-    script       = "${local.metadata_sh}\nload"
-    interval     = 10
-    timeout      = 3
-  }
-
-  metadata {
     display_name = "Disk"
-    key          = "3_home_disk"
+    key          = "2_home_disk"
     script       = "${local.metadata_sh}\ndisk"
     interval     = 60
     timeout      = 15
+  }
+
+  metadata {
+    display_name = "Ø Load"
+    key          = "3_load"
+    script       = "${local.metadata_sh}\nload"
+    interval     = 10
+    timeout      = 3
   }
 
   metadata {
@@ -225,7 +225,7 @@ resource "coder_agent" "main" {
   }
 
   metadata {
-    display_name = "Load Avg"
+    display_name = "Ø Load"
     key          = "7_load_host"
     script       = "${local.metadata_sh}\nload_host"
     interval     = 60

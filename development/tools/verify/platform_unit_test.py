@@ -207,6 +207,49 @@ class LockDownTest(unittest.TestCase):
         self.assertIn("exit 1", message)
         self.assertFalse(any(c[3] == "application/merge-patch+json" for c in calls))   # not recorded as in force
 
+    def test_a_new_pod_locked_at_its_start_is_unlocked_when_lifted(self):
+        """A restart's new pod has no annotation yet, but its start locked it: lifting must undo that."""
+        pod = self.pod()
+        pod["spec"]["initContainers"] = [{"name": "lockdown"}]
+        kube, calls, _ = self.kube(pods=[pod])
+        with mock.patch.object(ld, "KUBE", kube):
+            results = ld.reconcile(self.WID, "off")
+        self.assertTrue(results[0][1])
+        self.assertTrue(any(c[1].endswith("/ephemeralcontainers") for c in calls))   # applied, not "already off"
+
+    def test_watcher_marks_never_locked_pods_without_a_container(self):
+        pod = self.pod()
+        pod["spec"]["initContainers"] = [{"name": "lockdown"}]
+        kube, calls, _ = self.kube(pods=[pod])
+        real = kube.call
+
+        def call(method, path, body=None, patch_type=None):
+            if "/log?container=lockdown" in path:
+                return 200, "lockdown: modes off\nlockdown: network off (sudo is set by ...)"
+            return real(method, path, body, patch_type)
+        kube.call = call
+        with mock.patch.object(ld, "KUBE", kube):
+            ld.watch_once()
+        self.assertFalse(any(c[1].endswith("/ephemeralcontainers") for c in calls))
+        annotate = [c for c in calls if c[0] == "PATCH" and c[3] == "application/merge-patch+json"]
+        self.assertEqual(annotate[0][2]["metadata"]["annotations"][ld.ANNOTATION], "off")
+
+    def test_watcher_lifts_a_lock_a_pod_started_with(self):
+        pod = self.pod()
+        pod["spec"]["initContainers"] = [{"name": "lockdown"}]
+        kube, calls, _ = self.kube(pods=[pod])
+        real = kube.call
+
+        def call(method, path, body=None, patch_type=None):
+            if "/log?container=lockdown" in path:
+                return 200, "lockdown: modes sudo\nlockdown: network off (sudo is set by ...)"
+            return real(method, path, body, patch_type)
+        kube.call = call
+        with mock.patch.object(ld, "KUBE", kube):
+            ld.watch_once()
+        c = next(c for c in calls if c[1].endswith("/ephemeralcontainers"))[2]["spec"]["ephemeralContainers"][0]
+        self.assertEqual(c["command"][4], "off")
+
     def test_only_admins_lock_owners_see(self):
         kube, _, _ = self.kube()
         sent = []
@@ -235,6 +278,171 @@ class LockDownTest(unittest.TestCase):
             h.rfile.read.return_value = b'{"mode":"wifi!!!!}'
             ld.handle(h, "POST", "/__coder-ui/api/lockdown/" + self.WID, "")
             self.assertEqual(sent[-1][0], 400)
+
+
+class FreezeTest(unittest.TestCase):
+    """Lock Down > Freeze: everything paused, the processes recorded, the home volume snapshotted (a VolumeSnapshot
+    where the cluster can, else a copy by a Job on the workspace's node), and kept until deleted or replaced."""
+
+    WID = "5250ca5d-f2a9-4d0d-8153-5960fbb9fb02"
+    LOG_TEXT = ("lockdown: frozen processes:\nlockdown:   30 coder ./coder agent --no-reap\n"
+                "lockdown:   212 coder /usr/lib/code-server --auth none\n"
+                "lockdown: network on, sudo on, freeze on (2 processes paused)")
+
+    def pod(self):
+        return {"metadata": {"name": "ws-pod", "labels": {"com.coder.workspace.id": self.WID}},
+                "spec": {"nodeName": "node-2", "tolerations": [{"key": "dedicated", "operator": "Exists"}],
+                         "containers": [{"name": "dev", "image": "ghcr.io/user187x/coder-workspace:1.8.3",
+                                         "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"},
+                                                          {"name": "home", "mountPath": "/home/coder"}]}],
+                         "volumes": [{"name": "tmp", "emptyDir": {}},
+                                     {"name": "home", "persistentVolumeClaim": {"claimName": "coder-x-home"}}]},
+                "status": {"phase": "Running", "containerStatuses": [{"name": "dev", "state": {"running": {"startedAt": "t"}}}]}}
+
+    def kube(self, running=True, csi_class=None):
+        calls, state = [], {"cm": None, "objects": {}}
+        pods = [self.pod()] if running else []
+
+        def call(method, path, body=None, patch_type=None):
+            calls.append((method, path, body, patch_type))
+            if path.endswith("/configmaps/coder-lockdown"):
+                if method == "GET":
+                    return (200, state["cm"]) if state["cm"] else (404, {})
+                state["cm"] = body
+                return 200, body
+            if path.endswith("/configmaps") and method == "POST":
+                state["cm"] = body
+                return 201, body
+            if "labelSelector" in path:
+                return 200, {"items": pods}
+            if path.endswith("/ephemeralcontainers"):
+                return 200, {}
+            if "/log?" in path:
+                return 200, self.LOG_TEXT
+            if path.endswith("/persistentvolumeclaims/coder-x-home") or path.endswith(
+                    "/persistentvolumeclaims/coder-%s-home" % self.WID):
+                return 200, {"spec": {"volumeName": "pv-1", "storageClassName": "gp3",
+                                      "resources": {"requests": {"storage": "20Gi"}}}}
+            if path == "/api/v1/persistentvolumes/pv-1":
+                return 200, {"spec": {"csi": {"driver": "ebs.csi.aws.com"}}} if csi_class else {"spec": {"local": {}}}
+            if path.endswith("/volumesnapshotclasses"):
+                return (200, {"items": [{"metadata": {"name": csi_class}, "driver": "ebs.csi.aws.com"}]}) \
+                    if csi_class else (404, {})
+            if method == "POST":
+                state["objects"][path] = body
+                return 201, body
+            if method == "DELETE":
+                state["objects"].setdefault("deleted", []).append(path)
+                return 200, {}
+            if method == "GET" and "/pods/" in path:
+                names = [c[2]["spec"]["ephemeralContainers"][0]["name"] for c in calls if c[1].endswith("/ephemeralcontainers")]
+                return 200, {"status": {"ephemeralContainerStatuses": [
+                    {"name": n, "state": {"terminated": {"exitCode": 0}}} for n in names]}}
+            return 404, {}
+        return mock.MagicMock(call=call, ok=True), calls, state
+
+    def setUp(self):
+        for name, value in (("LOG", None), ("CODER_HOST", "coder.example.com"), ("APPLY_TIMEOUT", 5),
+                            ("COPY_IMAGE", "ghcr.io/user187x/coder-workspace:1.8.3")):
+            p = mock.patch.object(ld, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def post(self, kube, mode=None, path=""):
+        sent = []
+        h = mock.MagicMock()
+        h.csrf_ok.return_value = True
+        h.token.return_value = "t"
+        h.send_json.side_effect = lambda status, body: sent.append((status, body))
+        body = b'{"mode":"%s"}' % mode.encode() if mode else b"{}"
+        h.headers = {"Content-Length": str(len(body))}
+        h.rfile.read.return_value = body
+        h.user.return_value = ({"id": "u-admin", "username": "admin", "roles": ["owner"]}, None)
+        ws = {"id": self.WID, "name": "zzz", "owner_name": "dev1", "owner_id": "u-dev1"}
+        with mock.patch.object(ld, "KUBE", kube), mock.patch.object(ld, "WORKSPACE_INFO", lambda t, w: ws), \
+                mock.patch.object(ld, "ADMIN_ROLES", {"owner"}):
+            ld.handle(h, "POST", "/__coder-ui/api/lockdown/" + self.WID + path, "")
+        return sent[-1]
+
+    def test_freeze_pauses_everything_and_copies_the_home_volume_on_its_node(self):
+        kube, calls, state = self.kube()
+        status, res = self.post(kube, "freeze")
+        self.assertEqual(status, 200)
+        self.assertEqual(res["modes"], ["network", "sudo", "freeze"])          # Complete, and paused
+        c = next(c for c in calls if c[1].endswith("/ephemeralcontainers"))[2]["spec"]["ephemeralContainers"][0]
+        self.assertEqual(c["command"][4], "network,sudo,freeze")
+        pvc = next(b for p, b in state["objects"].items() if p.endswith("/persistentvolumeclaims"))
+        job = next(b for p, b in state["objects"].items() if p.endswith("/jobs"))
+        self.assertEqual(pvc["spec"]["storageClassName"], "gp3")
+        self.assertEqual(pvc["spec"]["resources"]["requests"]["storage"], "20Gi")
+        spec = job["spec"]["template"]["spec"]
+        self.assertEqual(spec["volumes"][0]["persistentVolumeClaim"], {"claimName": "coder-x-home", "readOnly": True})
+        self.assertEqual(spec["volumes"][1]["persistentVolumeClaim"]["claimName"], pvc["metadata"]["name"])
+        terms = spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
+        self.assertEqual(terms[0]["matchExpressions"][0]["values"], ["node-2"])   # where the volume is attached
+        self.assertEqual(spec["tolerations"], [{"key": "dedicated", "operator": "Exists"}])
+        self.assertTrue(spec["containers"][0]["volumeMounts"][0]["readOnly"])
+        with mock.patch.object(ld, "KUBE", kube):
+            snap = ld.snapshot_of(self.WID)
+        self.assertEqual(snap["kind"], "PersistentVolumeClaim")
+        self.assertEqual(snap["processes"], ["30 coder ./coder agent --no-reap",
+                                             "212 coder /usr/lib/code-server --auth none"])
+        self.assertEqual(res["snapshot"]["processes"], 2)
+
+    def test_volumesnapshot_where_the_cluster_can(self):
+        kube, calls, state = self.kube(csi_class="ebs-snapshots")
+        self.post(kube, "freeze")
+        vs = next(b for p, b in state["objects"].items() if p.endswith("/volumesnapshots"))
+        self.assertEqual(vs["spec"], {"volumeSnapshotClassName": "ebs-snapshots",
+                                      "source": {"persistentVolumeClaimName": "coder-x-home"}})
+        self.assertFalse(any(p.endswith("/jobs") for p in state["objects"]))
+
+    def test_a_stopped_workspace_is_copied_as_it_was_left(self):
+        kube, calls, state = self.kube(running=False)
+        status, res = self.post(kube, "freeze")
+        self.assertEqual(res["applied"], "next start")
+        job = next(b for p, b in state["objects"].items() if p.endswith("/jobs"))
+        spec = job["spec"]["template"]["spec"]
+        self.assertEqual(spec["volumes"][0]["persistentVolumeClaim"]["claimName"], "coder-%s-home" % self.WID)
+        self.assertEqual(spec["containers"][0]["image"], "ghcr.io/user187x/coder-workspace:1.8.3")
+        self.assertEqual(spec["affinity"], {})                                # wherever the volume can be
+
+    def test_kept_after_lifting_replaced_by_the_next_freeze_and_deleted_by_admins(self):
+        kube, calls, state = self.kube()
+        self.post(kube, "freeze")
+        with mock.patch.object(ld, "KUBE", kube):
+            first = ld.snapshot_of(self.WID)["name"]
+        self.post(kube, "off")
+        with mock.patch.object(ld, "KUBE", kube):
+            self.assertEqual(ld.snapshot_of(self.WID)["name"], first)          # lifting keeps it
+        self.post(kube, "freeze")                                            # a new freeze replaces it
+        self.assertTrue(any(first in p for p in state["objects"].get("deleted", [])))
+        status, res = self.post(kube, path="/snapshot/delete")
+        self.assertEqual(status, 200)
+        self.assertIsNone(res["snapshot"])
+
+    def test_already_frozen_no_new_snapshot(self):
+        kube, calls, state = self.kube()
+        self.post(kube, "freeze")
+        made = sum(1 for c in calls if c[0] == "POST" and c[1].endswith("/jobs"))
+        self.post(kube, "freeze")
+        self.assertEqual(sum(1 for c in calls if c[0] == "POST" and c[1].endswith("/jobs")), made)
+
+
+class LoginPageSettingsTest(unittest.TestCase):
+    def test_defaults_are_the_traced_outline(self):
+        self.assertEqual(ui.LOGIN_PAGE_DEFAULT["effect"], "wireframe")
+        self.assertEqual(ui.LOGIN_PAGE_DEFAULT["title"], "")
+
+    def test_clean(self):
+        v = ui.clean_login_page({"title": " Mission Control ", "effect": "neon", "color": "#FF00AA", "speed": 2,
+                                 "message": "Authorised users only.", "signedOutMessage": "Bye."})
+        self.assertEqual(v, {"title": "Mission Control", "effect": "neon", "color": "#ff00aa", "speed": 2.0,
+                             "message": "Authorised users only.", "signedOutMessage": "Bye."})
+        for bad in ({"effect": "blink"}, {"color": "red"}, {"speed": 0}, {"speed": True}, {"title": "a\nb"},
+                    {"title": "x" * 41}, {"message": "m" * 301}):
+            with self.assertRaises(ValueError):
+                ui.clean_login_page(dict({"effect": "plain", "color": "#000000", "speed": 3}, **bad))
 
 
 class TrackedWorkspaceImageTest(unittest.TestCase):

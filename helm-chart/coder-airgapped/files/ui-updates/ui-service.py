@@ -26,6 +26,10 @@
   GET  /__coder-ui/api/classification     public (the marking shows on the sign-in page too)
   POST /__coder-ui/api/classification     admins: {enabled, text, height, background, color}
 
+  Sign-in and sign-out page
+  GET  /__coder-ui/api/login-page         public (the sign-in page reads it; boot.js has it too)
+  POST /__coder-ui/api/login-page         admins: {title, effect, color, speed, message, signedOutMessage}
+
   Logo (stored in Coder's own CloudNativePG database, schema coder_ui_updates)
   GET  /__coder-ui/boot.js                loaded first by every Coder page: the logo (and classification) to use
   GET  /__coder-ui/logo?v=<sha>           the uploaded logo          GET /__coder-ui/favicon/<name>  logo or Coder's
@@ -1303,6 +1307,44 @@ class Store:
 
 
 STORE = None
+
+# The sign-in page (where signing out lands too): its title, drawn with a text effect, and a message for each.
+LOGIN_EFFECTS = ("wireframe", "neon", "plain")
+LOGIN_PAGE_DEFAULT = {
+    "title": "",          # empty: the deployment's name (Coder, or the one set in Appearance)
+    "effect": "wireframe",  # the traced outline the sign-in page has always had
+    "color": "#4ff8ff",
+    "speed": 3.2,         # seconds for one trace (wireframe) or one pulse (neon)
+    "message": "",
+    "signedOutMessage": "",
+}
+
+
+def clean_login_page(p):
+    title = str(p.get("title", "")).strip()
+    if len(title) > 40 or any(c in title for c in "\n\r"):
+        raise ValueError("The title must be one line of at most 40 characters.")
+    effect = p.get("effect", "wireframe")
+    if effect not in LOGIN_EFFECTS:
+        raise ValueError("The effect must be one of: %s." % ", ".join(LOGIN_EFFECTS))
+    color = str(p.get("color", ""))
+    if not HEX_RE.match(color):
+        raise ValueError("The colour must be #rrggbb.")
+    speed = p.get("speed", 3.2)
+    if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0.5 <= speed <= 20:
+        raise ValueError("The speed must be between 0.5 and 20 seconds.")
+    out = {"title": title, "effect": effect, "color": color.lower(), "speed": round(float(speed), 1)}
+    for key, label in (("message", "sign-in"), ("signedOutMessage", "sign-out")):
+        text = str(p.get(key, "")).strip()
+        if len(text) > 300:
+            raise ValueError("The %s message must be at most 300 characters." % label)
+        out[key] = text
+    return out
+
+
+def login_page_settings():
+    return dict(LOGIN_PAGE_DEFAULT, **(STORE.get_setting("login_page", {}) or {}))
+
 
 CLASSIFICATION_DEFAULT = {
     "enabled": False,
@@ -6670,6 +6712,10 @@ def boot_js():
             json.dumps(default_avatar),
         )
     )
+    try:
+        js += "window.__cuiLoginPage=%s;\n" % json.dumps(login_page_settings())
+    except Exception as e:  # noqa: BLE001 - the default sign-in page rather than a broken one
+        log(event="login-page-read-failed", error=str(e)[:200])
     js += "window.__cuiBackgrounds=%s;\n" % json.dumps(
         {slot: background_public(slot, backgrounds.get(slot)) for slot in BG_SLOTS})
     if default_avatar:
@@ -7163,6 +7209,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(
                 200, STORE.get_setting("classification", CLASSIFICATION_DEFAULT)
             )
+        if path == BASE + "/api/login-page":
+            return self.send_json(200, login_page_settings())
         if path == BASE + "/api/keycloak":
             user, err = self.user(admin=True)
             if err:
@@ -7605,6 +7653,7 @@ class Handler(BaseHTTPRequestHandler):
             BASE + "/api/ack",
             BASE + "/api/events/delete",
             BASE + "/api/classification",
+            BASE + "/api/login-page",
             BASE + "/api/keycloak/apply",
             BASE + "/api/keycloak/undo",
             BASE + "/api/keycloak/connect",
@@ -7688,6 +7737,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in (BASE + "/api/notes", BASE + "/api/notes/update", BASE + "/api/notes/delete"):
             return self.notes_post(path, payload, user)
+        if path == BASE + "/api/login-page":
+            try:
+                value = clean_login_page(payload)
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            value.update({"updatedBy": user["username"], "updatedAt": now()})
+            STORE.put_setting("login_page", value)
+            log(event="login-page-saved", user=user["username"], effect=value["effect"], title=value["title"])
+            return self.send_json(200, login_page_settings())
         if path == BASE + "/api/scheduler":
             try:
                 value = clean_scheduler(payload)

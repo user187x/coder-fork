@@ -54,6 +54,20 @@ spec:
         - name: {{ .Values.coder.service.name }}
           port: {{ .Values.coder.service.port }}
     {{- end }}
+    # Workspace apps' page loads (marimo, File Browser, code-server, ...): straight to Coder, never rewritten. The
+    # rule above has no header match, so a gateway may rank the dashboard rule below (prefix "/" and an Accept
+    # header) over it for a page load; this one has the same header match and a more specific path.
+    - matches:
+        - path:
+            type: RegularExpression
+            value: '^/@[^/]+/[^/]+/apps/.*'
+          headers:
+            - type: RegularExpression
+              name: Accept
+              value: ".*text/html.*"
+      backendRefs:
+        - name: {{ .Values.coder.service.name }}
+          port: {{ .Values.coder.service.port }}
     {{- if .Values.menu.enabled }}
     # Coder's entry JavaScript chunk only (no other chunk is named index-*.js): swap the "Codernauts"
     # user-menu item. Kept this narrow because rewrite-body buffers and regex-scans whatever reaches it.

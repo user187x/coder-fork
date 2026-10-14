@@ -5,6 +5,11 @@
 #                            everything else: prerequisites, secrets, Keycloak (Minikube), the chart, and (Minikube)
 #                            the tunnel + /etc/hosts entries. Re-run it any time: it is idempotent.
 #   ./make --deploy --yes    no questions: remembered answers (or defaults) for everything
+#   ./make --push-images HARBOR[/PROJECT]
+#                            takes every image the solution needs and its Helm charts into your Harbor (or another
+#                            registry): helps you log your docker and helm in to Harbor and Docker Hub, checks (or
+#                            creates) the project, pushes, checks, and remembers the registry for --deploy (EKS).
+#                            E.g. ./make --push-images harbor.example.com/coder   (harbor-support explains each step)
 #   ./make --help
 #
 # Every answer is remembered (.deploy/answers.env) and offered as the default next time. Answers can also be given as
@@ -12,18 +17,23 @@
 #   TARGET=minikube|eks DOMAIN=example.com CERTS=new|existing TLS_CRT=… TLS_KEY=… CA_BUNDLE=…
 #   PROFILE=coder KEYCLOAK=dev|existing OIDC_ISSUER=… OIDC_CA=… OIDC_SECRET_FILE=…
 #   REGISTRY=… PUSH_IMAGES=y|n STORAGE_CLASS=… METHOD=helm|argocd SUDO_STEPS=y|n
+#   --push-images: HARBOR_PROJECT=… HARBOR_USER=… HARBOR_CA=… PUSH_GROUPS="custom chart prereqs" DOCKERHUB_LOGIN=y|n
+#   DOCKERHUB_USER=…, and for --yes the secrets HARBOR_PASSWORD=… DOCKERHUB_TOKEN=… (never remembered)
 #
 # Helpers in this directory: x509-support (certificates), minikube-support (Minikube), install.sh (secrets + chart),
-# mirror-images.sh (images, chart push). Generated files (certificates, values, secrets) go to .deploy/.
+# mirror-images.sh (images, chart push), harbor-support (--push-images). Generated files (certificates, values, secrets) go to .deploy/.
 set -eEuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=x509-support
 source "${here}/x509-support"
+# shellcheck source=harbor-support
+source "${here}/harbor-support"
 STATE_ROOT="${here}/.deploy"
 ANSWERS="${STATE_ROOT}/answers.env"
 VARS=(TARGET DOMAIN CERTS TLS_CRT TLS_KEY CA_BUNDLE PROFILE KEYCLOAK OIDC_ISSUER OIDC_CA OIDC_SECRET_FILE
-	REGISTRY PUSH_IMAGES STORAGE_CLASS METHOD SUDO_STEPS CLUSTER_ACCESS)
+	REGISTRY PUSH_IMAGES STORAGE_CLASS METHOD SUDO_STEPS CLUSTER_ACCESS
+	HARBOR_PROJECT HARBOR_USER HARBOR_CA DOCKERHUB_LOGIN DOCKERHUB_USER PUSH_GROUPS)
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -494,6 +504,11 @@ case "${1:-}" in
 	shift
 	[[ "${1:-}" == --yes || "${1:-}" == -y ]] && INTERACTIVE=0
 	deploy ;;
+--push-images)
+	shift
+	target="${1:-}"; shift || true
+	[[ "${1:-}" == --yes || "${1:-}" == -y ]] && INTERACTIVE=0
+	push_images "$target" ;;
 -h | --help | "") sed -n '2,/^set -euo/p' "$0" | sed '$d' ;;
 *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
 esac

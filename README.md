@@ -6,7 +6,7 @@ announcement banner and a full-featured workspace template, packaged as **one He
 every container image it needs**. Nothing is downloaded during the install, and nothing at run time reaches outside
 your network.
 
-| | Current release: [**v1.31.0**](https://github.com/user187x/coder-fork/releases/latest) |
+| | Current release: [**v1.34.0**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
 | Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.31-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.8.3` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
@@ -26,11 +26,11 @@ your network.
 Download the release's parts, verify and join them, then install from inside the air-gapped network:
 
 ```bash
-sha256sum -c coder-airgapped-1.31.0.parts.sha256           # every part: OK
-cat coder-airgapped-1.31.0.tar.gz.part-0* > coder-airgapped-1.31.0.tar.gz
-sha256sum -c coder-airgapped-1.31.0.tar.gz.sha256          # the bundle: OK
+sha256sum -c coder-airgapped-1.34.0.parts.sha256           # every part: OK
+cat coder-airgapped-1.34.0.tar.gz.part-0* > coder-airgapped-1.34.0.tar.gz
+sha256sum -c coder-airgapped-1.34.0.tar.gz.sha256          # the bundle: OK
 
-tar -xzf coder-airgapped-1.31.0.tar.gz && cd coder-airgapped-1.31.0
+tar -xzf coder-airgapped-1.34.0.tar.gz && cd coder-airgapped-1.34.0
 ./make --deploy
 ```
 
@@ -38,6 +38,9 @@ tar -xzf coder-airgapped-1.31.0.tar.gz && cd coder-airgapped-1.31.0
 domain, certificates (new self-signed ones or your own), and on EKS the registry to push the images to, the storage
 class, your Keycloak / OIDC provider, and Helm or Argo CD. It then installs everything and prints the URL and the
 first sign-in (`admin@admin.com` / `admin`; change the password right away).
+
+Your images in Harbor first? `./make --push-images harbor.example.com/<project>` pushes every image and chart there:
+it helps log your docker and helm in to Harbor (and Docker Hub), checks or creates the project, and checks every push.
 
 The step-by-step manual install, Argo CD, and the optional pieces are in
 [`helm-chart/DEPLOY.md`](helm-chart/DEPLOY.md); every chart value is in [`helm-chart/README.md`](helm-chart/README.md).
@@ -102,29 +105,36 @@ The full feature list, with where each piece lives and how it is tested, is
   `~/.cert/<user>.p12`. Its fingerprints (SHA-256 and MD5) are recorded, and its private key can become their SSH key.
 - **Admins' `kubectl` and `k9s` on the cluster** from their workspaces, each signed in as themselves (Keycloak device
   login), with the cluster-admin group kept equal to Coder's owners.
-- A sign-in page with the deployment's name as a traced outline, background images and animated backgrounds.
+- A sign-in page with the deployment's name as a traced outline, background images and animated backgrounds; its
+  title, text effect (traced outline, neon or plain), colour, speed and messages (one for signing in, one for right
+  after signing out) are set in Customize.
 
 ### Workspaces
 
 - **Workspace page:** animated borders by state with a pulse in the theme's colour; apps and the terminal open only
-  once the workspace is ready (a real-progress "Workspace initializing" panel); reorderable, embeddable app panels
-  that pop out to a window and back.
-- **Live metrics in two groups**, Workspace and Cluster, on one line: CPU, RAM, Load Avg and Disk each. They show
+  once the workspace is ready (a real-progress "Workspace initializing" panel); its apps centred in equal columns
+  across the card, as wide as the metrics under them; reorderable, embeddable app panels that pop out to a window and
+  back, added from a half-moon "+" tab in the theme's colour.
+- **Live metrics in two groups**, Workspace and Cluster, on one line, in the same order: CPU, RAM, Disk and Ø Load (the load average) each. They show
   live bar graphs coloured by magnitude, a gauge and a percentage chip, with a Metrics Interval menu (1 s to 5 min, or
-  off). The workspace's own load average is computed the kernel's way from its own threads.
+  off), every reading to one decimal place. The workspace's own load average is computed the kernel's way from its
+  own threads.
 - **Network lights:** RX ↓ (green) and TX ↑ (blue) by the workspace's name, lighting up like a network card's LEDs
   when it receives or sends data. Hovering over them shows a live graph of the last minute, received and sent side
-  by side, with the axis scaled from B/s up to GB/s.
+  by side, with the axis scaled from B/s up to GB/s. While Lock Down cuts the network, both are red and still, and
+  the graph shows no traffic.
 - **Terminal:** tmux with btop, a pop-out window, text size, a custom command, JetBrains Mono Nerd Font.
 - **Per-user quotas** and a **global workspace scheduler** (required start/stop schedules, enforced).
 - **Home volumes:** backups (S3 or download) and disk growth (in place, or a copy to a bigger volume).
-- **Lock Down:** admins jail any workspace, for instance one where an agent runs away. There are three modes:
+- **Lock Down:** admins jail any workspace, for instance one where an agent runs away. There are four modes:
   - **Network:** only Coder stays reachable;
   - **Sudo Command:** nobody in it can use sudo;
-  - **Complete:** both.
+  - **Complete:** both;
+  - **Freeze:** Complete, and everything in it paused where it is (its agent too), with a snapshot of its disk.
 
-  It works live on a running workspace: its processes keep running, and its terminal and apps still open, so admins
-  can inspect what the agent is doing. On a stopped workspace it applies from the next start.
+  It works live on a running workspace: with the first three, its processes keep running, and its terminal and apps
+  still open, so admins can inspect what the agent is doing. On a stopped workspace it applies from the next start.
+  Every mode comes back with each restart until an admin lifts it.
 - Admins' **post-it notes** on workspace pages; workspace icons; an agent Update pill.
 
 ### The workspace template and image
@@ -145,7 +155,7 @@ The full feature list, with where each piece lives and how it is tested, is
 ### Templates and the image builder
 
 - **Template Overview** with its resources, Details (Coder's insights) and README; Source Code with versions (squash
-  ranges, Promote); a Share menu.
+  ranges, Promote); Export as ZIP with everything the template is made of: its Terraform, scripts and icons.
 - **Templates › Images, an image builder in the cluster** (BuildKit rootless). You can add:
   - apt packages (checked as you type) and uploaded `.deb` files;
   - installation scripts and removals;
@@ -242,8 +252,15 @@ The full feature list, with where each piece lives and how it is tested, is
     evidence stays in place;
   - a stopped one is locked at start, before anything runs;
   - a watcher keeps every running workspace as the setting says.
+- **Freeze:** every process of the workspace container is paused (SIGSTOP), Coder's agent too, so no session opens in
+  it; its PID 1 only waits for its children. Its home volume is snapshotted while everything is paused: a
+  VolumeSnapshot where the cluster supports it (EKS with the EBS CSI driver and a VolumeSnapshotClass), else a copy in
+  a new volume made on the workspace's node. The processes that were running are recorded with it. Lifting it resumes
+  exactly the paused processes. The snapshot is kept until an admin deletes it or freezes the workspace again.
+- **It survives restarts:** Network and Sudo are set at start before anything runs, Freeze within seconds of the
+  start, until an admin lifts the lock.
 - **It's visible:** everyone who sees a locked workspace, its owner included, gets a notice of what is locked, by
-  whom and since when. Only admins can set or lift it, and every change is logged.
+  whom and since when; its network lights turn red. Only admins can set or lift it, and every change is logged.
 
 ### Image security
 
@@ -310,13 +327,14 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **31/31** (1.31.0) |
-| Platform service unit tests | **16/16** (1.31.0) |
+| Static checks | **34/34** (1.34.0) |
+| Platform service unit tests | **30/30** (1.34.0) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Live conformance | **76/76** (1.28.0) |
 | Load, ~1,050 dashboard tabs for 8 minutes | **0 errors** of 157,626 requests, worst p95 0.28 s, no restarts (1.28.0) |
 | Browser memory soak, 8 minutes | JS heap +0.3 MB; no external requests (1.28.0) |
 | Rollback to upstream and back | **7/7** on a database copy, **4/4** live (1.28.0) |
+| Lock Down, live (Network, Sudo, Complete, Freeze, restarts) | **35/35** (1.34.0) |
 | Workspace image 1.8.3 scan | **0 critical** (1.31.0) |
 
 ```bash

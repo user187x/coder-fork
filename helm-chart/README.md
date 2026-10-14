@@ -1,4 +1,4 @@
-# coder-airgapped 1.33.0: portable Helm chart of the live Coder fork
+# coder-airgapped 1.34.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -23,13 +23,17 @@ Gateway) configures everything, from a values file or from an Argo CD Applicatio
 coder-airgapped/                 the chart (helm install target)
 argocd/coder-airgapped-application.yaml   Argo CD Application (+ OCI repository Secret) installing the chart from the registry
 values-eks-airgap.example.yaml   the same settings as a values file for plain Helm / install.sh
-make                             `./make --deploy`: the guided install (Minikube or EKS; domain, certificates, ...)
+make                             `./make --deploy`: the guided install (Minikube or EKS; domain, certificates, ...);
+                                 `./make --push-images <harbor>[/<project>]`: images + charts into your Harbor
+harbor-support                   the steps of --push-images: Harbor's CA, docker + helm logins (Harbor, Docker Hub),
+                                 the project, push, check
 minikube-support                 Minikube steps: profile, local-path storage, images, CoreDNS, dev Keycloak,
                                  minikube-expose-services (tunnel) + minikube-sync-hosts (/etc/hosts), trust-ca
 x509-support                     self-signed PKI (CA, wildcard server cert, CA bundle, client certs) + certificate checks
 install.sh                       Secrets from files, default logo/avatar ConfigMaps, helm upgrade --install
                                  (--prepare-only: just the Secrets and ConfigMaps, for Argo CD)
-mirror-images.sh                 push / save / verify / list the images in images.txt; `chart REPO` pushes the chart to OCI
+mirror-images.sh                 push / save / verify / list the images in images.txt; `chart REPO` pushes the chart to OCI,
+                                 `charts REPO` with the prerequisites' charts
 images.txt                       every image by group, with the digest saved and tested
 images/                          every image as a docker-save archive, linux/amd64 (images/README.md):
   custom/                          the fork's Coder image, air-gap build (platform.5 + Terraform provider mirror) –
