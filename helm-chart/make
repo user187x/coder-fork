@@ -12,6 +12,13 @@
 #                            E.g. ./make --push-images harbor.example.com/coder   (harbor-support explains each step)
 #   ./make --help
 #
+# The layer bundle (coder-airgapped-<version>-layer.tar.gz, LAYER.json at its top) is the customization layer alone:
+# --deploy then updates a cluster installed earlier from a full bundle. It checks first that the cluster has what the
+# layer does not carry (Traefik, CloudNativePG, the Gateway API CRDs, Keycloak at this release's versions, and every
+# image not carried) and stops before changing anything if not. It takes your certificates and answers from the
+# previous install's folder (asked once; PREVIOUS=<folder> for --yes), restores the thin images from their base
+# image in the cluster, and installs only what changed (layer-support explains the format).
+#
 # Every answer is remembered (.deploy/answers.env) and offered as the default next time. Answers can also be given as
 # environment variables, which are then not asked:
 #   TARGET=minikube|eks DOMAIN=example.com CERTS=new|existing TLS_CRT=… TLS_KEY=… CA_BUNDLE=…
@@ -34,6 +41,9 @@ ANSWERS="${STATE_ROOT}/answers.env"
 VARS=(TARGET DOMAIN CERTS TLS_CRT TLS_KEY CA_BUNDLE PROFILE KEYCLOAK OIDC_ISSUER OIDC_CA OIDC_SECRET_FILE
 	REGISTRY PUSH_IMAGES STORAGE_CLASS METHOD SUDO_STEPS CLUSTER_ACCESS
 	HARBOR_PROJECT HARBOR_USER HARBOR_CA DOCKERHUB_LOGIN DOCKERHUB_USER PUSH_GROUPS)
+# A layer bundle: the customization layer alone, on a cluster that has the rest (layer-support)
+LAYER=0; [[ -f "${here}/LAYER.json" ]] && LAYER=1
+carried() { "${here}/layer-support" carries "$1"; }   # the layer carries FILE (relative to this folder)
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -165,6 +175,9 @@ traefik() { # [pinned ClusterIP]
 	kube create namespace traefik --dry-run=client -o yaml | kube apply -f - >/dev/null
 	kube -n traefik create secret tls coder-airgapped-tls --cert="$TLS_CRT_PEM" --key="$TLS_KEY_PEM" --dry-run=client -o yaml |
 		kube apply -f - >/dev/null
+	if ((LAYER)) && ! carried prereqs/traefik-41.4.0.tgz; then
+		say "Traefik: chart 41.4.0 in place (checked); its certificate secret updated"; return 0
+	fi
 	sed 's/name: grey-marshall-tls/name: coder-airgapped-tls/' "${here}/prereqs/traefik-41.4.0.reference-values.yaml" >"$vals"
 	if [[ -n "$pin" ]]; then
 		cur=$(kube -n traefik get svc traefik -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
@@ -250,8 +263,14 @@ prepare_minikube() {
 	need minikube docker curl
 	step "Minikube"
 	ask PROFILE "minikube profile" coder nonempty
+	if ((LAYER)); then
+		minikube -p "$PROFILE" status >/dev/null 2>&1 || die "the layer goes on a running cluster: minikube profile '$PROFILE' is not running (minikube start -p $PROFILE)"
+		step "The cluster has what this layer needs?"
+		"${here}/layer-support" check minikube "$PROFILE" || die "nothing was changed; see above"
+	fi
 	plan_sudo
 	"${here}/minikube-support" ensure "$PROFILE"
+	if ((LAYER)); then "${here}/layer-support" restore minikube "$PROFILE" "${STATE}/layer-tmp"; fi
 	RELOADED="${STATE}/reloaded-images"; : >"$RELOADED"
 	MK_RELOADED_FILE="$RELOADED" "${here}/minikube-support" load-images "$PROFILE"
 	REGISTRY="" STORAGE_CLASS="local-path" METHOD=helm   # local-path: see minikube-support mk_storage
@@ -261,6 +280,7 @@ prepare_minikube() {
 	traefik "$("${here}/minikube-support" pin-ip "$DOMAIN")"
 	"${here}/minikube-support" dns "$PROFILE" "$DOMAIN"
 	CNPG=1
+	((LAYER == 0)) || carried prereqs/cloudnative-pg-0.29.0.tgz || CNPG=0   # in place (checked)
 
 	step "Keycloak (sign-in for everyone except the admin)"
 	choose KEYCLOAK "Keycloak:" dev \
@@ -292,9 +312,15 @@ prepare_eks() {
 	step "Images"
 	ask REGISTRY "Registry the cluster pulls from (e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com)" "" nonempty
 	REGISTRY="${REGISTRY%/}"
+	if ((LAYER)); then
+		need docker python3
+		step "The cluster has what this layer needs?"
+		"${here}/layer-support" check registry "$REGISTRY" "$ctx" || die "nothing was changed; see above (docker login $REGISTRY first?)"
+	fi
 	yes_no PUSH_IMAGES "Push the bundled images to $REGISTRY now? (needs 'docker login $REGISTRY')" y
 	if [[ "$PUSH_IMAGES" == y ]]; then
 		need docker
+		if ((LAYER)); then "${here}/layer-support" restore registry "$REGISTRY" "${STATE}/layer-tmp"; fi
 		ECR=$([[ "$REGISTRY" == *.amazonaws.com ]] && echo 1 || echo 0) "${here}/mirror-images.sh" push "$REGISTRY" |
 			grep -E '^(loading|using|pulling|.* -> )' | sed 's/^/    /'
 	fi
@@ -311,6 +337,7 @@ prepare_eks() {
 	fi
 	CNPG=0
 	kube get crd clusters.postgresql.cnpg.io >/dev/null 2>&1 && say "CloudNativePG: present" || { say "CloudNativePG: will be installed"; CNPG=1; }
+	((LAYER == 0)) || ! carried prereqs/cloudnative-pg-0.29.0.tgz || CNPG=1   # the layer brings a newer chart
 
 	step "Keycloak / OIDC (sign-in for everyone except the admin)"
 	KEYCLOAK=existing; oidc_existing
@@ -453,7 +480,31 @@ on_exit() {
 	exit "$rc"
 }
 
+# A layer install continues an earlier one: its .deploy (certificates, answers, generated secrets) comes from the
+# folder that install ran in, once; the paths in its answers are moved to this folder.
+import_previous() {
+	[[ -f "$ANSWERS" ]] && return 0
+	local prev="${PREVIOUS:-}"
+	bold "This layer updates an existing install: it needs that install's settings (its .deploy folder)."
+	while :; do
+		if [[ -z "$prev" ]]; then
+			((INTERACTIVE)) || die "no previous install here: set PREVIOUS=<the folder of the bundle you deployed from>"
+			read -r -e -p "    Folder of the bundle you deployed from (it has a .deploy folder): " prev || die "no answer"
+			prev="${prev/#\~/$HOME}"
+		fi
+		prev="${prev%/}"; [[ "$(basename "$prev")" == .deploy ]] && prev=$(dirname "$prev")
+		[[ -f "${prev}/.deploy/answers.env" ]] && break
+		say "no ${prev}/.deploy/answers.env there"; ((INTERACTIVE)) || die "PREVIOUS=${prev}: not an install folder"
+		prev=""
+	done
+	mkdir -p "$STATE_ROOT"; chmod 700 "$STATE_ROOT"
+	cp -a "${prev}/.deploy/." "$STATE_ROOT/"
+	sed -i "s#$(printf '%s' "$(cd "$prev" && pwd)/.deploy" | sed 's/[#&]/\\&/g')#${STATE_ROOT}#g" "$ANSWERS"
+	say "settings taken from ${prev}/.deploy (certificates, answers)"
+}
+
 deploy() {
+	((LAYER == 0)) || import_previous
 	start_log
 	trap 'on_err $LINENO' ERR
 	trap on_exit EXIT
@@ -463,7 +514,8 @@ deploy() {
 		while IFS='=' read -r v _; do [[ -n "${FIXED[$v]:-}" ]] || eval "$(grep "^${v}=" "$ANSWERS")"; done <"$ANSWERS"
 	fi
 	need kubectl helm openssl
-	bold "coder-airgapped $(sed -n 's/^version: *//p' "${here}/coder-airgapped/Chart.yaml") - deploy"
+	bold "coder-airgapped $(sed -n 's/^version: *//p' "${here}/coder-airgapped/Chart.yaml") - deploy$( ((LAYER)) && echo " (the layer on $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base"])' "${here}/LAYER.json"))")"
+	((LAYER == 0)) || need python3
 	say "Log: ${LOG}  (follow it from another terminal: tail -F ${STATE_ROOT}/deploy.log)"
 	((INTERACTIVE)) && say "Press Enter to take the [default]."
 

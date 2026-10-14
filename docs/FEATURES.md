@@ -53,6 +53,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Feature | Where | Test |
 |---|---|---|
 | Workspace page: animated agent-card borders by state, with a pulse in the theme's colour once ready | fork | vitest, verify UI |
+| Workspaces list: a row being started, updated or restarted has a semi-transparent barber pole moving across it until the workspace is completely initialized (its app icons show the moment it ends) or failed | fork | vitest, verify UI |
 | Apps and terminal open only once the workspace is ready, after the apps' health checks; "Workspace initializing" panel with real progress | fork | vitest, e2e step 8 |
 | Reorderable drop-down panels (Logs, Terminal, any app embedded); app panels pop out to a window and back; a half-moon "+" tab (the plus in the theme's accent colour) adds an app panel | fork | vitest |
 | Workspace page: the apps centred in equal columns across the card, as wide as the metrics; metrics a little wider, readings to one decimal place | fork | vitest, verify UI |
@@ -64,6 +65,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Global Workspace Scheduler: required start/stop schedules, enforced | fork, service | e2e step 8 |
 | Image scans set apart what cannot apply to a container (the kernel's header package; Ubuntu's snap advisories on Mozilla's Firefox, two years old or more), each rule with its reason and findings, not graded | service, fork | platform unit tests, vitest |
 | Workspace image without what a pod cannot use (PulseAudio with ffmpeg's libraries, libsoup, Docker's engine, ...) and with GNU coreutils: no critical or high finding, the rest waiting on Ubuntu's fixes | workspace image | build checks, scan, verify |
+| Layer bundle per release: the customization layer alone (chart, installers, changed images; ours as thin deltas of their previous version), checked against the cluster before it installs | bundle | layer build + restore check, layer deploy on Minikube |
 | **Lock Down**: admins jail a workspace (Network: only Coder reachable; Sudo Command: no sudo; Complete: both; Freeze: Complete and everything paused, with a snapshot of its disk), live while it runs or from its next start, and again after every restart until lifted; a centred notice for everyone who sees it; red, still network lights | fork, service, chart | platform unit tests, vitest, live Lock Down test |
 | Per-user quota | fork, service | e2e step 8 |
 | "Animations" switch; no Favorite; no links to Coder's online docs | fork | vitest |

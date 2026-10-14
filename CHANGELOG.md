@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.37.0 – 2026-10-14
+
+Coder `2.0.0-platform.41` (fork `342887302`), workspace image `coder-workspace:1.8.5` (unchanged).
+
+* **The layer bundle**, a third deliverable beside the full bundle (and `-slim`):
+  `coder-airgapped-<version>-layer.tar.gz`, the customization layer alone, for a cluster that runs the previous
+  release (installed from a full bundle). It carries this chart, its installers and only the images changed since
+  that release; images of ours as **thin** archives, just the layers their previous version lacks (workspace image
+  1.8.4 -> 1.8.5: 0.6 MB instead of 1.9 GB); no third-party chart or image unless it changed. `./make --deploy` from
+  it:
+  * takes the settings (certificates, answers, client secret) from the previous install's folder (asked once;
+    `PREVIOUS=<folder>` with `--yes`), so the cluster keeps its CA;
+  * checks first, changing nothing until it passes, that the cluster has what the layer does not carry: Coder
+    installed, Traefik and CloudNativePG at this release's chart versions (or the cluster's own, left alone), the
+    Gateway API CRDs, Minikube's Keycloak at this release's version, and every image not carried, on every node or
+    in the registry; anything missing is listed;
+  * makes each thin image whole from its base image (this machine's docker, a Minikube node, or the registry),
+    every layer checked by its digest, then loads or pushes only what the layer carries.
+
+  `development/tools/build-bundle.sh` writes it beside the others, on the newest release before this one
+  (`--layer-base VERSION` for another, `--no-layer` for none); `helm-chart/layer-support` builds, checks, restores
+  and describes it (`./layer-support info`).
+* **Workspaces list:** a workspace being started, updated or restarted has a semi-transparent barber pole moving
+  diagonally across its whole row until it is completely initialized (startup scripts done and every app's health
+  check answered), so the row shows its app icons the moment it ends, or until its start failed (with animations
+  off the stripes stay still).
+
 ## 1.36.0 – 2026-10-14
 
 Coder `2.0.0-platform.39` (fork `7cf80f05d`), workspace image **`coder-workspace:1.8.5`** (the template has a new

@@ -150,6 +150,14 @@ mk_load_image() { # group image
 
 mk_load_images() {
 	local g img groups=(custom)
+	if [[ -f "${here}/LAYER.json" ]]; then # a layer: only what it carries (the rest is on the nodes, checked)
+		local carried; carried=$("${here}/layer-support" delivered)
+		[[ -n "$carried" ]] || { say "images: the layer carries none (every image is on the nodes already)"; return 0; }
+		while read -r g img; do
+			grep -qxF "$img" <<<"$carried" && mk_load_image "$g" "$img"
+		done < <(images_of custom chart prereqs platform)
+		return 0
+	fi
 	online || { say "no internet: loading the bundled public images too"; groups+=(chart prereqs platform); }
 	while read -r g img; do
 		[[ "$g" != platform || "$img" == "$KEYCLOAK_IMAGE" ]] || continue   # of the platform group only Keycloak runs here

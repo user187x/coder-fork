@@ -176,6 +176,9 @@ def main():
     for sh in ("install.sh", "make", "mirror-images.sh", "minikube-support", "harbor-support"):
         rc, _, err = run(["bash", "-n", os.path.join(B, sh)])
         check("shell syntax: %s" % sh, rc == 0, err.strip())
+    # the layer bundle's helper (Python): compiles, and answers --help
+    rc, out, err = run([sys.executable, os.path.join(B, "layer-support"), "--help"])
+    check("layer-support: runs (--help)", rc == 0 and "layer-support build" in out, (err or "").strip()[-200:])
     passed = sum(x["ok"] for x in RESULTS)
     print("\n%d/%d static checks passed" % (passed, len(RESULTS)))
     sys.exit(0 if passed == len(RESULTS) else 1)

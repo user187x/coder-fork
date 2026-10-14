@@ -6,13 +6,13 @@ announcement banner and a full-featured workspace template, packaged as **one He
 every container image it needs**. Nothing is downloaded during the install, and nothing at run time reaches outside
 your network.
 
-| | Current release: [**v1.36.0**](https://github.com/user187x/coder-fork/releases/latest) |
+| | Current release: [**v1.37.0**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
-| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.31-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
+| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.41-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.8.5` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
 | Image tools | `ghcr.io/user187x/coder-image-tools:1.0.0` (the platform service, BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
-| Bundle | 17 images pinned by digest, ~4 GB (`-slim`: the 4 custom images only, ~2.6 GB) |
+| Bundle | 17 images pinned by digest, ~4 GB (`-slim`: the 4 custom images only, ~2.6 GB); `-layer`: the update for a cluster at the previous release, only what changed (often a few MB) |
 
 **Contents:** [Quick start](#quick-start) · [Architecture](#architecture) · [Features](#features) ·
 [Security](#security) · [Testing and verification](#testing-and-verification) · [Build a release](#build-a-release) ·
@@ -26,11 +26,11 @@ your network.
 Download the release's parts, verify and join them, then install from inside the air-gapped network:
 
 ```bash
-sha256sum -c coder-airgapped-1.36.0.parts.sha256           # every part: OK
-cat coder-airgapped-1.36.0.tar.gz.part-0* > coder-airgapped-1.36.0.tar.gz
-sha256sum -c coder-airgapped-1.36.0.tar.gz.sha256          # the bundle: OK
+sha256sum -c coder-airgapped-1.37.0.parts.sha256           # every part: OK
+cat coder-airgapped-1.37.0.tar.gz.part-0* > coder-airgapped-1.37.0.tar.gz
+sha256sum -c coder-airgapped-1.37.0.tar.gz.sha256          # the bundle: OK
 
-tar -xzf coder-airgapped-1.36.0.tar.gz && cd coder-airgapped-1.36.0
+tar -xzf coder-airgapped-1.37.0.tar.gz && cd coder-airgapped-1.37.0
 ./make --deploy
 ```
 
@@ -41,6 +41,23 @@ first sign-in (`admin@admin.com` / `admin`; change the password right away).
 
 Your images in Harbor first? `./make --push-images harbor.example.com/<project>` pushes every image and chart there:
 it helps log your docker and helm in to Harbor (and Docker Hub), checks or creates the project, and checks every push.
+
+**Already running the previous release?** Each release also has a **layer bundle**,
+`coder-airgapped-<version>-layer.tar.gz`: the customization layer alone (this chart, its installers, and only the
+images changed since the previous release, our own ones as thin deltas of the image the cluster already has), with
+no third-party chart or image. Carry that one file across instead of the whole bundle:
+
+```bash
+sha256sum -c coder-airgapped-1.37.0-layer.tar.gz.sha256
+tar -xzf coder-airgapped-1.37.0-layer.tar.gz && cd coder-airgapped-1.37.0
+PREVIOUS=../coder-airgapped-1.36.0 ./make --deploy      # the folder you installed from (its .deploy settings)
+```
+
+It first checks that the cluster has what the layer does not carry: Coder installed from a full bundle, Traefik,
+CloudNativePG, the Gateway API CRDs and (Minikube) Keycloak at this release's versions, and every image it needs,
+on the nodes or in your registry. If anything is missing it says what, changes nothing, and the full bundle is the
+way. A thin image is made whole again from its base image, every layer checked by its digest. `./layer-support info`
+in the extracted folder lists what the layer carries and needs.
 
 The step-by-step manual install, Argo CD, and the optional pieces are in
 [`helm-chart/DEPLOY.md`](helm-chart/DEPLOY.md); every chart value is in [`helm-chart/README.md`](helm-chart/README.md).
@@ -334,8 +351,8 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **34/34** (1.36.0) |
-| Platform service unit tests | **33/33** (1.36.0) |
+| Static checks | **35/35** (1.37.0) |
+| Platform service unit tests | **33/33** (1.37.0) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Live conformance | **76/76** (1.28.0) |
 | Load, ~1,050 dashboard tabs for 8 minutes | **0 errors** of 157,626 requests, worst p95 0.28 s, no restarts (1.28.0) |

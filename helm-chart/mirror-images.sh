@@ -33,6 +33,9 @@
 #                                   Any cluster kubectl reaches (EKS, kind...); no-op when it is there already.
 #                                   `./make --deploy` runs it; run it yourself after an Argo CD install.
 #
+#   In a layer bundle (LAYER.json, see layer-support) push takes only the images the layer carries: the others are in
+#   the registry since the earlier install (./make --deploy checks that first).
+#
 #   ECR=1 ./mirror-images.sh push ...    create missing ECR repositories first (needs the aws CLI)
 #   PLAIN_HTTP=1 ./mirror-images.sh chart ...   registry without TLS
 #   HELM_PUSH_ARGS="--ca-file ca.pem" ./mirror-images.sh chart(s) ...   more helm push options (a private CA)
@@ -111,8 +114,13 @@ save)
 push)
 	reg="${1:?usage: push REGISTRY [GROUP...]}"; shift; reg="${reg%/}"
 	mapfile -t idx < <(pick custom chart prereqs -- "$@")
+	carried=""; [[ ! -f "${here}/LAYER.json" ]] || carried=$("${here}/layer-support" delivered)
 	for i in "${idx[@]}"; do
-		img=${images[$i]}; ensure "$i"
+		img=${images[$i]}
+		if [[ -f "${here}/LAYER.json" ]] && ! grep -qxF "$img" <<<"$carried"; then
+			echo "in $reg since the earlier install: $img (the layer does not carry it)"; continue
+		fi
+		ensure "$i"
 		dst=$(target "$img" "$reg")
 		if [[ "${ECR:-0}" == 1 ]]; then
 			repo="${dst#*/}"; repo="${repo%:*}"

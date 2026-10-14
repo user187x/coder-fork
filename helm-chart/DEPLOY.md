@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.36.0.tar.gz && cd coder-airgapped-1.36.0
+tar -xzf coder-airgapped-1.37.0.tar.gz && cd coder-airgapped-1.37.0
 ./make --deploy
 ```
 
@@ -28,6 +28,39 @@ once. Say yes and sudo asks for your password then; the steps run at the end of 
 questions. Say no and it prints the exact commands instead.
 
 Progress shows in the terminal and in `.deploy/deploy.log` (from a second terminal: `tail -F .deploy/deploy.log`).
+
+## Updating with the layer bundle
+
+A cluster installed from a full bundle can take the next release as its **layer bundle**,
+`coder-airgapped-<version>-layer.tar.gz`, which carries only the customization layer: this chart, the installers,
+and the images changed since the previous release (the base, named in its `LAYER.json`). Images of ours come thin,
+just the layers their previous version lacks; Traefik, CloudNativePG, the Gateway API CRDs, Keycloak and the public
+images are not in it at all.
+
+```bash
+sha256sum -c coder-airgapped-1.37.0-layer.tar.gz.sha256
+tar -xzf coder-airgapped-1.37.0-layer.tar.gz && cd coder-airgapped-1.37.0
+./layer-support info                                   # what it carries, and what the cluster must have
+./make --deploy                                        # asks for the folder you installed from
+```
+
+`./make --deploy` then:
+
+1. takes your settings (certificates, answers, the client secret) from the previous install's `.deploy` folder: it
+   asks for that folder once (`PREVIOUS=<folder>` with `--yes`);
+2. checks, before changing anything, that the cluster has what the layer does not carry: Coder installed (Helm
+   release `coder`), the Traefik and CloudNativePG charts at this release's versions (or your own Traefik /
+   CloudNativePG, left as they are), the Gateway API CRDs, Minikube's Keycloak at this release's version, and every
+   image not carried, on every Minikube node or in your registry (`docker login` it first). Anything missing is
+   listed and the deploy stops: use the full bundle then;
+3. makes each thin image whole again in this machine's docker from its base image (from the local docker, a
+   Minikube node, or your registry), checking every layer by its digest, and loads or pushes only the images the
+   layer carries;
+4. installs the chart as usual; Traefik's and CloudNativePG's charts are left as they are (unless the layer carries
+   a newer one).
+
+A layer is made for clusters at its base release. Installed on another release, the same checks decide: it works
+when everything it needs is there, and otherwise says what is missing.
 
 `./make --deploy --yes` takes every remembered answer without asking. Helpers it uses, which also work on their own:
 `./x509-support` (certificates), `./minikube-support` (e.g. `./minikube-support expose coder <domain>` after a
@@ -98,8 +131,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.36.0.tar.gz
-cd coder-airgapped-1.36.0
+tar -xzf coder-airgapped-1.37.0.tar.gz
+cd coder-airgapped-1.37.0
 ./mirror-images.sh list
 ```
 
@@ -110,14 +143,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.36.0` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.37.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.36.0
+cd coder-airgapped-1.37.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
