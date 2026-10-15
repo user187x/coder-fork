@@ -86,6 +86,8 @@ spec:
           env:
             - {name: PORT, value: "8080"}
             - {name: DB_PATH, value: /data/receipts.sqlite}
+            # Kubelets' serving certificates not checked (self-signed: Minikube, kind), as for metrics-server.
+            - {name: KUBELET_INSECURE_TLS, value: {{ .Values.metricsServer.kubeletInsecureTLS | default false | quote }}}
             - {name: CODER_URL, value: {{ include "ca.svcUrl" (list "coder" . 80) | quote }}}
             - {name: BANNER_URL, value: {{ include "ca.svcUrl" (list "coder-banner" . 80) | quote }}}
             - {name: ADMIN_ROLES, value: {{ $ui.adminRoles | quote }}}

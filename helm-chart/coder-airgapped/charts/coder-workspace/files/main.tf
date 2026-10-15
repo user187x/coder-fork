@@ -56,6 +56,31 @@ variable "cluster_admin_roles" {
   default     = "owner"
 }
 
+# Which apps the workspace has: "developer" (ubuntu-vnc-desktop: code-server, marimo) or "dataflow" (ubuntu-dataflow:
+# Apache NiFi, Apache Airflow). Everything else is the same. The chart pushes this template twice (templates/job.yaml).
+variable "app_set" {
+  type        = string
+  description = "developer (code-server, marimo) or dataflow (Apache NiFi, Apache Airflow)."
+  default     = "developer"
+  validation {
+    condition     = contains(["developer", "dataflow"], var.app_set)
+    error_message = "app_set must be developer or dataflow."
+  }
+}
+
+# The workspace image; empty: the chart's (substituted for "codercom/enterprise-base:ubuntu" below). The dataflow
+# template's has NiFi and Airflow too (development/workspace-image-dataflow).
+variable "workspace_image" {
+  type        = string
+  description = "The workspace pods' image; empty: the template's default."
+  default     = ""
+}
+
+locals {
+  dataflow        = var.app_set == "dataflow"
+  workspace_image = var.workspace_image != "" ? var.workspace_image : "codercom/enterprise-base:ubuntu"
+}
+
 data "coder_parameter" "cpu" {
   name         = "cpu"
   display_name = "CPU"
@@ -85,8 +110,9 @@ data "coder_parameter" "memory" {
   name         = "memory"
   display_name = "Memory"
   description  = "The amount of memory in GB"
-  default      = "2"
-  icon         = "/icon/memory.svg"
+  # NiFi (a 1 GB Java heap) and Airflow beside the desktop need more than the developer apps.
+  default      = local.dataflow ? "6" : "2"
+  icon         = "/__icons/memory.svg" # files/icons/memory.svg (a memory module), served by templates/icons.yaml
   mutable      = true
   option {
     name  = "2 GB"
@@ -112,7 +138,7 @@ data "coder_parameter" "home_disk_size" {
   description  = "The size of the home disk in GB"
   default      = "10"
   type         = "number"
-  icon         = "/emojis/1f4be.png"
+  icon         = "/__icons/hard-drive.svg" # files/icons/hard-drive.svg, served by templates/icons.yaml
   mutable      = false
   validation {
     min = 1
@@ -163,6 +189,8 @@ resource "coder_agent" "main" {
     cluster_kubeconfig     = local.cluster_kubeconfig
     cluster_oidc_issuer    = var.cluster_oidc_issuer
     cluster_oidc_client_id = var.cluster_oidc_client_id
+    app_set                = var.app_set
+    access_host            = replace(replace(data.coder_workspace.me.access_url, "https://", ""), "http://", "")
   })
 
   # The metrics, in the same order in both of the dashboard's groups (the keys order them): CPU, RAM, Disk and Ø Load
@@ -256,6 +284,7 @@ resource "coder_script" "lockdown" {
 }
 
 resource "coder_app" "marimo" {
+  count        = local.dataflow ? 0 : 1
   agent_id     = coder_agent.main.id
   slug         = "marimo"
   display_name = "marimo"
@@ -275,6 +304,7 @@ resource "coder_app" "marimo" {
 
 # The windows of marimo notebooks (tkinter), shown in their cells' output (coder_marimo_tk): not a button of its own.
 resource "coder_app" "marimo_windows" {
+  count        = local.dataflow ? 0 : 1
   agent_id     = coder_agent.main.id
   slug         = "marimo-windows"
   display_name = "marimo windows"
@@ -320,6 +350,7 @@ resource "coder_app" "filebrowser" {
 }
 
 resource "coder_app" "code-server" {
+  count        = local.dataflow ? 0 : 1
   agent_id     = coder_agent.main.id
   slug         = "code-server"
   display_name = "code-server"
@@ -332,6 +363,46 @@ resource "coder_app" "code-server" {
     url       = "http://localhost:13337/healthz"
     interval  = 3
     threshold = 10
+  }
+}
+
+# The dataflow template's apps, in place of code-server and marimo: path-based like the others, so they open in the
+# dashboard's panels (same origin). Started by the startup script (NiFi behind nginx, which tells NiFi its path).
+resource "coder_app" "nifi" {
+  count        = local.dataflow ? 1 : 0
+  agent_id     = coder_agent.main.id
+  slug         = "nifi"
+  display_name = "Apache NiFi"
+  icon         = "/__icons/nifi.svg" # files/icons/nifi.svg, served by templates/icons.yaml
+  # The root: Coder joins the app URL's path to every request, and NiFi serves at /nifi and /nifi-api (nginx sends
+  # the root to /nifi/, under the app's path).
+  url          = "http://localhost:8081"
+  subdomain    = false
+  share        = "owner"
+
+  # NiFi itself (its own port, 8080), not nginx: the dashboard's panel shows the port and protocol it is checked on.
+  healthcheck {
+    url       = "http://localhost:8080/nifi-api/flow/about"
+    interval  = 5
+    threshold = 60
+  }
+}
+
+resource "coder_app" "airflow" {
+  count        = local.dataflow ? 1 : 0
+  agent_id     = coder_agent.main.id
+  slug         = "airflow"
+  display_name = "Apache Airflow"
+  icon         = "/icon/airflow.svg" # Coder's own icon
+  # Airflow serves under the full app path (its base_url, in the startup script), so the URL carries it too.
+  url          = "http://localhost:8090/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow/"
+  subdomain    = false
+  share        = "owner"
+
+  healthcheck {
+    url       = "http://localhost:8090/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow/api/v2/monitor/health"
+    interval  = 5
+    threshold = 60
   }
 }
 
@@ -440,7 +511,7 @@ resource "kubernetes_deployment_v1" "main" {
         # https://coder.xxx.com while public sites still verify.
         init_container {
           name              = "trust-local-ca"
-          image             = "codercom/enterprise-base:ubuntu"
+          image             = local.workspace_image
           image_pull_policy = "IfNotPresent"
           command = [
             "sh", "-c",
@@ -463,7 +534,7 @@ resource "kubernetes_deployment_v1" "main" {
         # NET_ADMIN). A running workspace is locked without a restart, by the platform service.
         init_container {
           name              = "lockdown"
-          image             = "codercom/enterprise-base:ubuntu"
+          image             = local.workspace_image
           image_pull_policy = "IfNotPresent"
           command = [
             "sh", "-c", local.lockdown_sh, "lockdown",
@@ -485,7 +556,7 @@ resource "kubernetes_deployment_v1" "main" {
 
         container {
           name              = "dev"
-          image             = "codercom/enterprise-base:ubuntu"
+          image             = local.workspace_image
           # The workspace image is versioned (a new build gets a new tag), and offline there is nothing to pull from.
           image_pull_policy = "IfNotPresent"
           # No core dumps from the agent or anything it starts (terminals, the desktop, apps).

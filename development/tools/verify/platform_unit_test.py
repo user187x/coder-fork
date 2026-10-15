@@ -429,6 +429,187 @@ class FreezeTest(unittest.TestCase):
         self.assertEqual(sum(1 for c in calls if c[0] == "POST" and c[1].endswith("/jobs")), made)
 
 
+class ClusterNetworkTest(unittest.TestCase):
+    """The Settings menu's network graph: rates from the kubelets' counters, kept with the HUD's samples."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.hud = ui.HudHistory(os.path.join(self.dir.name, "hud.sqlite"))
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_rates_from_counters_and_a_restarted_node_left_out(self):
+        rounds = [{"a": (1000, 500), "b": (0, 0)}, {"a": (4000, 2000), "b": (100, 50)}, {"a": (5000, 2500), "b": (10, 5)}]
+        clock = [100.0, 115.0, 130.0]
+        with mock.patch.object(ui, "node_network_counters", side_effect=rounds), \
+                mock.patch.object(ui.time, "time", side_effect=clock):
+            self.assertEqual(self.hud.network_rates(), (None, None))           # first round: nothing to compare
+            rx, tx = self.hud.network_rates()
+            self.assertAlmostEqual(rx, (3000 + 100) / 15)
+            self.assertAlmostEqual(tx, (1500 + 50) / 15)
+            rx, tx = self.hud.network_rates()                                  # b restarted: its counters went back
+            self.assertAlmostEqual(rx, 1000 / 15)
+            self.assertAlmostEqual(tx, 500 / 15)
+
+    def test_an_older_samples_table_gains_the_columns_and_recent_reads_them(self):
+        import sqlite3, time as t
+        path = os.path.join(self.dir.name, "old.sqlite")
+        with sqlite3.connect(path) as db:                                      # as 1.38 left it
+            db.execute("""CREATE TABLE samples (t INTEGER PRIMARY KEY, live INTEGER, cpu REAL, cpu_ws REAL,
+                cpu_total REAL, mem REAL, mem_ws REAL, mem_total REAL, lat_p50 REAL, lat_p95 REAL, lat_max REAL,
+                connections INTEGER)""")
+            db.execute("INSERT INTO samples (t, live, cpu) VALUES (?, 1, 0.5)", (int(t.time()) - 30,))
+        hud = ui.HudHistory(path)
+        self.assertIsNone(hud.network_recent())                                # no traffic recorded yet
+        with hud.connect() as db:
+            db.execute("INSERT INTO samples (t, live, net_rx, net_tx) VALUES (?, 1, 2048.25, 512.5)", (int(t.time()),))
+        recent = hud.network_recent()
+        self.assertEqual((recent["rx"], recent["tx"], len(recent["points"])), (2048.2, 512.5, 1))
+
+
+class BannerPictureTest(unittest.TestCase):
+    """Insert picture: what is accepted, and how pictures are kept (named by their content, the newest kept)."""
+
+    @staticmethod
+    def data_url(ctype, data):
+        import base64
+        return "data:%s;base64,%s" % (ctype, base64.b64encode(data).decode())
+
+    def test_an_animated_gif_is_kept_as_it_is(self):
+        gif = b"GIF89a" + b"\x00" * 64 + b"NETSCAPE2.0" + b"\x00" * 64   # an animated GIF's looping block
+        self.assertEqual(ui.parse_banner_picture(self.data_url("image/gif", gif)), ("image/gif", gif))
+
+    def test_refused(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        for url, why in ((self.data_url("image/gif", png), "not a valid GIF"),            # the content is a PNG
+                         (self.data_url("image/svg+xml", b"<svg/>"), "Upload a PNG"),     # SVG is not offered
+                         ("not a data url", "Upload a PNG")):
+            with self.assertRaises(ValueError) as e:
+                ui.parse_banner_picture(url)
+            self.assertIn(why, str(e.exception))
+        with mock.patch.object(ui, "BANNER_PICTURE_MAX_BYTES", 16), self.assertRaises(ValueError):
+            ui.parse_banner_picture(self.data_url("image/png", png))
+
+    def test_named_by_content_and_bounded(self):
+        queries = []
+
+        class Pool:
+            def query(self, sql, params=()):
+                queries.append((" ".join(sql.split()), list(params)))
+                return [["image/gif", b"GIF89a"]] if sql.startswith("SELECT content_type") else []
+
+        store = ui.BannerPictureStore(mock.Mock(pool=Pool()))
+        pid = store.put("image/gif", b"GIF89a-frames", "flag", "admin")
+        self.assertEqual(pid, __import__("hashlib").sha256(b"GIF89a-frames").hexdigest()[:16])
+        self.assertTrue(any(q.startswith("DELETE FROM coder_ui_updates.banner_picture") and p == [ui.BANNER_PICTURE_KEEP]
+                            for q, p in queries))
+        self.assertEqual(store.get(pid), ("image/gif", b"GIF89a"))
+        self.assertIsNone(store.get("../../etc/passwd"))                         # only ids are looked up
+
+
+class AnnouncementRecordsTest(unittest.TestCase):
+    """Acknowledgements' Clear All: every announcement's record and receipts go; the live one starts again."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.store = ui.Store(os.path.join(self.tmp, "ui.sqlite"))
+        self.user = {"id": "u1", "username": "dev", "name": "Dev", "email": "dev@example.com"}
+
+    def banner(self, bid, message):
+        return {"id": bid, "level": "info", "title": "", "message": message, "linkText": "", "linkUrl": ""}
+
+    def test_clear_all(self):
+        old, live = self.banner("aaaaaaaaaaaa", "Old"), self.banner("bbbbbbbbbbbb", "Live")
+        self.store.record(old["id"], self.user, True, old)
+        self.store.record(live["id"], self.user, False, live)
+        self.assertEqual(len(self.store.report(live, [])), 2)
+        self.assertEqual(self.store.clear_events(), 2)
+        events = self.store.report(live, [])
+        self.assertEqual([e["id"] for e in events], [live["id"]])   # the live one, back with nobody
+        self.assertEqual(events[0]["viewed"], 0)
+        self.assertEqual(self.store.receipt_times(live["id"], "u1"), (None, None))
+
+
+class PeerChatTest(unittest.TestCase):
+    """Peer-to-peer chat: who may write to whom, invisibility, retention, purge, and who talks to whom."""
+
+    ADMIN = {"id": "00000000-0000-0000-0000-00000000000a", "username": "boss", "name": "Boss", "admin": True}
+    ANN = {"id": "00000000-0000-0000-0000-000000000001", "username": "ann", "name": "Ann", "admin": False}
+    BOB = {"id": "00000000-0000-0000-0000-000000000002", "username": "bob", "name": "Bob", "admin": False}
+
+    def setUp(self):
+        import tempfile
+        self.path = os.path.join(tempfile.mkdtemp(), "ui.sqlite")
+        self.chat = ui.ChatStore(self.path)
+        self.admins = {self.ADMIN["id"]}
+
+    def may(self, user, peer):
+        return self.chat.may_write(user, False, peer["id"], self.admins, self.admins)
+
+    def test_peers_off_then_on(self):
+        self.assertIsNone(self.may(self.ANN, self.ADMIN))  # their line to support, always
+        self.assertEqual(self.may(self.ANN, self.BOB), "You can start a conversation with an admin only.")
+        self.chat.put_settings({"peers": True}, "boss")
+        self.assertIsNone(self.may(self.ANN, self.BOB))
+        self.chat.send(self.ANN, False, self.BOB, "hi")
+        # Turned off again: the developers' conversation can't go on, but an admin's can.
+        self.chat.put_settings({"peers": False}, "boss")
+        self.assertEqual(self.may(self.BOB, self.ANN), "Chat between developers is turned off by your admins.")
+        self.chat.send(self.ADMIN, True, self.BOB, "need anything?")
+        self.assertIsNone(self.may(self.BOB, self.ADMIN))
+        # Settings survive a restart.
+        self.assertFalse(ui.ChatStore(self.path).settings["peers"])
+        self.assertEqual(ui.ChatStore(self.path).settings["updatedBy"], "boss")
+
+    def test_invisible(self):
+        self.chat.put_settings({"peers": True}, "boss")
+        self.chat.set_invisible(self.BOB["id"], True)
+        self.assertEqual(self.may(self.ANN, self.BOB), "That person isn't available for chat.")
+        self.assertIn(self.BOB["id"], ui.ChatStore(self.path).invisible)
+        # Someone they already talk with may still write.
+        self.chat.set_invisible(self.BOB["id"], False)
+        self.chat.send(self.ANN, False, self.BOB, "hi")
+        self.chat.set_invisible(self.BOB["id"], True)
+        self.assertIsNone(self.may(self.ANN, self.BOB))
+
+    def test_people_list_hides_the_invisible_from_all_but_admins(self):
+        directory = {p["id"]: {**{k: p[k] for k in ("id", "username", "name", "admin")}, "lastSeen": None}
+                     for p in (self.ADMIN, self.ANN, self.BOB)}
+        self.chat.touch(self.ANN["id"])
+        self.chat.touch(self.BOB["id"])
+        self.chat.set_invisible(self.BOB["id"], True)
+        with mock.patch.object(ui, "CHAT", self.chat), mock.patch.object(ui, "chat_people", lambda: directory):
+            seen_by_ann = [p["username"] for p in ui.chat_people_for(self.ANN, False)]
+            seen_by_admin = {p["username"]: p.get("invisible") for p in ui.chat_people_for(self.ADMIN, True)}
+        self.assertEqual(seen_by_ann, [])  # Bob is invisible; the admin was never seen
+        self.assertEqual(seen_by_admin, {"ann": False, "bob": True})
+
+    def test_retention_purge_and_pairs(self):
+        self.chat.put_settings({"peers": True}, "boss")
+        self.chat.send(self.ANN, False, self.BOB, "a")
+        self.chat.send(self.BOB, False, self.ANN, "b")
+        self.chat.send(self.ADMIN, True, self.ANN, "c")
+        pairs = self.chat.pairs()
+        self.assertEqual(len(pairs), 1)  # developers only: the admin's conversation is not a pair
+        self.assertEqual({pairs[0]["a"]["username"], pairs[0]["b"]["username"]}, {"ann", "bob"})
+        self.assertEqual(pairs[0]["messages"], 2)
+        self.assertNotIn("text", str(pairs))
+        stats = self.chat.stats()
+        self.assertEqual((stats["messages"], stats["peerMessages"]), (3, 2))
+        # A message older than the retention goes when it is shortened.
+        with self.chat.connect() as db:
+            db.execute("UPDATE chat_messages SET sent_at = '2020-01-01T00:00:00Z' WHERE text = 'a'")
+        self.chat.put_settings({"keepDays": 7}, "boss")
+        self.assertEqual(self.chat.stats()["messages"], 2)
+        version = self.chat.settings["purgeVersion"]
+        self.assertEqual(self.chat.purge(), 2)
+        self.assertEqual(self.chat.stats()["messages"], 0)
+        self.assertEqual(self.chat.settings["purgeVersion"], version + 1)
+
+
 class LoginPageSettingsTest(unittest.TestCase):
     def test_defaults_are_the_traced_outline(self):
         self.assertEqual(ui.LOGIN_PAGE_DEFAULT["effect"], "wireframe")

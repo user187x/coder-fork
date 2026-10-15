@@ -41,10 +41,10 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Feature | Where | Test |
 |---|---|---|
 | Keycloak OIDC with certificate (PKCS#12) sign-in; first owner bootstrap with a password | chart, service | e2e step 8 |
-| Sign-in page: the deployment's name as a traced outline (ContourTitle), background images and animated or HTML backgrounds | fork | vitest, verify UI |
+| Sign-in page: the deployment's name as a traced outline (ContourTitle), background images and animated or HTML backgrounds; Keycloak's logo as its button, no footer | fork | vitest, verify UI |
 | Customize > Sign-in and sign-out page: title, text effect (Wireframe, Neon, Plain), colour, speed, a sign-in and a sign-out message, live preview | fork, service | platform unit tests, vitest, verify UI |
 | Certificates: each user's PKCS#12 in Settings, installed in their workspaces (`~/.cert/<user>.p12`), with the x509 fingerprint | fork, service, image | verify |
-| SSH key from the user's .p12 private key | fork | `go test ./coderd -run GitSSHKey` |
+| SSH key from the user's .p12 private key (P12), or regenerated as RSA (4096-bit) or ED25519 | fork | `go test ./coderd -run GitSSHKey` |
 | Admins' kubectl and k9s on the cluster from their workspaces, each signed in as themselves (Keycloak device login, `keycloak:<user>`), the group synced with Coder's owners (password owners too) | chart, service, image | verify (RBAC), manual sign-in |
 | Keycloak status and settings page | fork, service | vitest |
 
@@ -87,13 +87,13 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 
 | Feature | Where | Test |
 |---|---|---|
-| HUD: live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users, failures) and Coder's System Uptime; an icon before each figure for what it measures | fork, service | e2e step 8 |
+| HUD: live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users, failures) and Coder's System Uptime; an icon before each figure for what it measures; the totals on one line, their text shrinking to fit | fork, service | e2e step 8 |
 | Health view, monitoring and security posture (zero-trust checks, runtime signals) | fork, service | e2e step 8 |
 | Network and persistence maps | fork, service | vitest |
 | Inbox (the bell): Clear all (deletes the user's notifications, asks twice) beside an icon-only Mark all as read | fork, service | vitest |
-| Classification banners (e.g. UNCLASSIFIED; not on the terminal page, which the terminal fills), announcement banner (typewriter, crawl, fonts, Viewed box; a terminal view with an easter egg) | fork, service | verify |
-| Chat between users and admins, with screenshots, and the admins' chat console | fork, service | vitest |
-| Admin menu quick links, breadcrumb, arrangeable top bar, Resources menu; an icon before every item of both menus, each category's quick-link icon in General's sidebar and the breadcrumb, and an icon before every page of the account view | fork | vitest |
+| Classification banners (e.g. UNCLASSIFIED; not on the terminal page, which the terminal fills), announcement banner (an LCD screen over a background image - span, tile, stretch, center, fill; a plain-text editor with font, outline, effect, colours, emoji, alignment; a countdown shown as a split-flap clock; optional receipts and Clear all; typewriter, crawl, Pew-Pew, Split-Flap, Ghostwrite, close transitions, Viewed box; a terminal view with an easter egg) | fork, service | verify |
+| Chat between users and admins, with screenshots, and the admins' chat console; peer-to-peer chat (Admin Controls › Chat: on/off, a People list of who is online or active today, invisibility but to admins, retention 30 days by default, purge, who talks to whom) | fork, service | vitest, unit, verify UI |
+| Settings menu (Admin Controls) with the cluster's CPU, memory and network traffic (last 15 minutes; kubelets' counters, RBAC nodes/stats); workspace settings as one page of cards; quick links, breadcrumb, arrangeable top bar, Resources menu; an icon before every item of both menus, each category's quick-link icon in General's sidebar and the breadcrumb, and an icon before every page of the account view | fork | vitest |
 | Logo and avatar (uploaded, a gallery, defaults) | fork, service | verify |
 | Agent Activity (optional `agent-audit.tf`): every command run in a workspace | chart, service | manual |
 | metrics-server where the cluster has none | chart | verify |

@@ -1,5 +1,160 @@
 # Changelog
 
+## 1.39.0 – 2026-10-15
+
+Coder `2.0.0-platform.44` (fork `6a87d6432`), workspace image `coder-workspace:1.8.5` (unchanged).
+
+* **A second workspace template, `ubuntu-dataflow` (UBUNTU DATAFLOW):** the same workspace as UBUNTU with **Apache
+  NiFi 2.12.0** in place of code-server and **Apache Airflow 3.3.2** in place of marimo, both started with the
+  workspace and working with no network, opening like the other apps (and in the workspace page's panels).
+  * One template file: `main.tf`'s `app_set` (developer / dataflow) chooses the apps; the chart pushes it twice
+    (`coder-workspace.dataflowTemplate`, its own Job and push message). Memory defaults to 6 GB there (NiFi's 1 GB Java
+    heap and Airflow beside the desktop).
+  * Its image, `ghcr.io/user187x/coder-workspace-dataflow:1.0.0` (`development/workspace-image-dataflow`,
+    `development/tools/build-dataflow-image.sh`): the workspace image + a Java 21 runtime, NiFi (checked against
+    Apache's SHA-512; its NARs unpacked in the image, read-only, so a workspace keeps only its conf, flows,
+    repositories and logs in `~/.nifi`), nginx (gives NiFi the app's path: NiFi serves only at `/nifi`), and Airflow
+    in `/opt/airflow` (pinned with Airflow's constraints for the image's Python). The build checks both start and
+    answer with no network.
+  * NiFi: unsecured HTTP on 127.0.0.1:8080 (the app is its owner's alone), behind nginx on 8081; its health check is
+    NiFi's own port. Airflow: standalone (SQLite in `~/airflow`, its example DAGs) on 8090, under the app's path
+    (`base_url`), every user an admin; its settings in `~/.airflowrc` for the `airflow` command in terminals.
+  * Their panels on the workspace page show, in a small oval at the right of the panel's header (before Pop out), the
+    protocol and port the service runs on inside the workspace (`HTTP :8080`, `HTTP :8090`): the health check's, else
+    the app URL's.
+* **The announcement banner has a screen.** The message sits on a long LCD set into the banner: the banner's colour
+  is a thin bezel around it (top, bottom, left, and before the Viewed box), the screen's corners follow the banner's,
+  dark glass tinted with the banner's colour, faint pixel rows and a glare, the text lit and softly glowing (in the
+  banner's text colour, or its own colour when the text colour is dark). The scroll-down key sits on the screen.
+* **Three new text effects** for it, from the CSS given (same motion, timing curves and colours; the `--ink`,
+  `--ink-2`, `--ink-3` tokens; off with reduced motion or animations off): **Pew-Pew** (each letter fired in as a
+  laser bolt, a white flash and spark on impact, a recoil, a faint glow), **Split-Flap** (a departure board, every
+  letter on its own plate) and **Ghostwrite** (a band of light sweeping muted letters). In the banner the letters
+  wrap like text, a long message's letters fire closer together, and without "Repeat continuously" each plays once
+  and the message stays. The banner service accepts the new names (`pewpew`, `flap`, `shimmer`).
+* **Receipts are optional.** A new option, *Record who viewed it, and let them confirm it* (on by default, as
+  before): off, for a greeting nobody needs to account for, no view is recorded and there is no Viewed box and no
+  Confirm button; a dismissible announcement gets a plain close button instead. The banner service keeps the new
+  field (`receipts`).
+* **The announcement editor is a small word processor.** No Markdown and no "Start from" templates: the text is plain,
+  as typed (shown in the banner's font and alignment as you type), formatted by the controls. The Message card has two
+  parts:
+  * **Compose.** Line 1: the **font**, the **text effect** (with the crawl's speed, and a repeat toggle), the **text
+    colour** and the **banner colour** (each a swatch button opening presets, a picker and the hex value; a level's
+    own pair is that level), **Emoji** and **alignment** (Left, Center, Right). Beside the font, **Outline**: the
+    text ringed by a hair of the opposite colour (dark round light text), to stay legible over a busy or changing
+    background image; drawn around whatever the font and the effect paint (a filter), so neither is changed. The
+    banner service keeps it (`outline`). Line 2: **Upload image**, with the
+    preset images under its arrow, and on the right how the image fills the banner's screen: **Span**, **Tile**,
+    **Stretch**, **Center** or **Fill**, each with its icon. Line 3: **Countdown timer**: ticked, only the moment is
+    asked for. Then the text. No preview of its own: the page's *What developers see* plays the text effect (and
+    *Replay*), and the close transition's *Try it* plays there too.
+  * **Controls:** *Let people dismiss it*, *Also show on the sign-in page*, *Record who viewed it, and let them confirm
+    it*, and the **Close transition**.
+* **A background image for the banner.** The image (uploaded, or a preset) is the banner's background, behind the
+  text on its screen, filling it as chosen: **Span** (the default: as wide as the screen, rolling through it from top
+  to bottom, as on a rolling pin, round and round at a steady pace), **Tile** (repeated across, as tall as the
+  screen), **Stretch** (squeezed to its size), **Center** (the whole image, fitted in the middle) or **Fill** (covering
+  it, its middle showing). The banner keeps its size. Uploads are PNG, JPEG, GIF (animated GIFs keep every frame: the
+  file is stored as it is), WebP or AVIF, up to 8 MB; the platform service keeps them in Coder's database
+  (`coder_ui_updates.banner_picture`, named by their content, the newest 100 kept) and serves them at
+  `/__coder-ui/banner-picture/<id>`, publicly (the sign-in page may show the banner).
+* **The countdown is a split-flap clock.** A countdown is shown at the banner's far left, before the text: days (when
+  there are any), hours, minutes and seconds, each figure on its own black rounded plate (the top half a shade
+  lighter, split across the middle, as on a departure board), flipping in as it changes; the colons are light dots
+  ringed in black, seen on a dark banner and a light one alike.
+  At zero the plates blink 00:00:00. No flipping with reduced motion.
+* **The banner service keeps the new fields:** `markdown` (false for the editor's plain text; announcements written
+  before it are Markdown and still show as they did), `align`, `picture`, `pictureFit` and `countdown` (UTC). An
+  announcement may be only a background image or a countdown, without text. A background image or a countdown makes
+  a new announcement (its own receipts), as they did in the message. An
+  announcement written in Markdown opens in the editor as plain text, its first countdown and first picture as the
+  banner's countdown and background (an unpublished edit until it is published).
+* **Acknowledgements: Clear all** deletes every announcement's record and everyone's confirmations at once (after a
+  confirmation; the live announcement stays up, its confirmations starting again from nobody):
+  `POST /__coder-ui/api/events/clear`, admins only.
+* **Close transitions.** A dismissed banner goes with its close transition: **Pixelate**, **Roll up**, **Fade** (the
+  default), **Wipe**, **Matrix** (green code rains over it as it dissolves), **Gaussian blur** or **Evaporate**, or
+  None; chosen in the editor's Controls (Close transition, with *Try it*, played on the preview), stored by the banner
+  service (`closeEffect`). Without motion it goes at once.
+* **Workspace page: no ⋮ menu.** Its actions (Settings, Change version, Duplicate, Download logs, Back up home,
+  Expand disk, Delete), with **Build parameters** (what the arrow showed before) and **Share** (Workspace Sharing, now
+  in a dialog; no Share button) first, are under one arrow right after the action buttons (beside Restart or Start),
+  in every state: it stays while the workspace restarts; during a build only Change version, Expand disk and Delete
+  wait. Each with its icon. The buttons are evenly spaced and end as far from the edge as the navbar's user menu above
+  them. The Workspaces list keeps its ⋮.
+* **Cancel where the build's button is.** While a build runs (a restart, a start, a stop, an update, a queued or a
+  deleting one), the buttons stay as they were, in their order: the one that started it becomes its **Cancel**
+  (clickable, with the confirmation as before), the others wait, disabled. Cancel no longer appears after the arrow
+  and goes again, and Stop no longer disappears during a restart. Without the right to cancel, that place says what
+  the build is doing (Restarting…), as before.
+* **The decorator update** (a new release file, about 300 MB): `coder-airgapped-<version>-decorator-update.tar.gz`
+  updates an Argo CD decorator install without the full bundle: the fork's Coder image, the two charts, a README of the
+  images changed since the previous release, and **`update-application.sh`**, which pushes the image and the charts to
+  your Harbor (`--push`), points your existing Application's two sources at the new version - a text edit that keeps
+  your comments and anchors, your file kept as a backup, checked by parsing it back - shows the change and applies it
+  (`--apply`). It turns the ubuntu-dataflow template off unless given its image (`--dataflow keep|<image>`). Built by
+  `development/tools/build-decorator-update.sh`; the full bundle carries the helper too (`argocd/`). Tested: pushed to a
+  throwaway registry, both charts rendered from it with the updated Application's values (Coder on the new image from
+  the registry, no dataflow template or image), and the objects compared with 1.38.1's (the same 66; only Coder's
+  image, the platform's code, templates and icons, one RBAC rule and one setting change).
+* **Fixed: a workspace's Ø Load read near or over 100% while it was idle.** The metric counted the metrics themselves:
+  the agent starts all of them at the same moment, so its samples always met the others starting (and the `coder stat`,
+  `awk` and `du` they run), about two threads, a whole idle 2-core workspace. The metric scripts (and what they run)
+  are now left out, found by their command lines; everything else the workspace runs still counts. Workspaces show it
+  once updated to the new template version.
+* **Peer-to-peer chat** (Admin Controls › **Chat**, a new page). Off by default; an admin turns it on, and every
+  developer's Chats panel lists the **People** online now (a tab open) or active today (Coder's last seen), online first,
+  with a search: choose someone to message them, to work on a project together. Anyone can make themselves
+  **invisible** (a switch in the panel): left out of everyone's People list but admins', who see them marked; someone
+  already talking with them may still write. Off again, developers write to admins only. **Chats are kept 30 days** by
+  default, a number of days admins set (1-365; messages and screenshots past it go every hour, and at once when it is
+  shortened), and admins can **purge** them all at any time (open windows empty at once; the file is compacted to give
+  the space back), with how much is kept beside it. **Who talks to whom**: which developers have chatted (the two, how
+  many messages, since and last; never what they wrote), with a button to message either, to find the right points of
+  contact; and **who is around**, the invisible too. The platform service: `GET /__coder-ui/api/chat/people`,
+  `POST …/chat/presence`, and for admins `GET`/`POST …/chat/settings`, `POST …/chat/purge`, `GET …/chat/pairs`.
+* **Particles, richly customizable** (Customize › Background image › Particles). **Themes**, each drawn live in its
+  tile: Original, Aurora, Fireflies, Snowfall, Synthwave and three of Minecraft's - **Overworld** (grass, dirt and stone
+  pixel blocks tumbling through a blue sky), **Nether** (lava, glowstone and netherrack embers rising through red haze)
+  and **XP orbs** (green and gold orbs pulsing in the dark). Then the dials: the background (solid, vertical gradient
+  or radial glow, with its second colour), the three colours, the **shape** (soft orbs, dots, bubbles, squares, pixel
+  blocks with grain and bevel, diamonds, sparks), the **motion** (orbit, drift, rise, fall, twinkle; tumbling or not),
+  how many, how big, **size variety**, **opacity**, the glow's distance and softness (none too), **luminous** blending,
+  and **Shuffle places** (another layout, the same everywhere). Speed and the colour filters stay with every HTML
+  background's dials. A Particles background saved before keeps its look (the new settings default to it).
+* **Prebaked pictures:** `creeper.gif` and `background.gif` are among Customize › Background image's provided
+  pictures, and `usa.gif` and `background.gif` are the announcement's preset images (in the dashboard,
+  `site/static/pictures/`: there offline from the first install).
+* **Settings menu.** The navbar's Admin menu is now **Settings**, and its first item (the deployment's settings)
+  **Admin Controls**. Under its CPU and memory bars, as wide as both, the **cluster's network traffic** over the last 15
+  minutes: received above the line (green), sent below (blue), the rates now and the window's peak, each bar's time and
+  rates on hover. The platform service samples each node's counters from its kubelet's summary every 15 seconds, on
+  the kubelet's port as metrics-server does: its ClusterRole gains `nodes/stats` (get) only, and
+  `metricsServer.kubeletInsecureTLS` applies to it too.
+* **Workspace settings on one page.** General, Parameters, Schedule and Sharing are cards on one page (General and
+  Schedule on the left, Parameters and Sharing on the right), each with its own form; no sidebar. Links to the former
+  pages (`settings/parameters?templateVersionId=…`, `settings/schedule`, `settings/sharing`) open it at their card.
+* **Settings › SSH keys:** **Regenerate Key** asks for the key type, **RSA** (4096-bit) or **ED25519**, whatever the
+  deployment's default (`PUT /api/v2/users/{user}/gitsshkey?algorithm=rsa4096|ed25519|ecdsa`; without it the
+  deployment's, as before); **P12** uses the `.p12`'s key as before. Both have icons.
+* **Sign-in page** (where signing out lands too): no footer (copyright, Coder version); the deployment's logo large
+  (112 px tall, up to 320 px wide; it was 48 px); the Keycloak button is Keycloak's logo (key and wordmark), smaller
+  than it (120 px wide), centered, without "Sign in with your certificate" (still the button's name for screen
+  readers). Another OIDC provider gets its icon on a large square button.
+* **HUD:** the totals across the top stay on one line, their text shrinking to fit the window and again whenever a
+  figure grows (measured by the figures' own widths: growing ones no longer run under the Sort button). The Sort menu
+  moved beside the graphs' note ("Live: sampled every 15 seconds, kept 7 days.").
+* **Workspaces:** with no workspaces yet, a template card's name and description are centered on the whole card.
+* **Home disk size** (Workspace settings › Parameters; the size the workspace was created with, fixed) now shows the
+  disk's size now and an **Expand disk** button: Kubernetes volume expansion where the storage class allows it (EBS
+  gp3 on EKS), else the home is copied onto a bigger volume - the same as the workspace's ⋮ menu › Expand disk.
+* **Template icons:** Home disk size is a hard drive and Memory a memory module (`files/icons/hard-drive.svg`,
+  `memory.svg`, served at `/__icons/`); CPU keeps the chip. Workspaces show them once updated to the new version.
+* **Workspace page:** a running, healthy workspace's status has a running light instead of the dot, in HTML and CSS
+  only (no image), after the GIF given: broken rings of light turning at their own pace round a pulsing core, glowing
+  softly with it; still for reduced motion.
+
 ## 1.38.1 – 2026-10-14
 
 Coder `2.0.0-platform.43` (fork `9cb97bba8`, unchanged), workspace image `coder-workspace:1.8.5` (unchanged).

@@ -141,6 +141,11 @@ rules:
   - apiGroups: [""]
     resources: [nodes, pods]
     verbs: [get, list]
+  # The Settings menu's network graph: each node's traffic counters from its kubelet's /stats/summary, read on the
+  # kubelet's port as metrics-server does (nodes/stats; not nodes/proxy, which reaches far more).
+  - apiGroups: [""]
+    resources: [nodes/stats]
+    verbs: [get]
   - apiGroups: [metrics.k8s.io]
     resources: [nodes, pods]
     verbs: [get, list]

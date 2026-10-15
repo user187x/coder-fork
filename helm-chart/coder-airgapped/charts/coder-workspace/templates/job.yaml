@@ -1,10 +1,23 @@
 {{- include "coder-workspace.platform.values" . -}}
 {{- $url := .Values.coder.internalUrl | default (required "CODER_URL must be provided!" .Values.coder.url) }}
+{{- /* The templates this chart pushes, each by its own Job: ubuntu-vnc-desktop, and (dataflowTemplate) the same with
+Apache NiFi and Apache Airflow in place of code-server and marimo, on its own image. Each push's message is its own:
+the login step finds a template renamed in the dashboard by it. */}}
+{{- $jobs := list (dict "suffix" "" "template" .Values.template "appSet" "developer" "image" ""
+    "message" (printf "Deployed via Helm release %s" .Release.Name)) }}
+{{- if .Values.dataflowTemplate.enabled }}
+{{- $jobs = append $jobs (dict "suffix" "-dataflow" "template" .Values.dataflowTemplate "appSet" "dataflow"
+    "image" .Values.dataflowImage "message" (printf "Deployed via Helm release %s (dataflow)" .Release.Name)) }}
+{{- end }}
+{{- range $n, $j := $jobs }}
+{{- if $n }}
+---
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "coder-workspace.prefix" . }}-push-template
-  namespace: {{ .Values.namespace | default "coder" }}
+  name: {{ include "coder-workspace.prefix" $ }}-push-template{{ $j.suffix }}
+  namespace: {{ $.Values.namespace | default "coder" }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     # Removed once it has pushed the template; a failed run stays for its logs until the next install, or an hour.
@@ -18,7 +31,7 @@ spec:
   backoffLimit: 1
   template:
     spec:
-      {{- with .Values.imagePullSecrets }}
+      {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -27,7 +40,7 @@ spec:
       # signs in with coder-init-auth. (0.1.0 did that with curl + jq in the coder image, which has neither.)
       initContainers:
         - name: login
-          image: {{ .Values.loginImage }}
+          image: {{ $.Values.loginImage }}
           command: ["python3", "-c"]
           args:
             - |
@@ -83,29 +96,29 @@ spec:
             - name: CODER_URL
               value: {{ $url | quote }}
             - name: TEMPLATE_NAME
-              value: {{ .Values.template.name | quote }}
+              value: {{ $j.template.name | quote }}
             - name: TEMPLATE_DISPLAY_NAME
-              value: {{ .Values.template.displayName | default "" | quote }}
+              value: {{ $j.template.displayName | default "" | quote }}
             - name: TEMPLATE_ICON
-              value: {{ .Values.template.icon | default "" | quote }}
+              value: {{ $j.template.icon | default "" | quote }}
             - name: PUSH_MESSAGE
-              value: {{ printf "Deployed via Helm release %s" .Release.Name | quote }}
+              value: {{ $j.message | quote }}
             - name: CODER_SESSION_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.coder.tokenSecret | quote }}
+                  name: {{ $.Values.coder.tokenSecret | quote }}
                   key: token
                   optional: true
             - name: CODER_EMAIL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.initAuth | quote }}
+                  name: {{ $.Values.secrets.initAuth | quote }}
                   key: email
                   optional: true
             - name: CODER_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.initAuth | quote }}
+                  name: {{ $.Values.secrets.initAuth | quote }}
                   key: password
                   optional: true
           volumeMounts:
@@ -116,7 +129,7 @@ spec:
               readOnly: true
       containers:
         - name: coder-cli
-          image: {{ .Values.cliImage }}
+          image: {{ $.Values.cliImage }}
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -142,10 +155,14 @@ spec:
               TEMPLATE="$(cat /shared/template)"
               coder templates push "${TEMPLATE}" \
                 --directory "${WORKSPACE}" \
-                --message "Deployed via Helm release {{ .Release.Name }}" \
-                --variable namespace="{{ .Values.namespace | default "coder" }}" \
-                --variable home_storage_class="{{ .Values.storageClass | default "" }}" \
-                {{- with .Values.global.clusterAccess }}{{ if .enabled }}
+                --message {{ $j.message | quote }} \
+                --variable app_set="{{ $j.appSet }}" \
+                {{- with $j.image }}
+                --variable workspace_image="{{ . }}" \
+                {{- end }}
+                --variable namespace="{{ $.Values.namespace | default "coder" }}" \
+                --variable home_storage_class="{{ $.Values.storageClass | default "" }}" \
+                {{- with $.Values.global.clusterAccess }}{{ if .enabled }}
                 --variable cluster_oidc_issuer="{{ $.Values.global.oidc.issuerUrl | default (printf "https://keycloak.%s/realms/master" $.Values.global.domain) }}" \
                 --variable cluster_oidc_client_id="{{ .clientId }}" \
                 --variable cluster_admin_roles="{{ .adminRoles }}" \
@@ -177,7 +194,8 @@ spec:
             medium: Memory
         - name: tf-code
           configMap:
-            name: {{ include "coder-workspace.prefix" . }}-terraform
+            name: {{ include "coder-workspace.prefix" $ }}-terraform
         - name: tls-ca
           secret:
-            secretName: {{ .Values.secrets.tlsCa | quote }}
+            secretName: {{ $.Values.secrets.tlsCa | quote }}
+{{- end }}

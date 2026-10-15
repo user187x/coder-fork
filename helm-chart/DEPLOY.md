@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.38.1.tar.gz && cd coder-airgapped-1.38.1
+tar -xzf coder-airgapped-1.39.0.tar.gz && cd coder-airgapped-1.39.0
 ./make --deploy
 ```
 
@@ -38,8 +38,8 @@ just the layers their previous version lacks; Traefik, CloudNativePG, the Gatewa
 images are not in it at all.
 
 ```bash
-sha256sum -c coder-airgapped-1.38.1-layer.tar.gz.sha256
-tar -xzf coder-airgapped-1.38.1-layer.tar.gz && cd coder-airgapped-1.38.1
+sha256sum -c coder-airgapped-1.39.0-layer.tar.gz.sha256
+tar -xzf coder-airgapped-1.39.0-layer.tar.gz && cd coder-airgapped-1.39.0
 ./layer-support info                                   # what it carries, and what the cluster must have
 ./make --deploy                                        # asks for the folder you installed from
 ```
@@ -148,6 +148,32 @@ STORAGE_CLASS=... ./make --argocd harbor.example.com/coder-airgapped --yes`.
 
 The steps below are the same install done by hand.
 
+### Updating an Argo CD install: the decorator update
+
+A cluster that runs an earlier release this way needs only the fork's Coder image and the two charts to move on, not
+the whole bundle: each release also ships `coder-airgapped-<version>-decorator-update.tar.gz` (about 300 MB; built
+by `development/tools/build-decorator-update.sh`). It carries `images/` (the fork's Coder image), `charts/`
+(`coder-airgapped-base` and `coder-airgapped-layer`), `update-application.sh` and a README listing the images that
+changed since the previous release. The third-party charts and images and the workspace image are those already in
+your registry; so is everything else, unless the README lists it.
+
+```bash
+sha256sum -c coder-airgapped-<version>-decorator-update.tar.gz.sha256
+tar -xzf coder-airgapped-<version>-decorator-update.tar.gz && cd coder-airgapped-<version>-decorator-update
+./update-application.sh --app /path/to/your-application.yaml --dry-run     # what would change
+./update-application.sh --app /path/to/your-application.yaml --push --apply
+```
+
+`--push` loads the image and pushes it to `<registry>/user187x/coder-platform:<tag>` (`global.registry` in your
+file, or `--registry <harbor>/<project>`) and pushes both charts to your Application's chart repository (docker and
+helm logged in as for the install; `HELM_PUSH_ARGS="--ca-file ca.crt"` for a private CA helm does not trust).
+`--apply` points both sources at the new version (keeping your file as `<file>.<time>.bak`, comments and all),
+applies it and asks Argo CD to refresh; Coder restarts on the new image with no gap. The ubuntu-dataflow template
+(Apache NiFi and Airflow) runs on its own image, which the update does not carry: the helper turns that template off
+(`coder-workspace.dataflowTemplate.enabled: false`) unless you give it the image (`--dataflow keep` when it is in
+your registry, `--dataflow <image>` for another). Back: restore the `.bak` file and apply it. The full bundle carries
+the same helper (`argocd/update-application.sh`).
+
 ---
 
 ## By hand
@@ -186,8 +212,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.38.1.tar.gz
-cd coder-airgapped-1.38.1
+tar -xzf coder-airgapped-1.39.0.tar.gz
+cd coder-airgapped-1.39.0
 ./mirror-images.sh list
 ```
 
@@ -198,14 +224,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.38.1` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.39.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.38.1
+cd coder-airgapped-1.39.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -277,8 +303,8 @@ You are the Coder admin (owner).
 
 **Change the password now:** your avatar › **Account** › **Security**. (Later syncs never reset it.)
 
-Everyone else clicks **Sign in with your certificate** and logs in with Keycloak; they get a normal account. The
-admin can make others admins in **Admin settings › Users**. The banner starts empty – publish one at
+Everyone else clicks the **Keycloak logo** on the sign-in page and logs in with Keycloak; they get a normal account.
+The admin can make others admins in **Settings › Admin Controls › Users**. The banner starts empty – publish one at
 `https://coder.<your-domain>/__banner/admin`.
 
 Then give the image builder its base image (Templates › Images builds on the workspace image, from its own

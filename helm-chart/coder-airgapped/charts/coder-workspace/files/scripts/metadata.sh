@@ -63,19 +63,43 @@ disk_host() {
  _gb "$used" "$total"
 }
 
+# Whether process $1 belongs to the metrics: it is one of these scripts (run by the agent as `bash -c` with this file's
+# text) or was started by one (coder stat, awk, du, date...), seen in its ancestors' command lines.
+_metric_process() {
+ local p=$1 s i
+ local -a args
+ for i in 1 2 3 4 5 6 7 8; do
+  [ "$p" -gt 1 ] 2>/dev/null || return 1
+  mapfile -d '' -t args <"/proc/$p/cmdline" 2>/dev/null || return 1
+  [[ ${args[*]:1} == *"The workspace's metrics (the metadata of coder_agent.main"* ]] && return 0
+  { read -r s <"/proc/$p/stat"; } 2>/dev/null || return 1
+  s=${s##*) } # after the command's name: the state, then the parent's PID
+  set -- $s
+  p=$2
+ done
+ return 1
+}
+
 # The workspace's own 1-minute load average, over its CPU limit. /proc/loadavg is the node's (load_host), so this
 # counts the way the kernel does, from the workspace's processes alone (the container has its own process list): the
 # threads running or waiting for a CPU (state R) or in uninterruptible sleep (D), five samples a tenth of a second
 # apart, folded into an exponentially decaying average with the kernel's 1-minute weight (e^(-seconds/60)), kept
-# between runs in /tmp. The first run, or one after a long gap, starts from the sample.
+# between runs in /tmp. The first run, or one after a long gap, starts from the sample. The metrics themselves are left
+# out (_metric_process): the agent starts all of them at the same moment, so this one's samples always met the others
+# starting (about two threads), which read as 100% of an idle 2-core workspace.
 load() {
- local f s n=0 i state=/tmp/.coder-metadata-load prev_time="" prev_avg=""
+ local f s n=0 i pid state=/tmp/.coder-metadata-load prev_time="" prev_avg=""
  for i in 1 2 3 4 5; do
   for f in /proc/[0-9]*/task/[0-9]*/stat; do
    [[ $f == "/proc/$BASHPID/"* ]] && continue # this shell, busy counting
    { read -r s <"$f"; } 2>/dev/null || continue
    s=${s##*) } # the fields after the command's name: the state first
-   case $s in R* | D*) n=$((n + 1)) ;; esac
+   case $s in
+   R* | D*)
+    pid=${f#/proc/}
+    _metric_process "${pid%%/*}" || n=$((n + 1))
+    ;;
+   esac
   done
   [ "$i" -lt 5 ] && sleep 0.1
  done

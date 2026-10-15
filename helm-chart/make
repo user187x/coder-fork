@@ -458,7 +458,7 @@ summary() {
 	step "Done"
 	bold "    Coder:    ${url}"
 	say "Admin:    admin@admin.com / admin   (change the password: avatar > Account > Security)"
-	say "Others:   'Sign in with your certificate' -> Keycloak (${OIDC_ISSUER%/realms/*})"
+	say "Others:   the Keycloak logo on the sign-in page -> Keycloak (${OIDC_ISSUER%/realms/*})"
 	[[ "$TARGET" == minikube && "$KEYCLOAK" == dev ]] &&
 		say "Keycloak admin: admin / \$(kubectl -n keycloak get secret keycloak-initial-admin -o jsonpath='{.data.password}' | base64 -d)"
 	say "CA:       ${CA_PEM}  (browsers must trust it)"

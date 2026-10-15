@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The workspace's startup script (coder_agent.main in ../main.tf): the shell defaults, the cluster sign-in for admins,
-# the desktop and the apps (code-server, File Browser, marimo). Runs at every start; each step is safe to repeat.
+# the desktop and the apps (code-server, File Browser, marimo; or, in the ubuntu-dataflow template, Apache NiFi and
+# Apache Airflow in place of code-server and marimo). Runs at every start; each step is safe to repeat.
 # The .tf file renders this with templatefile(), so Terraform template syntax applies here: a shell variable in
 # braces is written with two dollar signs ($${HOME}), and a percent sign before a brace is doubled (%%{).
 set -e
@@ -13,6 +14,8 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
+APP_SET='${app_set}'         # developer (code-server, marimo) or dataflow (Apache NiFi, Apache Airflow)
+ACCESS_HOST='${access_host}' # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
 # Path-based apps are proxied under this prefix ("main" = the agent's name).
 APPS="/@$OWNER_NAME/$WORKSPACE_NAME.main/apps"
 # One line per step, for the workspace page's Logs panel (the agent keeps this script's output, with the time).
@@ -184,25 +187,27 @@ if [ "$IMAGE_DESKTOP" != none ] && ! curl -s -o /dev/null http://127.0.0.1:6901/
  log "Desktop app (noVNC): started"
 fi
 
-# Windows of marimo notebooks (tkinter): a second, private X display (:2: no desktop, no window manager, on its
-# own Unix socket), sized by the notebook to the window it shows. coder_marimo_tk (marimo, below) opens tkinter
-# windows there and shows each one live in its cell's output: the minimal noVNC page below, through the hidden
-# app "marimo-windows" (websockify on 127.0.0.1:6902).
-APPS_SOCK=/tmp/coder-vnc/apps.sock
-if ! pgrep -f "^Xtigervnc :2 " >/dev/null; then
- rm -f "$APPS_SOCK" /tmp/.X2-lock /tmp/.X11-unix/X2
- touch ~/.Xauthority && chmod 600 ~/.Xauthority
- xauth -f ~/.Xauthority add :2 MIT-MAGIC-COOKIE-1 "$(mcookie)"
- Xtigervnc :2 -auth ~/.Xauthority -geometry 640x480 -depth 24 -rfbport -1 -rfbunixpath "$APPS_SOCK" \
-  -SecurityTypes None -AlwaysShared -FrameRate 60 -desktop marimo-windows >/tmp/xvnc-apps.log 2>&1 &
- for i in $(seq 1 50); do
-  [ -S "$APPS_SOCK" ] && break
-  sleep 0.2
- done
-fi
-APPS_WEB=/tmp/coder-vnc/apps-web
-mkdir -p "$APPS_WEB" && ln -sfn /usr/share/novnc/core "$APPS_WEB/core" && ln -sfn /usr/share/novnc/vendor "$APPS_WEB/vendor"
-cat <<'APPS_VIEW' >"$APPS_WEB/index.html"
+# (Not in the dataflow template: it has no marimo.)
+if [ "$APP_SET" != dataflow ]; then
+ # Windows of marimo notebooks (tkinter): a second, private X display (:2: no desktop, no window manager, on its
+ # own Unix socket), sized by the notebook to the window it shows. coder_marimo_tk (marimo, below) opens tkinter
+ # windows there and shows each one live in its cell's output: the minimal noVNC page below, through the hidden
+ # app "marimo-windows" (websockify on 127.0.0.1:6902).
+ APPS_SOCK=/tmp/coder-vnc/apps.sock
+ if ! pgrep -f "^Xtigervnc :2 " >/dev/null; then
+  rm -f "$APPS_SOCK" /tmp/.X2-lock /tmp/.X11-unix/X2
+  touch ~/.Xauthority && chmod 600 ~/.Xauthority
+  xauth -f ~/.Xauthority add :2 MIT-MAGIC-COOKIE-1 "$(mcookie)"
+  Xtigervnc :2 -auth ~/.Xauthority -geometry 640x480 -depth 24 -rfbport -1 -rfbunixpath "$APPS_SOCK" \
+   -SecurityTypes None -AlwaysShared -FrameRate 60 -desktop marimo-windows >/tmp/xvnc-apps.log 2>&1 &
+  for i in $(seq 1 50); do
+   [ -S "$APPS_SOCK" ] && break
+   sleep 0.2
+  done
+ fi
+ APPS_WEB=/tmp/coder-vnc/apps-web
+ mkdir -p "$APPS_WEB" && ln -sfn /usr/share/novnc/core "$APPS_WEB/core" && ln -sfn /usr/share/novnc/vendor "$APPS_WEB/vendor"
+ cat <<'APPS_VIEW' >"$APPS_WEB/index.html"
 <!doctype html>
 <html><head><meta charset="utf-8"><title>marimo window</title>
 <style>html,body{margin:0;height:100%;overflow:hidden;background:#fff}#screen{width:100%;height:100%}
@@ -228,28 +233,31 @@ const connect = () => {
 connect();
 </script></body></html>
 APPS_VIEW
-# (By its port: pgrep -f would match this script, whose text contains the pattern.)
-if ! curl -s -o /dev/null http://127.0.0.1:6902/; then
- websockify --web="$APPS_WEB" --unix-target="$APPS_SOCK" 127.0.0.1:6902 >/tmp/novnc-apps.log 2>&1 &
+ # (By its port: pgrep -f would match this script, whose text contains the pattern.)
+ if ! curl -s -o /dev/null http://127.0.0.1:6902/; then
+  websockify --web="$APPS_WEB" --unix-target="$APPS_SOCK" 127.0.0.1:6902 >/tmp/novnc-apps.log 2>&1 &
+ fi
 fi
 
 # 2. code-server: the workspace image's (1.8.0 and later), so it works without internet. Downloaded only on an
 # image without it, which needs internet (it is skipped, with a note in the log, when there is none).
-CODE_SERVER="$(command -v code-server || true)"
-if [ -z "$CODE_SERVER" ]; then
- if [ ! -x /tmp/code-server/bin/code-server ]; then
-  curl -fsSL --max-time 60 https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=/tmp/code-server ||
-   echo "code-server is not in this image and could not be downloaded: skipped"
+if [ "$APP_SET" != dataflow ]; then
+ CODE_SERVER="$(command -v code-server || true)"
+ if [ -z "$CODE_SERVER" ]; then
+  if [ ! -x /tmp/code-server/bin/code-server ]; then
+   curl -fsSL --max-time 60 https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=/tmp/code-server ||
+    echo "code-server is not in this image and could not be downloaded: skipped"
+  fi
+  CODE_SERVER=/tmp/code-server/bin/code-server
  fi
- CODE_SERVER=/tmp/code-server/bin/code-server
-fi
-# Probe the port rather than pgrep -f: the agent runs this script as `sh -c '<script>'`,
-# so `pgrep -f` matches the script's own command line and never starts anything.
-if [ -x "$CODE_SERVER" ] && ! curl -fs http://localhost:13337/healthz >/dev/null; then
- "$CODE_SERVER" --auth none --port 13337 --disable-telemetry --disable-update-check >/tmp/code-server.log 2>&1 &
- log "code-server: started (log: /tmp/code-server.log)"
-elif [ -x "$CODE_SERVER" ]; then
- log "code-server: running already"
+ # Probe the port rather than pgrep -f: the agent runs this script as `sh -c '<script>'`,
+ # so `pgrep -f` matches the script's own command line and never starts anything.
+ if [ -x "$CODE_SERVER" ] && ! curl -fs http://localhost:13337/healthz >/dev/null; then
+  "$CODE_SERVER" --auth none --port 13337 --disable-telemetry --disable-update-check >/tmp/code-server.log 2>&1 &
+  log "code-server: started (log: /tmp/code-server.log)"
+ elif [ -x "$CODE_SERVER" ]; then
+  log "code-server: running already"
+ fi
 fi
 
 # 3. File Browser: the workspace image's as well; downloaded only on an image without it (needs internet).
@@ -274,20 +282,21 @@ fi
 # notebooks run in ~/.marimo-venv, which sees all of /opt/marimo (a .pth file) and takes the packages they add
 # (pip or uv; with no network, only what is already there). It is (re)made when missing, when an older one installed
 # marimo itself from the internet, or when the image's Python changes.
-MARIMO_VENV=/home/coder/.marimo-venv
-MARIMO_BASE="$APPS/marimo"
-if [ -x /opt/marimo/bin/marimo ]; then
- MARIMO_STAMP="$(python3 -V) /opt/marimo $(/opt/marimo/bin/marimo --version)"
- if [ "$(cat "$MARIMO_VENV/.coder-workspace" 2>/dev/null)" != "$MARIMO_STAMP" ]; then
-  rm -rf "$MARIMO_VENV"
-  python3 -m venv "$MARIMO_VENV"
-  /opt/marimo/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' \
-   >"$("$MARIMO_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/coder-workspace-marimo.pth"
-  echo "$MARIMO_STAMP" >"$MARIMO_VENV/.coder-workspace"
- fi
- # tkinter windows show in the notebook and stop with marimo's Stop button: coder_marimo_tk, loaded through the .pth.
- MARIMO_SITE="$("$MARIMO_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
- cat <<'CODER_MARIMO_TK' >"$MARIMO_SITE/coder_marimo_tk.py"
+if [ "$APP_SET" != dataflow ]; then
+ MARIMO_VENV=/home/coder/.marimo-venv
+ MARIMO_BASE="$APPS/marimo"
+ if [ -x /opt/marimo/bin/marimo ]; then
+  MARIMO_STAMP="$(python3 -V) /opt/marimo $(/opt/marimo/bin/marimo --version)"
+  if [ "$(cat "$MARIMO_VENV/.coder-workspace" 2>/dev/null)" != "$MARIMO_STAMP" ]; then
+   rm -rf "$MARIMO_VENV"
+   python3 -m venv "$MARIMO_VENV"
+   /opt/marimo/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' \
+    >"$("$MARIMO_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/coder-workspace-marimo.pth"
+   echo "$MARIMO_STAMP" >"$MARIMO_VENV/.coder-workspace"
+  fi
+  # tkinter windows show in the notebook and stop with marimo's Stop button: coder_marimo_tk, loaded through the .pth.
+  MARIMO_SITE="$("$MARIMO_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+  cat <<'CODER_MARIMO_TK' >"$MARIMO_SITE/coder_marimo_tk.py"
 """Workspace template: tkinter windows in marimo notebooks show in the notebook, and stop with its Stop button.
 
 In a marimo kernel (marimo imported before tkinter) and with the template's settings in the environment:
@@ -426,45 +435,151 @@ class _Finder(importlib.abc.MetaPathFinder):
 if not any(isinstance(f, _Finder) for f in sys.meta_path):
     sys.meta_path.insert(0, _Finder())
 CODER_MARIMO_TK
- grep -qx "import coder_marimo_tk" "$MARIMO_SITE/coder-workspace-marimo.pth" 2>/dev/null ||
-  echo "import coder_marimo_tk" >>"$MARIMO_SITE/coder-workspace-marimo.pth"
- # marimo installs missing packages with the manager in its settings: one that is not installed here (pixi, rye,
- # poetry) cannot work, so it falls back to uv (in /opt/marimo). An installed choice is kept.
- MARIMO_TOML=~/.config/marimo/marimo.toml
- for m in pixi rye poetry; do
-  if grep -qx "manager = \"$m\"" "$MARIMO_TOML" 2>/dev/null && ! command -v "$m" >/dev/null; then
-   sed -i "s/^manager = \"$m\"$/manager = \"uv\"/" "$MARIMO_TOML"
-  fi
- done
- # marimo's dark theme by default: set once per user (a later change in marimo's settings is kept).
- if [ ! -e ~/.config/marimo/.coder-workspace-dark ]; then
-  mkdir -p ~/.config/marimo
-  /opt/marimo/bin/python - "$MARIMO_TOML" <<'MARIMO_DARK' && touch ~/.config/marimo/.coder-workspace-dark
+  grep -qx "import coder_marimo_tk" "$MARIMO_SITE/coder-workspace-marimo.pth" 2>/dev/null ||
+   echo "import coder_marimo_tk" >>"$MARIMO_SITE/coder-workspace-marimo.pth"
+  # marimo installs missing packages with the manager in its settings: one that is not installed here (pixi, rye,
+  # poetry) cannot work, so it falls back to uv (in /opt/marimo). An installed choice is kept.
+  MARIMO_TOML=~/.config/marimo/marimo.toml
+  for m in pixi rye poetry; do
+   if grep -qx "manager = \"$m\"" "$MARIMO_TOML" 2>/dev/null && ! command -v "$m" >/dev/null; then
+    sed -i "s/^manager = \"$m\"$/manager = \"uv\"/" "$MARIMO_TOML"
+   fi
+  done
+  # marimo's dark theme by default: set once per user (a later change in marimo's settings is kept).
+  if [ ! -e ~/.config/marimo/.coder-workspace-dark ]; then
+   mkdir -p ~/.config/marimo
+   /opt/marimo/bin/python - "$MARIMO_TOML" <<'MARIMO_DARK' && touch ~/.config/marimo/.coder-workspace-dark
 import os, sys, tomlkit
 path = sys.argv[1]
 doc = tomlkit.parse(open(path).read()) if os.path.exists(path) else tomlkit.document()
 doc.setdefault("display", tomlkit.table())["theme"] = "dark"
 open(path, "w").write(tomlkit.dumps(doc))
 MARIMO_DARK
- fi
- mkdir -p /home/coder/notebooks
- # --no-token: no marimo login page. marimo listens on 127.0.0.1 only, so the Coder agent's
- # proxy is the only way in, and the app is share = "owner": Coder decides who gets in.
- # /opt/marimo/bin on PATH: uv and ruff for marimo; pip and uv give up quickly with no network.
- # DISPLAY: GUI windows of other libraries show on the workspace's desktop (display :1, the Desktop app);
- # without a display they fail with "no $DISPLAY". tkinter windows show in the notebook instead
- # (CODER_MARIMO_TK_*: coder_marimo_tk, the private display :2 and the app "marimo-windows").
- if ! curl -fs "http://localhost:2718$MARIMO_BASE/health" >/dev/null; then
-  DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority CODER_MARIMO_TK_DISPLAY=:2 \
-   CODER_MARIMO_TK_VIEW="$APPS/marimo-windows/" \
-   PATH="$MARIMO_VENV/bin:/opt/marimo/bin:$PATH" PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_RETRIES=0 PIP_TIMEOUT=10 \
-   UV_HTTP_TIMEOUT=10 "$MARIMO_VENV/bin/python" -m marimo edit --headless --host 127.0.0.1 --port 2718 \
-   --no-token --skip-update-check --base-url "$MARIMO_BASE" /home/coder/notebooks >/tmp/marimo.log 2>&1 &
-  log "marimo: started (log: /tmp/marimo.log)"
+  fi
+  mkdir -p /home/coder/notebooks
+  # --no-token: no marimo login page. marimo listens on 127.0.0.1 only, so the Coder agent's
+  # proxy is the only way in, and the app is share = "owner": Coder decides who gets in.
+  # /opt/marimo/bin on PATH: uv and ruff for marimo; pip and uv give up quickly with no network.
+  # DISPLAY: GUI windows of other libraries show on the workspace's desktop (display :1, the Desktop app);
+  # without a display they fail with "no $DISPLAY". tkinter windows show in the notebook instead
+  # (CODER_MARIMO_TK_*: coder_marimo_tk, the private display :2 and the app "marimo-windows").
+  if ! curl -fs "http://localhost:2718$MARIMO_BASE/health" >/dev/null; then
+   DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority CODER_MARIMO_TK_DISPLAY=:2 \
+    CODER_MARIMO_TK_VIEW="$APPS/marimo-windows/" \
+    PATH="$MARIMO_VENV/bin:/opt/marimo/bin:$PATH" PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_RETRIES=0 PIP_TIMEOUT=10 \
+    UV_HTTP_TIMEOUT=10 "$MARIMO_VENV/bin/python" -m marimo edit --headless --host 127.0.0.1 --port 2718 \
+    --no-token --skip-update-check --base-url "$MARIMO_BASE" /home/coder/notebooks >/tmp/marimo.log 2>&1 &
+   log "marimo: started (log: /tmp/marimo.log)"
+  else
+   log "marimo: running already"
+  fi
  else
-  log "marimo: running already"
+  log "marimo is not in this image (/opt/marimo): skipped"
  fi
-else
- log "marimo is not in this image (/opt/marimo): skipped"
 fi
+
+# 5. Apache NiFi and Apache Airflow: the ubuntu-dataflow template's apps, in place of code-server and marimo, with no
+# network. The workspace image has both: /opt/nifi (its NARs unpacked there, read-only) and /opt/airflow.
+if [ "$APP_SET" = dataflow ]; then
+ # NiFi: from /opt/nifi as the image installed it (its NARs unpacked there, read-only); everything it writes is a
+ # link into ~/.nifi: conf (the image's, the first time; then the user's flows and settings), logs, state,
+ # repositories, work areas. Unsecured HTTP on 127.0.0.1:8080, for this workspace only (the app is its owner's
+ # alone). nginx (127.0.0.1:8081, the app's URL) tells NiFi the app's path, so its pages and API calls go through
+ # Coder's proxy.
+ if [ -x /opt/nifi/bin/nifi.sh ]; then
+  NIFI_HOME=/home/coder/.nifi
+  mkdir -p "$NIFI_HOME"
+  (cd "$NIFI_HOME" && mkdir -p logs run state database_repository flowfile_repository content_repository \
+   provenance_repository status_repository nar_repository assets connector_assets diagnostics \
+   work/uploads work/python work/jetty work/docs)
+  if [ ! -f "$NIFI_HOME/conf/nifi.properties" ]; then
+   cp -r /opt/nifi/conf.dist "$NIFI_HOME/conf"
+   # A key of its own for the flows' sensitive properties (kept with them).
+   NIFI_KEY="$(head -c 32 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 32)"
+   sed -i "s|^nifi.sensitive.props.key=.*|nifi.sensitive.props.key=$NIFI_KEY|" "$NIFI_HOME/conf/nifi.properties"
+  fi
+  # Its path and Coder's host, every start: renaming the workspace changes the path.
+  sed -i -e "s|^nifi.web.proxy.context.path=.*|nifi.web.proxy.context.path=$APPS/nifi|" \
+   -e "s|^nifi.web.proxy.host=.*|nifi.web.proxy.host=$ACCESS_HOST,$ACCESS_HOST:443|" "$NIFI_HOME/conf/nifi.properties"
+  if ! curl -fs http://127.0.0.1:8080/nifi-api/flow/about >/dev/null; then
+   JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 /opt/nifi/bin/nifi.sh start </dev/null >/tmp/nifi-start.log 2>&1
+   log "Apache NiFi: starting (log: ~/.nifi/logs/nifi-app.log)"
+  else
+   log "Apache NiFi: running already"
+  fi
+  cat >"$NIFI_HOME/nginx.conf" <<NGINX
+pid $NIFI_HOME/run/nginx.pid;
+error_log $NIFI_HOME/logs/nginx.log;
+events {}
+http {
+  access_log off;
+  client_body_temp_path /tmp/nginx-body;
+  proxy_temp_path /tmp/nginx-proxy;
+  fastcgi_temp_path /tmp/nginx-fcgi;
+  uwsgi_temp_path /tmp/nginx-uwsgi;
+  scgi_temp_path /tmp/nginx-scgi;
+  server {
+    listen 127.0.0.1:8081;
+    # Redirects as paths: the browser is on Coder's host, not this one.
+    absolute_redirect off;
+    # The app's root (its button, a panel): NiFi's UI, under the app's path.
+    location = / {
+      return 302 $APPS/nifi/nifi/;
+    }
+    location / {
+      proxy_pass http://127.0.0.1:8080;
+      proxy_set_header Host 127.0.0.1:8080;
+      proxy_set_header X-ProxyContextPath $APPS/nifi;
+      proxy_set_header X-ProxyScheme https;
+      proxy_set_header X-ProxyHost $ACCESS_HOST;
+      proxy_set_header X-ProxyPort 443;
+      proxy_http_version 1.1;
+      proxy_buffering off;
+      proxy_read_timeout 1h;
+      client_max_body_size 0;
+    }
+  }
+}
+NGINX
+  if [ -f "$NIFI_HOME/run/nginx.pid" ] && kill -0 "$(cat "$NIFI_HOME/run/nginx.pid")" 2>/dev/null; then
+   nginx -c "$NIFI_HOME/nginx.conf" -e "$NIFI_HOME/logs/nginx.log" -s reload </dev/null >/dev/null 2>&1
+  else
+   # Its output not left on the agent's (a daemon holding it keeps the script from ending: a start error).
+   nginx -c "$NIFI_HOME/nginx.conf" -e "$NIFI_HOME/logs/nginx.log" </dev/null >/dev/null 2>&1
+   log "nginx for NiFi: started"
+  fi
+ else
+  log "Apache NiFi is not in this image (/opt/nifi): skipped"
+ fi
+
+ # Airflow: standalone (its API server, scheduler, DAG processor and triggerer; SQLite in ~/airflow) under the full
+ # app path (base_url), every user an admin (the app is its owner's alone), with Airflow's example DAGs. The same
+ # settings in ~/.airflowrc for the airflow command in terminals.
+ if [ -x /opt/airflow/bin/airflow ]; then
+  AIRFLOW_BASE="$APPS/airflow"
+  cat >/home/coder/.airflowrc <<AIRFLOWRC
+export AIRFLOW_HOME=/home/coder/airflow
+export AIRFLOW__API__HOST=127.0.0.1
+export AIRFLOW__API__PORT=8090
+export AIRFLOW__API__WORKERS=1
+export AIRFLOW__API__BASE_URL=https://$ACCESS_HOST$AIRFLOW_BASE
+export AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://127.0.0.1:8090$AIRFLOW_BASE/execution/
+export AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=True
+export AIRFLOW__CORE__LOAD_EXAMPLES=True
+export PATH="/opt/airflow/bin:\$PATH"
+AIRFLOWRC
+  grep -qs "airflowrc" /home/coder/.bashrc || echo '[ -f ~/.airflowrc ] && . ~/.airflowrc' >>/home/coder/.bashrc
+  if ! curl -fs "http://127.0.0.1:8090$AIRFLOW_BASE/api/v2/monitor/health" >/dev/null; then
+   # The whole subshell redirected (and exec'd): a background job holding the agent's output keeps the script from
+   # ending (a start error).
+   (. /home/coder/.airflowrc && mkdir -p "$AIRFLOW_HOME/dags" && exec airflow standalone) </dev/null >/tmp/airflow.log 2>&1 &
+   log "Apache Airflow: starting (log: /tmp/airflow.log)"
+  else
+   log "Apache Airflow: running already"
+  fi
+ else
+  log "Apache Airflow is not in this image (/opt/airflow): skipped"
+ fi
+fi
+
 log "Startup done: the apps open once they answer their health checks"

@@ -6,13 +6,13 @@ announcement banner and a full-featured workspace template, packaged as **one He
 every container image it needs**. Nothing is downloaded during the install, and nothing at run time reaches outside
 your network.
 
-| | Current release: [**v1.38.1**](https://github.com/user187x/coder-fork/releases/latest) |
+| | Current release: [**v1.39.0**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
-| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.43-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
+| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.44-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.8.5` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
 | Image tools | `ghcr.io/user187x/coder-image-tools:1.0.0` (the platform service, BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
-| Bundle | 17 images pinned by digest, ~4 GB (`-slim`: the 4 custom images only, ~2.6 GB); `-layer`: the update for a cluster at the previous release, only what changed (often a few MB) |
+| Bundle | 17 images pinned by digest, ~4 GB (`-slim`: the 4 custom images only, ~2.6 GB); `-layer`: the update for a cluster at the previous release, only what changed (often a few MB); `-decorator-update`: an Argo CD decorator install's update, the Coder image and both charts (~300 MB) |
 
 **Contents:** [Quick start](#quick-start) · [Architecture](#architecture) · [Features](#features) ·
 [Security](#security) · [Testing and verification](#testing-and-verification) · [Build a release](#build-a-release) ·
@@ -26,11 +26,11 @@ your network.
 Download the release's parts, verify and join them, then install from inside the air-gapped network:
 
 ```bash
-sha256sum -c coder-airgapped-1.38.1.parts.sha256           # every part: OK
-cat coder-airgapped-1.38.1.tar.gz.part-0* > coder-airgapped-1.38.1.tar.gz
-sha256sum -c coder-airgapped-1.38.1.tar.gz.sha256          # the bundle: OK
+sha256sum -c coder-airgapped-1.39.0.parts.sha256           # every part: OK
+cat coder-airgapped-1.39.0.tar.gz.part-0* > coder-airgapped-1.39.0.tar.gz
+sha256sum -c coder-airgapped-1.39.0.tar.gz.sha256          # the bundle: OK
 
-tar -xzf coder-airgapped-1.38.1.tar.gz && cd coder-airgapped-1.38.1
+tar -xzf coder-airgapped-1.39.0.tar.gz && cd coder-airgapped-1.39.0
 ./make --deploy
 ```
 
@@ -48,9 +48,9 @@ images changed since the previous release, our own ones as thin deltas of the im
 no third-party chart or image. Carry that one file across instead of the whole bundle:
 
 ```bash
-sha256sum -c coder-airgapped-1.38.1-layer.tar.gz.sha256
-tar -xzf coder-airgapped-1.38.1-layer.tar.gz && cd coder-airgapped-1.38.1
-PREVIOUS=../coder-airgapped-1.38.0 ./make --deploy      # the folder you installed from (its .deploy settings)
+sha256sum -c coder-airgapped-1.39.0-layer.tar.gz.sha256
+tar -xzf coder-airgapped-1.39.0-layer.tar.gz && cd coder-airgapped-1.39.0
+PREVIOUS=../coder-airgapped-1.38.1 ./make --deploy      # the folder you installed from (its .deploy settings)
 ```
 
 It first checks that the cluster has what the layer does not carry: Coder installed from a full bundle, Traefik,
@@ -58,6 +58,20 @@ CloudNativePG, the Gateway API CRDs and (Minikube) Keycloak at this release's ve
 on the nodes or in your registry. If anything is missing it says what, changes nothing, and the full bundle is the
 way. A thin image is made whole again from its base image, every layer checked by its digest. `./layer-support info`
 in the extracted folder lists what the layer carries and needs.
+
+**Installed with Argo CD (the decorator install)?** Its update is smaller still:
+`coder-airgapped-<version>-decorator-update.tar.gz` (~300 MB) carries only the fork's Coder image and the two charts,
+with `update-application.sh`, which pushes them to your Harbor and moves your existing Application to the new
+version (it shows the change and keeps your file as a backup):
+
+```bash
+sha256sum -c coder-airgapped-1.39.0-decorator-update.tar.gz.sha256
+tar -xzf coder-airgapped-1.39.0-decorator-update.tar.gz && cd coder-airgapped-1.39.0-decorator-update
+./update-application.sh --app /path/to/your-application.yaml --push --apply
+```
+
+The ubuntu-dataflow template's image (Apache NiFi and Airflow) is not in it: the helper keeps that template off
+unless you give it the image (`--dataflow`). See [DEPLOY.md](helm-chart/DEPLOY.md#updating-an-argo-cd-install-the-decorator-update).
 
 **Argo CD, with the customization layer as a decorator.** The bundle also installs as two charts in one Argo CD
 Application (`argocd/`):
@@ -142,7 +156,10 @@ The full feature list, with where each piece lives and how it is tested, is
   login), with the cluster-admin group kept equal to Coder's owners.
 - A sign-in page with the deployment's name as a traced outline, background images and animated backgrounds; its
   title, text effect (traced outline, neon or plain), colour, speed and messages (one for signing in, one for right
-  after signing out) are set in Customize.
+  after signing out) are set in Customize. The Keycloak button is Keycloak's logo (no text, no footer).
+- **Settings › SSH keys:** Regenerate Key as RSA (4096-bit) or ED25519, or use the `.p12`'s key (P12).
+- **Home disk:** Expand disk from the workspace's ⋮ menu or under Home disk size in its parameters (volume expansion
+  where the storage class allows it, else a copy onto a bigger volume); backups to a download or S3.
 
 ### Workspaces
 
@@ -206,15 +223,27 @@ The full feature list, with where each piece lives and how it is tested, is
 ### Administration and monitoring
 
 - **HUD:** a live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users,
-  failures) and the Coder server's **System Uptime**.
+  failures) and the Coder server's **System Uptime**; its totals on one line. The Settings menu shows the cluster's
+  CPU, memory and network traffic (last 15 minutes) at a glance.
+- **Workspace settings** on one page of cards (General, Parameters, Schedule, Sharing).
+- **Two workspace templates:** UBUNTU (code-server, marimo) and UBUNTU DATAFLOW (Apache NiFi, Apache Airflow), the
+  same workspace otherwise; everything offline.
 - **Health, monitoring and security posture** views; network and persistence maps.
 - **Banners:** classification banners (e.g. UNCLASSIFIED), and an announcement banner with:
-  - effects: typewriter, crawl and fonts;
+  - its message on an LCD screen set into the banner, over a background image (uploaded or a preset; animated GIFs
+    too) that rolls through it, tiles, stretches, centers or fills it;
+  - an editor like a small word processor: plain text, font, an outline for legibility over any background, effect,
+    text and banner colours, emoji, alignment, a countdown shown as a split-flap clock at the banner's left;
+  - receipts (Viewed, Confirm) optional per announcement, and Clear all for their records;
+  - effects: typewriter, crawl, Pew-Pew, Split-Flap, Ghostwrite and more, and close transitions;
   - a "Viewed" receipt with the user's certificate fingerprint;
   - a terminal-style full view (with an easter egg or two).
 - **Inbox:** Clear all (asks twice) beside Mark all as read.
-- **Chat** between users and admins (with screenshots), and the admins' chat console.
-- Admin quick links, an arrangeable top bar, logo and avatars (uploaded, gallery, defaults).
+- **Chat** between users and admins (with screenshots), and the admins' chat console; **peer-to-peer chat** between
+  developers when admins turn it on (a People list of who is online or active today; anyone can be invisible but to
+  admins); chats kept 30 days by default (admins set it, and can purge them); admins see who talks to whom.
+- The **Settings** menu (Admin Controls and quick links), an arrangeable top bar, logo and avatars (uploaded, gallery,
+  defaults).
 - **Agent Activity** (optional): every command run in a workspace, for review.
 - metrics-server installed where the cluster has none.
 
@@ -369,11 +398,11 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **47/47** (1.38.1) |
-| Platform service unit tests | **33/33** (1.38.1) |
+| Static checks | **47/47** (1.39.0) |
+| Platform service unit tests | **33/33** (1.39.0) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Argo CD decorator install (`./make --argocd`; kind, egress blocked, Gateway API v1.6.0, Argo CD 3.5.2) | decorated: Synced / Healthy in ~3 min, **7/7**; layer off: **7/7** (upstream Coder, data kept); layer back: **7/7**, every volume the same (1.38.0) |
-| A real Harbor 2.15.2 with a private CA (`harbor-setup.sh`; installing machine: docker-in-docker, no images) | `./make --push-images`: CA trusted, project created, 11 images (all from the bundle) and 5 charts, all checked; a single-chart Argo CD install (robot account, Harbor's CA) migrated to the decorated one by `./make --argocd` in place: **23/23** objects kept, **7/7** (1.38.1) |
+| A real Harbor 2.15.2 with a private CA (`harbor-setup.sh`; installing machine: docker-in-docker, no images) | `./make --push-images`: CA trusted, project created, 11 images (all from the bundle) and 5 charts, all checked; a single-chart Argo CD install (robot account, Harbor's CA) migrated to the decorated one by `./make --argocd` in place: **23/23** objects kept, **7/7** (1.39.0) |
 | Live conformance | **76/76** (1.28.0) |
 | Load, ~1,050 dashboard tabs for 8 minutes | **0 errors** of 157,626 requests, worst p95 0.28 s, no restarts (1.28.0) |
 | Browser memory soak, 8 minutes | JS heap +0.3 MB; no external requests (1.28.0) |
@@ -396,6 +425,7 @@ cd development/tools/verify
 development/tools/build-workspace-image.sh             # the workspace image (offline checks, saved into the bundle)
 development/tools/build-airgap-image.sh 2.0.0-platform.31   # the fork's Coder image + Terraform provider mirror
 development/tools/build-bundle.sh                      # -> dist/coder-airgapped-<version>.tar.gz and -slim.tar.gz
+development/tools/build-decorator-update.sh            # -> dist/coder-airgapped-<version>-decorator-update.tar.gz
 ```
 
 Image archives are not in git: `images.txt` pins every image by digest, and `build-bundle.sh` fetches the missing

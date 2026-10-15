@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.43 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.44 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.43-airgap
+      tag: 2.0.0-platform.44-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -441,6 +441,14 @@ coder-workspace:
     name: ubuntu-vnc-desktop
     displayName: UBUNTU      # where the template has none (one set in the dashboard is kept)
     icon: /icon/ubuntu.svg
+  # The same workspace with Apache NiFi and Apache Airflow in place of code-server and marimo, on its own image.
+  dataflowTemplate:
+    enabled: true
+    name: ubuntu-dataflow
+    displayName: UBUNTU DATAFLOW
+    icon: /icon/ubuntu.svg
+  dataflowImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-dataflow:1.0.0") }}'
+
   icons:
     host: ""
     # Served by the platform service (coder-ui-updates); Traefik routes /__icons/ there. No separate web server.

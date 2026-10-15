@@ -41,7 +41,7 @@ def objects(render):
 
 def decorator_checks(B, chart, full_render):
     """The Argo CD decorator install: the two charts packaged from coder-airgapped, and its two Applications."""
-    import tempfile
+    import shutil, tempfile
     tmp = tempfile.mkdtemp(prefix="decorator-")
     rc, out, err = run([os.path.join(B, "mirror-images.sh"), "decorator-charts", tmp])
     pkgs = {p: next(iter(glob.glob(os.path.join(tmp, "coder-airgapped-%s-*.tgz" % p))), None) for p in ("base", "layer")}
@@ -271,9 +271,30 @@ def main():
 
     rc, out, err = run([sys.executable, "-m", "unittest", "discover", "-s", here, "-p", "platform_unit_test.py", "-q"])
     check("platform service unit tests", rc == 0, (err or out).strip().splitlines()[-1] if (err or out).strip() else "")
-    for sh in ("install.sh", "make", "mirror-images.sh", "minikube-support", "harbor-support", "argocd-support"):
+    for sh in ("install.sh", "make", "mirror-images.sh", "minikube-support", "harbor-support", "argocd-support",
+               "argocd/update-application.sh", "../development/tools/build-decorator-update.sh"):
         rc, _, err = run(["bash", "-n", os.path.join(B, sh)])
         check("shell syntax: %s" % sh, rc == 0, err.strip())
+    # The decorator update's helper, on this release's Application set back to an older release (a scratch copy, with
+    # empty stand-ins for the charts and the image): both sources move to this version, the dataflow template goes off,
+    # and the file still parses.
+    import shutil, tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        version = re.search(r"^version:\s*(\S+)", open(os.path.join(chart, "Chart.yaml")).read(), re.M).group(1)
+        os.makedirs(os.path.join(tmp, "charts")); os.makedirs(os.path.join(tmp, "images"))
+        for part in ("base", "layer"):
+            open(os.path.join(tmp, "charts", "coder-airgapped-%s-%s.tgz" % (part, version)), "w").close()
+        open(os.path.join(tmp, "images", "ghcr.io_user187x_coder-platform_0.0.0-test-airgap.tar.gz"), "w").close()
+        shutil.copy(os.path.join(B, "argocd", "update-application.sh"), tmp)
+        app = os.path.join(tmp, "app.yaml")
+        open(app, "w").write(open(os.path.join(B, "argocd", "coder-decorated-application.yaml")).read()
+                             .replace("targetRevision: %s" % version, "targetRevision: 0.0.1"))
+        rc, out, err = run(["bash", os.path.join(tmp, "update-application.sh"), "--app", app, "--dry-run"])
+        ok = rc == 0 and all(s in out for s in (
+            "coder-airgapped-base 0.0.1 -> %s" % version, "coder-airgapped-layer 0.0.1 -> %s" % version,
+            "dataflowTemplate.enabled: false"))
+        check("argocd/update-application.sh: updates an older Application (dry run)", ok,
+              (err or out).strip()[-300:] if not ok else "")
     # the layer bundle's helper (Python): compiles, and answers --help
     rc, out, err = run([sys.executable, os.path.join(B, "layer-support"), "--help"])
     check("layer-support: runs (--help)", rc == 0 and "layer-support build" in out, (err or "").strip()[-200:])

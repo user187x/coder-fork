@@ -12,13 +12,13 @@ The machine needs these installed:  docker, minikube, helm, kubectl
 
 1. UNPACK THE BUNDLE
 --------------------
-    tar -xzf coder-airgapped-1.38.1.tar.gz
-    cd coder-airgapped-1.38.1
+    tar -xzf coder-airgapped-1.39.0.tar.gz
+    cd coder-airgapped-1.39.0
 
 (The release on GitHub comes in two parts. Join them first:
-    sha256sum -c coder-airgapped-1.38.1.parts.sha256
-    cat coder-airgapped-1.38.1.tar.gz.part-0* > coder-airgapped-1.38.1.tar.gz
-    sha256sum -c coder-airgapped-1.38.1.tar.gz.sha256 )
+    sha256sum -c coder-airgapped-1.39.0.parts.sha256
+    cat coder-airgapped-1.39.0.tar.gz.part-0* > coder-airgapped-1.39.0.tar.gz
+    sha256sum -c coder-airgapped-1.39.0.tar.gz.sha256 )
 
 
 2. RUN THE INSTALLER
@@ -52,7 +52,7 @@ When it finishes it prints the URL. Open https://coder.<your-domain>
 
     Admin           admin@admin.com / admin
                     Change this password at once: avatar > Account > Security
-    Everyone else   "Sign in with your certificate" (through Keycloak)
+    Everyone else   the Keycloak logo on the sign-in page (their certificate)
 
 
 LATER

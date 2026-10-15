@@ -135,11 +135,11 @@ try {
 	// ---- SSH key from the .p12 (test deployments only: it replaces the admin's SSH key)
 	if (process.env.P12_FILE) {
 		await page.goto(`${URL}/settings/ssh-keys`);
-		await page.getByRole("link", { name: /Use P12/ }).click();
+		await page.getByRole("link", { name: /^P12$/ }).click();
 		await page.waitForURL((u) => u.pathname === "/settings/certificates", { timeout: 15000 });
 		const dialog = page.getByRole("dialog", { name: /SSH key/ });
 		await dialog.waitFor({ timeout: 15000 });
-		check("SSH keys > Use P12 opens the Certificates page's dialog", true);
+		check("SSH keys > P12 opens the Certificates page's dialog", true);
 		await dialog.locator('input[type="file"]').setInputFiles(process.env.P12_FILE);
 		const pw = dialog.getByLabel("Certificate password");
 		await pw.waitFor({ timeout: 15000 });

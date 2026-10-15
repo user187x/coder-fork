@@ -17,10 +17,12 @@
   POST /__coder-ui/api/inbox/clear        anyone: their own Inbox (the bell) emptied, every notification deleted
   GET  /__coder-ui/api/acks               admins: every announcement ("event") with who saw / confirmed it, who has not
   POST /__coder-ui/api/events/delete {"id": X}   admins: forget one announcement and its receipts
+  POST /__coder-ui/api/events/clear {}           admins: forget every announcement and all their receipts
 
   Network map (admins; nodes, pods and metrics read cluster-wide through the ClusterRole coder-ui-updates-<namespace>)
   GET  /__coder-ui/api/network            nodes (addresses, capacity, usage), Coder's pods, running workspaces per node
-  GET  /__coder-ui/api/cluster/usage      CPU / memory totals (allocatable, in use, requested, free): the Admin menu's bars
+  GET  /__coder-ui/api/cluster/usage      CPU / memory totals (allocatable, in use, requested, free) and the last 15 minutes
+                                         of the cluster's network traffic: the Settings menu's bars and graph
 
   Classification banner
   GET  /__coder-ui/api/classification     public (the marking shows on the sign-in page too)
@@ -46,6 +48,9 @@
        {slot}. html: an HTML / CSS background, served sandboxed (BG_HTML_CSP); params: its dials (speed, hue,
        saturation, brightness, blur) and, for a preset, the preset's settings
   GET  /__coder-ui/gallery/<file>?v=<sha>     one of them (public, like the default avatar)
+  POST /__coder-ui/api/banner-pictures {name, dataUrl}   admins: a picture for the announcement (PNG, JPEG, GIF - animated
+       too -, WebP, AVIF; at most 8 MB, stored as it is) -> {id, url}
+  GET  /__coder-ui/banner-picture/<id>        one of them (public: the sign-in page may show the banner; never changes)
 
   Chat (every signed-in user; admins in ADMIN_ROLES write to anyone, others to admins or whoever wrote to them;
         kept 30 days in SQLite)
@@ -1249,6 +1254,12 @@ class Store:
         with self.lock, self.connect() as db:
             db.execute("DELETE FROM receipts WHERE event_id=?", (event_id,))
             return db.execute("DELETE FROM events WHERE id=?", (event_id,)).rowcount
+
+    def clear_events(self):
+        """Every announcement's record and receipts (the live one's start again from nobody)."""
+        with self.lock, self.connect() as db:
+            db.execute("DELETE FROM receipts")
+            return db.execute("DELETE FROM events").rowcount
 
     def acked(self, event_id, user_id):
         return bool(self.receipt_times(event_id, user_id)[1])
@@ -3237,6 +3248,84 @@ def background_public(slot, bg):
 BACKGROUNDS = None
 
 
+# --------------------------------------------------------------------------- Announcement pictures (Coder's database)
+BANNER_PICTURE_TYPES = BG_TYPES  # PNG, JPEG, WebP, GIF (animated too), AVIF; stored exactly as uploaded
+BANNER_PICTURE_MAX_BYTES = 8 * 1024 * 1024
+BANNER_PICTURE_KEEP = 100  # the newest pictures kept; an older one goes when a new one comes
+BANNER_PICTURE_ID = re.compile(r"^[0-9a-f]{16}$")
+
+
+def parse_banner_picture(data_url):
+    """An uploaded picture for the announcement: (content type, bytes), its content checked against its type."""
+    m = re.match(r"^data:([a-z+/.-]+);base64,([A-Za-z0-9+/=\s]+)$", data_url or "")
+    if not m or m.group(1) not in BANNER_PICTURE_TYPES:
+        raise ValueError("Upload a PNG, JPEG, GIF, WebP or AVIF picture.")
+    data = base64.b64decode(m.group(2))
+    if not data or len(data) > BANNER_PICTURE_MAX_BYTES:
+        raise ValueError("The picture must be smaller than %d MB." % (BANNER_PICTURE_MAX_BYTES // 1048576))
+    if image_type(data) != m.group(1):
+        raise ValueError("The file is not a valid %s picture." % m.group(1).split("/")[1].upper())
+    return m.group(1), data
+
+
+class BannerPictureStore:
+    """Pictures admins upload for the announcement (General > Announcement > Insert picture): rows in
+    coder_ui_updates.banner_picture of Coder's own database, each named by its content's hash (the same file twice is
+    one picture) and served at /__coder-ui/banner-picture/<id>, publicly (the sign-in page may show the banner) and
+    for good (the address never changes what it shows). The newest BANNER_PICTURE_KEEP are kept."""
+
+    def __init__(self, logos):
+        self.logos = logos  # shares the logo store's connection to Coder's database
+        self.ready = False
+        self.lock = threading.Lock()
+
+    @property
+    def pool(self):
+        return self.logos.pool if self.logos else None
+
+    def _schema(self):
+        if self.ready:
+            return
+        self.pool.query("CREATE SCHEMA IF NOT EXISTS coder_ui_updates")
+        self.pool.query(
+            """CREATE TABLE IF NOT EXISTS coder_ui_updates.banner_picture (
+            id text PRIMARY KEY, content_type text NOT NULL, data bytea NOT NULL, name text NOT NULL,
+            created_by text, created_at timestamptz NOT NULL DEFAULT now())"""
+        )
+        self.ready = True
+
+    def put(self, ctype, data, name, user):
+        pid = hashlib.sha256(data).hexdigest()[:16]
+        with self.lock:
+            self._schema()
+            # Uploaded again: it is the newest again, so it is not the next to go.
+            self.pool.query(
+                """INSERT INTO coder_ui_updates.banner_picture (id, content_type, data, name, created_by)
+                VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET created_at = now(), name = excluded.name""",
+                [pid, ctype, data, name, user],
+            )
+            self.pool.query(
+                """DELETE FROM coder_ui_updates.banner_picture WHERE id NOT IN (
+                SELECT id FROM coder_ui_updates.banner_picture ORDER BY created_at DESC LIMIT $1)""",
+                [BANNER_PICTURE_KEEP],
+            )
+        return pid
+
+    def get(self, pid):
+        """(content type, bytes) or None."""
+        if not BANNER_PICTURE_ID.match(pid or ""):
+            return None
+        with self.lock:
+            self._schema()
+        rows = self.pool.query(
+            "SELECT content_type, data FROM coder_ui_updates.banner_picture WHERE id = $1", [pid]
+        )
+        return (rows[0][0], bytes(rows[0][1])) if rows else None
+
+
+BANNER_PICTURES = None
+
+
 # --------------------------------------------------------------------------- Template icons (Coder's database)
 ICON_MAX_BYTES = (
     1024 * 1024
@@ -5142,7 +5231,11 @@ def apply_persistence(fixes, raw_settings, user):
 
 # --------------------------------------------------------------------------- Chat (admins <-> users)
 CHAT_MAX_TEXT = 4000
-CHAT_KEEP_DAYS = 30
+CHAT_KEEP_DAYS = 30  # the default; admins set it (CHAT_KEEP_RANGE) in Admin Controls > Chat
+CHAT_KEEP_RANGE = (1, 365)
+CHAT_PRUNE_EVERY = 3600  # messages past the retention go every hour (and when it is changed)
+CHAT_ONLINE_SECONDS = 75  # every open tab's long poll comes back within CHAT_POLL_SECONDS: seen within this, online
+CHAT_ACTIVE_SECONDS = 86400  # Coder saw them within this: active today (the people list's second group)
 CHAT_TYPING_SECONDS = 6  # a "typing" signal lasts this long unless renewed (the dashboard renews it every 2.5 s)
 CHAT_POLL_SECONDS = 25  # a long poll answers at the latest after this, with nothing new
 CHAT_RATE = (30, 60)  # at most 30 messages per 60 seconds per sender
@@ -5155,12 +5248,15 @@ CHAT_MAX_IMAGE = (
 
 
 class ChatStore:
-    """Direct messages between admins and users: an admin starts a conversation from Admin > Users ("Chat"), or a user
-    writes to an admin from the Chats panel (their line to support); both answer in the window that opens on every Coder
-    page (the dashboard's chat). Admins may write to anyone; everyone else to admins, or to whoever wrote to them first. A message
-    may carry a screenshot (chat_files, read only by the two people in the conversation). Messages are kept CHAT_KEEP_DAYS days in the service's SQLite file
-    (its PersistentVolumeClaim). Typing signals live in memory only. A tab keeps one long poll open
-    (/api/chat/poll), answered as soon as a message or a typing change concerns its user.
+    """Direct messages: an admin starts a conversation from Admin > Users ("Chat"), or a user writes to an admin from the
+    Chats panel (their line to support); both answer in the window that opens on every Coder page (the dashboard's chat).
+    Admins may write to anyone; everyone else to admins, or to whoever wrote to them first, and, when the admins turn
+    peer-to-peer chat on (settings "peers"), to the other developers in the People list. A message may carry a
+    screenshot (chat_files, read only by the two people in the conversation). Messages are kept settings "keepDays" days
+    (admins set it; CHAT_KEEP_DAYS by default) in the service's SQLite file (its PersistentVolumeClaim), and admins may
+    purge them all. Who is online (a tab's poll in the last CHAT_ONLINE_SECONDS) and typing signals live in memory
+    only; a user may be invisible (chat_presence): left out of everyone's People list but admins'. A tab keeps one long
+    poll open (/api/chat/poll), answered as soon as a message or a typing change concerns its user.
     """
 
     def __init__(self, path):
@@ -5183,6 +5279,18 @@ class ChatStore:
         # (also boot time in ms) wakes every poll when it changes, so everyone's panel updates at once.
         self.off = set()
         self.avail_ver = int(time.time() * 1000)
+        # Admin Controls > Chat: peer-to-peer chat, the retention, and a version bumped by each purge (so every open
+        # tab reloads its conversations). Who is invisible; when each user's tabs last polled (online).
+        self.settings = {
+            "peers": False,
+            "keepDays": CHAT_KEEP_DAYS,
+            "purgeVersion": 0,
+            "updatedBy": None,
+            "updatedAt": None,
+        }
+        self.invisible = set()
+        self.seen = {}
+        self.last_prune = 0.0
         with self.connect() as db:
             db.executescript(
                 """
@@ -5220,13 +5328,26 @@ class ChatStore:
                 r[0]
                 for r in db.execute("SELECT user_id FROM chat_status WHERE enabled = 0")
             }
-            cutoff = datetime.fromtimestamp(
-                time.time() - CHAT_KEEP_DAYS * 86400, timezone.utc
-            ).strftime("%Y-%m-%dT%H:%M:%SZ")
-            db.execute("DELETE FROM chat_messages WHERE sent_at < ?", (cutoff,))
             db.execute(
-                "DELETE FROM chat_files WHERE message_id NOT IN (SELECT id FROM chat_messages)"
+                "CREATE TABLE IF NOT EXISTS chat_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS chat_presence (user_id TEXT PRIMARY KEY, invisible INTEGER NOT NULL, updated_at TEXT NOT NULL)"
+            )
+            for r in db.execute("SELECT key, value FROM chat_settings"):
+                if r[0] in self.settings:
+                    try:
+                        self.settings[r[0]] = json.loads(r[1])
+                    except ValueError:
+                        pass
+            self.invisible = {
+                r[0]
+                for r in db.execute(
+                    "SELECT user_id FROM chat_presence WHERE invisible = 1"
+                )
+            }
+        self.prune()
+        threading.Thread(target=self._prune_loop, name="chat-prune", daemon=True).start()
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -5275,9 +5396,173 @@ class ChatStore:
             self.avail_ver += 1
             self.changed.notify_all()
 
-    def may_write(self, user, admin, peer_id, admin_ids=()):
+    # ---- Admin Controls > Chat: peer-to-peer chat, retention, purge, who talks to whom
+
+    def put_settings(self, changes, by):
+        """Saves {peers?, keepDays?} (already checked); a shorter retention prunes at once. Every open tab hears of it."""
+        with self.lock, self.connect() as db:
+            self.settings.update(changes, updatedBy=by, updatedAt=now())
+            for key, value in self.settings.items():
+                db.execute(
+                    "INSERT INTO chat_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    (key, json.dumps(value)),
+                )
+        if "keepDays" in changes:
+            self.prune()
+        with self.changed:
+            self.avail_ver += 1
+            self.changed.notify_all()
+        return dict(self.settings)
+
+    def prune(self):
+        """Deletes the messages (and screenshots) older than the retention; how many."""
+        cutoff = datetime.fromtimestamp(
+            time.time() - int(self.settings.get("keepDays") or CHAT_KEEP_DAYS) * 86400,
+            timezone.utc,
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.lock, self.connect() as db:
+            n = db.execute(
+                "DELETE FROM chat_messages WHERE sent_at < ?", (cutoff,)
+            ).rowcount
+            db.execute(
+                "DELETE FROM chat_files WHERE message_id NOT IN (SELECT id FROM chat_messages)"
+            )
+        self.last_prune = time.time()
+        return n
+
+    def _prune_loop(self):
+        while True:
+            time.sleep(CHAT_PRUNE_EVERY)
+            try:
+                n = self.prune()
+                if n:
+                    log(event="chat-pruned", messages=n, keep_days=self.settings.get("keepDays"))
+            except Exception as e:  # noqa: BLE001 - the next hour tries again
+                log(event="chat-prune-failed", error=str(e)[:200])
+
+    def purge(self):
+        """Every message, screenshot and read mark, gone; the file compacted (VACUUM) to give the space back. Every
+        open tab reloads its (now empty) conversations. How many messages."""
+        with self.lock, self.connect() as db:
+            n = db.execute("DELETE FROM chat_messages").rowcount
+            db.execute("DELETE FROM chat_files")
+            db.execute("DELETE FROM chat_read")
+            self.settings["purgeVersion"] = int(self.settings.get("purgeVersion") or 0) + 1
+            db.execute(
+                "INSERT INTO chat_settings (key, value) VALUES ('purgeVersion', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                (json.dumps(self.settings["purgeVersion"]),),
+            )
+        try:
+            db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+            db.execute("VACUUM")
+            db.close()
+        except sqlite3.Error as e:  # the rows are gone; only the space waits
+            log(event="chat-vacuum-failed", error=str(e)[:200])
+        with self.changed:
+            self.latest.clear()
+            self.typing.clear()
+            self.avail_ver += 1
+            self.changed.notify_all()
+        return n
+
+    def stats(self):
+        """How much is kept: messages (and between developers), screenshots, their size, the oldest; the file's size."""
+        with self.connect() as db:
+            m = db.execute(
+                "SELECT count(*), coalesce(sum(from_admin = 0 AND to_admin = 0), 0), min(sent_at), coalesce(sum(length(text)), 0) FROM chat_messages"
+            ).fetchone()
+            f = db.execute(
+                "SELECT count(*), coalesce(sum(length(data)), 0) FROM chat_files"
+            ).fetchone()
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            size = None
+        return {
+            "messages": m[0],
+            "peerMessages": m[1],
+            "oldest": m[2],
+            "screenshots": f[0],
+            "bytes": m[3] + f[1],
+            "fileBytes": size,
+        }
+
+    def pairs(self, limit=200):
+        """Who talks to whom between developers (neither an admin): each pair once, how many messages, the first and
+        the last; newest first. Never what they wrote."""
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT CASE WHEN from_id < to_id THEN from_id ELSE to_id END AS a,
+                          CASE WHEN from_id < to_id THEN to_id ELSE from_id END AS b,
+                          count(*) AS n, min(sent_at) AS first, max(sent_at) AS last, max(id) AS newest
+                   FROM chat_messages WHERE from_admin = 0 AND to_admin = 0
+                   GROUP BY a, b ORDER BY newest DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            out = []
+            for r in rows:
+                m = db.execute(
+                    "SELECT from_id, from_name, from_display, to_id, to_name, to_display FROM chat_messages WHERE id = ?",
+                    (r["newest"],),
+                ).fetchone()
+                names = {
+                    m["from_id"]: (m["from_name"], m["from_display"]),
+                    m["to_id"]: (m["to_name"], m["to_display"]),
+                }
+
+                def person(i):
+                    username, name = names.get(i, ("", ""))
+                    return {"id": i, "username": username, "name": name or ""}
+
+                out.append(
+                    {
+                        "a": person(r["a"]),
+                        "b": person(r["b"]),
+                        "messages": r["n"],
+                        "first": r["first"],
+                        "last": r["last"],
+                    }
+                )
+        return out
+
+    def set_invisible(self, user_id, invisible):
+        with self.lock, self.connect() as db:
+            db.execute(
+                """INSERT INTO chat_presence (user_id, invisible, updated_at) VALUES (?, ?, ?) ON CONFLICT (user_id)
+                   DO UPDATE SET invisible = excluded.invisible, updated_at = excluded.updated_at""",
+                (user_id, int(invisible), now()),
+            )
+        with self.changed:
+            (self.invisible.add if invisible else self.invisible.discard)(user_id)
+            self.avail_ver += 1
+            self.changed.notify_all()
+
+    def touch(self, user_id):
+        """A tab of this user's is open (its state or poll request)."""
+        self.seen[user_id] = time.time()
+
+    def is_online(self, user_id):
+        return time.time() - self.seen.get(user_id, 0) < CHAT_ONLINE_SECONDS
+
+    def has_history(self, user_id, peer_id, from_admin=False):
+        """They exchanged messages (or the peer wrote to this user as an admin, with from_admin)."""
+        with self.connect() as db:
+            if from_admin:
+                hit = db.execute(
+                    "SELECT 1 FROM chat_messages WHERE from_id = ? AND to_id = ? AND from_admin = 1 LIMIT 1",
+                    (peer_id, user_id),
+                ).fetchone()
+            else:
+                hit = db.execute(
+                    "SELECT 1 FROM chat_messages WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?) LIMIT 1",
+                    (peer_id, user_id, user_id, peer_id),
+                ).fetchone()
+        return hit is not None
+
+    def may_write(self, user, admin, peer_id, admin_ids=(), all_admin_ids=()):
         """None if allowed, else why not. Admins write to anyone. Everyone else writes to admins who have chat on, or
-        answers someone who wrote to them, unless that is an admin who has turned chat off.
+        answers an admin who wrote to them (unless that admin has turned chat off); and, with peer-to-peer chat on, to
+        other developers (an invisible one only if they have talked before).
         """
         if peer_id == user["id"]:
             return "You can't chat with yourself."
@@ -5287,12 +5572,15 @@ class ChatStore:
             return "This admin has turned chat off; try another admin."
         if peer_id in admin_ids:
             return None
-        with self.connect() as db:
-            hit = db.execute(
-                "SELECT 1 FROM chat_messages WHERE from_id = ? AND to_id = ? LIMIT 1",
-                (peer_id, user["id"]),
-            ).fetchone()
-        return None if hit else "You can start a conversation with an admin only."
+        if peer_id not in all_admin_ids and self.settings.get("peers"):
+            if peer_id in self.invisible and not self.has_history(user["id"], peer_id):
+                return "That person isn't available for chat."
+            return None
+        if self.has_history(user["id"], peer_id, from_admin=True):
+            return None
+        if peer_id not in all_admin_ids and self.has_history(user["id"], peer_id):
+            return "Chat between developers is turned off by your admins."
+        return "You can start a conversation with an admin only."
 
     def peer_from_history(self, user_id, peer_id):
         """{id, username, name} of someone this user has exchanged messages with, from the newest message."""
@@ -6490,6 +6778,49 @@ def coder_uptime():
     return {"since": min(started), "replicas": len(started)}
 
 
+# Kubelets with self-signed serving certificates (Minikube, kind): metricsServer.kubeletInsecureTLS, as metrics-server.
+KUBELET_INSECURE_TLS = os.environ.get("KUBELET_INSECURE_TLS", "false").lower() in ("1", "true", "yes")
+
+
+def node_network_counters():
+    """Each Ready node's network bytes received and sent so far, {node: (rx, tx)}: its interfaces' counters in the
+    kubelet's summary, read on the kubelet's own port as metrics-server reads it (RBAC nodes/stats only, not
+    nodes/proxy); its certificate checked against the cluster CA unless KUBELET_INSECURE_TLS. A node whose kubelet
+    does not answer is left out."""
+    if not KUBE.ok:
+        return {}
+    with open(KUBE.SA + "/token") as f:
+        token = f.read().strip()
+    if KUBELET_INSECURE_TLS:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    else:
+        ctx = KUBE.ctx
+    out = {}
+    for n in cluster_snapshot()["nodes"]:
+        st = n.get("status") or {}
+        if not any(c.get("type") == "Ready" and c.get("status") == "True" for c in st.get("conditions") or []):
+            continue
+        ip = next((a.get("address") for a in st.get("addresses") or [] if a.get("type") == "InternalIP"), None)
+        port = ((st.get("daemonEndpoints") or {}).get("kubeletEndpoint") or {}).get("Port") or 10250
+        if not ip:
+            continue
+        host = "[%s]" % ip if ":" in ip else ip
+        req = urllib.request.Request("https://%s:%s/stats/summary" % (host, port),
+                                     headers={"Authorization": "Bearer " + token})
+        try:
+            with urllib.request.urlopen(req, timeout=4, context=ctx) as r:
+                net = (json.loads(r.read()).get("node") or {}).get("network") or {}
+        except Exception:  # noqa: BLE001 - this node's kubelet is unreachable or refuses: left out this round
+            continue
+        ifaces = net.get("interfaces") or [net]
+        rx = sum(i.get("rxBytes") or 0 for i in ifaces)
+        tx = sum(i.get("txBytes") or 0 for i in ifaces)
+        out[(n.get("metadata") or {}).get("name")] = (rx, tx)
+    return out
+
+
 HUD_SAMPLE_EVERY = int(os.environ.get("HUD_SAMPLE_EVERY", "15"))
 HUD_HISTORY_DAYS = int(os.environ.get("HUD_HISTORY_DAYS", "7"))
 HUD_RANGES = {"15m": 900, "1h": 3600, "6h": 6 * 3600, "24h": 86400, "7d": 7 * 86400}
@@ -6499,15 +6830,48 @@ class HudHistory(threading.Thread):
     """The HUD's graphs: every HUD_SAMPLE_EVERY seconds, whether or not anyone looks, the cluster's CPU and memory in
     use (live, from metrics-server; what workspaces use of it too) and the latency of users' connections to their
     workspaces (Coder's agent stats: the median of each connection, over the last minute). Kept HUD_HISTORY_DAYS days
-    in /data/hud.sqlite; read back in up to 120 buckets per range."""
+    in /data/hud.sqlite; read back in up to 120 buckets per range. Also the cluster's network traffic (bytes per second
+    received and sent by the nodes, from their kubelets' counters): the Settings menu's network graph."""
 
     def __init__(self, path):
         super().__init__(daemon=True)
         self.path = path
+        self.net_prev = {}
         with self.connect() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS samples (t INTEGER PRIMARY KEY, live INTEGER,
                 cpu REAL, cpu_ws REAL, cpu_total REAL, mem REAL, mem_ws REAL, mem_total REAL,
                 lat_p50 REAL, lat_p95 REAL, lat_max REAL, connections INTEGER)""")
+            columns = {r[1] for r in db.execute("PRAGMA table_info(samples)")}
+            for column in ("net_rx", "net_tx"):
+                if column not in columns:
+                    db.execute("ALTER TABLE samples ADD COLUMN %s REAL" % column)
+
+    def network_rates(self):
+        """Bytes per second the nodes received and sent since the last round, (rx, tx); (None, None) on the first
+        round, or when no kubelet answers. A node whose counters went back (it restarted) is left out of this round."""
+        counters = node_network_counters()
+        t = time.time()
+        rx = tx = 0.0
+        seen = False
+        for node, (r, s) in counters.items():
+            prev = self.net_prev.get(node)
+            if prev and t > prev[0] and r >= prev[1] and s >= prev[2]:
+                rx += (r - prev[1]) / (t - prev[0])
+                tx += (s - prev[2]) / (t - prev[0])
+                seen = True
+        self.net_prev = {node: (t, r, s) for node, (r, s) in counters.items()}
+        return (rx, tx) if seen else (None, None)
+
+    def network_recent(self, seconds=900):
+        """The cluster's traffic over the last `seconds` (one point a round): {"rx", "tx" (the latest, bytes/s),
+        "points": [{"t", "rx", "tx"}]}, or None before there is any."""
+        with self.connect() as db:
+            rows = db.execute("SELECT t, net_rx, net_tx FROM samples WHERE t >= ? AND net_rx IS NOT NULL ORDER BY t",
+                              (int(time.time()) - seconds,)).fetchall()
+        if not rows:
+            return None
+        points = [{"t": r["t"], "rx": round(r["net_rx"], 1), "tx": round(r["net_tx"], 1)} for r in rows]
+        return {"rx": points[-1]["rx"], "tx": points[-1]["tx"], "points": points, "every": HUD_SAMPLE_EVERY}
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -6536,14 +6900,20 @@ class HudHistory(threading.Thread):
             lat = self.latency()
         except Exception:  # noqa: BLE001 - the database is unreachable: no latency this round
             lat = None
+        try:
+            net_rx, net_tx = self.network_rates()
+        except Exception:  # noqa: BLE001 - no traffic figures this round
+            net_rx = net_tx = None
         gib = 1024 ** 3
         row = (int(time.time()), int(live),
                cluster["cpu"]["used"], sum(v["cpu"] for v in ws.values()) if live else None, cluster["cpu"]["total"],
                cluster["memory"]["used"] / gib, sum(v["memory"] for v in ws.values()) if live else None,
                cluster["memory"]["total"] / gib,
-               lat[0] if lat else None, lat[1] if lat else None, lat[2] if lat else None, int(lat[3]) if lat else 0)
+               lat[0] if lat else None, lat[1] if lat else None, lat[2] if lat else None, int(lat[3]) if lat else 0,
+               net_rx, net_tx)
         with self.connect() as db:
-            db.execute("INSERT OR REPLACE INTO samples VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
+            db.execute("""INSERT OR REPLACE INTO samples (t, live, cpu, cpu_ws, cpu_total, mem, mem_ws, mem_total,
+                lat_p50, lat_p95, lat_max, connections, net_rx, net_tx) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
             db.execute("DELETE FROM samples WHERE t < ?", (int(time.time()) - HUD_HISTORY_DAYS * 86400,))
 
     def run(self):
@@ -6681,13 +7051,71 @@ def certificates_overview():
 
 
 def chat_availability():
-    """Which admins take chats: {"available": [ids with chat on], "off": [ids with chat off], "availVersion"}."""
+    """Which admins take chats: {"available": [ids with chat on], "off": [ids with chat off], "availVersion"}; whether
+    peer-to-peer chat is on, and the purge version (a change: reload the conversations)."""
     ids = [a["id"] for a in chat_admins()]
     return {
         "available": [i for i in ids if i not in CHAT.off],
         "off": [i for i in ids if i in CHAT.off],
         "availVersion": CHAT.avail_ver,
+        "peers": bool(CHAT.settings.get("peers")),
+        "purgeVersion": int(CHAT.settings.get("purgeVersion") or 0),
     }
+
+
+def chat_people():
+    """{user id: {id, username, name, admin, lastSeen}} of Coder's active users (its users table; system users left
+    out), most recently seen first, cached for a minute. Empty when Coder's database can't be read."""
+    hit = CACHE.get("chat-people")
+    if hit is not None:
+        return hit
+    people = {}
+    try:
+        pool = LOGOS.pool if LOGOS else None
+        if pool:
+            rows = pool.query(
+                """SELECT u.id::text, u.username, u.name, u.rbac_roles && $1::text[],
+                          to_char(u.last_seen_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                   FROM public.users u WHERE NOT u.deleted AND u.status = 'active'
+                   AND NOT coalesce((to_jsonb(u) ->> 'is_system')::boolean, false)
+                   ORDER BY u.last_seen_at DESC NULLS LAST LIMIT 2000""",
+                ["{%s}" % ",".join(sorted(ADMIN_ROLES))],
+            )
+            for r in rows:
+                people[r[0]] = {
+                    "id": r[0],
+                    "username": r[1],
+                    "name": r[2] or "",
+                    "admin": r[3] in ("t", True),
+                    "lastSeen": r[4],
+                }
+    except Exception as e:  # noqa: BLE001 - no list rather than an error
+        log(event="chat-people-failed", error=str(e)[:200])
+    CACHE.put("chat-people", people, 60)
+    return people
+
+
+def chat_people_for(user, admin):
+    """The People list for this user: everyone online (a tab open) or seen by Coder today, but themselves; the
+    invisible only for admins (marked). Online first, then the most recently seen."""
+    now_t = time.time()
+    out = []
+    for p in chat_people().values():
+        if p["id"] == user["id"]:
+            continue
+        invisible = p["id"] in CHAT.invisible
+        if invisible and not admin:
+            continue
+        online = CHAT.is_online(p["id"])
+        seen = _ts(p.get("lastSeen"))
+        if not online and (seen is None or now_t - seen > CHAT_ACTIVE_SECONDS):
+            continue
+        item = {**p, "online": online, "chatOff": p["id"] in CHAT.off}
+        if admin:
+            item["invisible"] = invisible
+        out.append(item)
+    out.sort(key=lambda p: (not p["online"], -(_ts(p.get("lastSeen")) or 0)))
+    return out[:500]
 
 
 def boot_js():
@@ -6837,6 +7265,8 @@ class Handler(BaseHTTPRequestHandler):
             limit = AVATAR_MAX_BYTES * 2
         if urllib.parse.urlsplit(self.path).path == BASE + "/api/backgrounds":
             limit = BG_MAX_BYTES * 2 + BG_HTML_MAX * 2 + BG_PARAMS_MAX
+        if urllib.parse.urlsplit(self.path).path == BASE + "/api/banner-pictures":
+            limit = BANNER_PICTURE_MAX_BYTES * 4 // 3 + 4096  # base64 of the largest picture, and its name
         if urllib.parse.urlsplit(self.path).path == BASE + "/api/icons":
             limit = (
                 ICON_MAX_BYTES * 2 + 1024
@@ -6994,6 +7424,18 @@ class Handler(BaseHTTPRequestHandler):
                 )
         if path.startswith(BASE + "/favicon/"):
             return self.favicon(path[len(BASE) + 9 :])
+        if path.startswith(BASE + "/banner-picture/"):
+            if not BANNER_PICTURES or not BANNER_PICTURES.pool:
+                return self.send(404, "not found\n", headers={"Cache-Control": "no-cache"})
+            try:
+                hit = BANNER_PICTURES.get(path[len(BASE) + 16 :])
+            except Exception as e:  # noqa: BLE001
+                return self.send(503, "Coder's database is not reachable: %s\n" % str(e)[:200])
+            if not hit:
+                return self.send(404, "no such picture\n", headers={"Cache-Control": "no-cache"})
+            # Named by its content: the same address always shows the same picture.
+            return self.send(200, hit[1], hit[0], {"Cache-Control": "public, max-age=31536000, immutable",
+                                                   "X-Content-Type-Options": "nosniff"})
         if path.startswith(BASE + "/background/"):
             slot = path[len(BASE) + 12 :]
             try:
@@ -7182,7 +7624,11 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 return
             try:
-                return self.send_json(200, cluster_usage())
+                return self.send_json(200, {
+                    **cluster_usage(),
+                    # The Settings menu's network graph: the last 15 minutes of the HUD's samples.
+                    "network": HUD_HISTORY.network_recent() if HUD_HISTORY else None,
+                })
             except Exception as e:  # noqa: BLE001
                 return self.send_json(503, {"error": str(e)[:300]})
         if path == BASE + "/api/network":
@@ -7385,6 +7831,38 @@ class Handler(BaseHTTPRequestHandler):
         user, err = self.user()
         if err:
             return
+        admin = bool(set(user["roles"]) & ADMIN_ROLES)
+        if what in ("state", "poll"):
+            CHAT.touch(user["id"])
+        if what == "people":  # who is online or active today (peer-to-peer chat; admins always)
+            if not admin and not CHAT.settings.get("peers"):
+                return self.send_json(200, {"enabled": False, "people": []})
+            return self.send_json(
+                200,
+                {
+                    "enabled": bool(CHAT.settings.get("peers")),
+                    "people": chat_people_for(user, admin),
+                },
+            )
+        if what in ("settings", "pairs"):  # Admin Controls > Chat
+            if not admin:
+                return self.send_json(
+                    403, {"error": "Only admins can see the chat's settings."}
+                )
+            if what == "pairs":
+                pairs = CHAT.pairs()
+                for pair in pairs:
+                    for side in ("a", "b"):
+                        pair[side]["online"] = CHAT.is_online(pair[side]["id"])
+                return self.send_json(200, {"pairs": pairs})
+            return self.send_json(
+                200,
+                {
+                    **{k: v for k, v in CHAT.settings.items() if k != "purgeVersion"},
+                    "keepRange": list(CHAT_KEEP_RANGE),
+                    "stats": CHAT.stats(),
+                },
+            )
         if what == "state":
             return self.send_json(
                 200,
@@ -7393,8 +7871,9 @@ class Handler(BaseHTTPRequestHandler):
                         "id": user["id"],
                         "username": user["username"],
                         "name": user["name"],
-                        "admin": bool(set(user["roles"]) & ADMIN_ROLES),
+                        "admin": admin,
                         "chatOn": user["id"] not in CHAT.off,
+                        "invisible": user["id"] in CHAT.invisible,
                     },
                     "conversations": CHAT.conversations(user["id"]),
                     "cursor": CHAT.newest(user["id"]),
@@ -7455,6 +7934,7 @@ class Handler(BaseHTTPRequestHandler):
                 p for p in (q.get("typing") or [""])[0].split(",") if UUID_RE.match(p)
             )
             typing = CHAT.wait(user["id"], after, known, cleared, avail)
+            CHAT.touch(user["id"])
             return self.send_json(
                 200,
                 {
@@ -7506,6 +7986,47 @@ class Handler(BaseHTTPRequestHandler):
             CHAT.set_enabled(user["id"], on)
             log(event="chat-availability", user=user["username"], enabled=on)
             return self.send_json(200, {"enabled": on, **chat_availability()})
+        if what == "presence":  # anyone: invisible to everyone but admins, or not
+            invisible = payload.get("invisible")
+            if not isinstance(invisible, bool):
+                return self.send_json(400, {"error": "invisible must be true or false."})
+            CHAT.set_invisible(user["id"], invisible)
+            log(event="chat-presence", user=user["username"], invisible=invisible)
+            return self.send_json(200, {"invisible": invisible})
+        if what in ("settings", "purge"):  # Admin Controls > Chat
+            if not admin:
+                return self.send_json(
+                    403, {"error": "Only admins can change the chat's settings."}
+                )
+            if what == "purge":
+                n = CHAT.purge()
+                log(event="chat-purged", user=user["username"], messages=n)
+                return self.send_json(200, {"ok": True, "deleted": n, "stats": CHAT.stats()})
+            changes = {}
+            if "peers" in payload:
+                if not isinstance(payload["peers"], bool):
+                    return self.send_json(400, {"error": "peers must be true or false."})
+                changes["peers"] = payload["peers"]
+            if "keepDays" in payload:
+                days = payload["keepDays"]
+                lo, hi = CHAT_KEEP_RANGE
+                if isinstance(days, bool) or not isinstance(days, int) or not lo <= days <= hi:
+                    return self.send_json(
+                        400, {"error": "Keep chats between %d and %d days." % (lo, hi)}
+                    )
+                changes["keepDays"] = days
+            if not changes:
+                return self.send_json(400, {"error": "Nothing to change (peers, keepDays)."})
+            saved = CHAT.put_settings(changes, user["username"])
+            log(event="chat-settings", user=user["username"], **changes)
+            return self.send_json(
+                200,
+                {
+                    **{k: v for k, v in saved.items() if k != "purgeVersion"},
+                    "keepRange": list(CHAT_KEEP_RANGE),
+                    "stats": CHAT.stats(),
+                },
+            )
         peer_id = str(payload.get("to") or "")
         if not UUID_RE.match(peer_id):
             return self.send_json(400, {"error": "Who is it for? (to=<user id>)"})
@@ -7519,8 +8040,15 @@ class Handler(BaseHTTPRequestHandler):
             n = CHAT.delete(user["id"], peer_id)
             log(event="chat-deleted", by=user["username"], peer=peer_id, messages=n)
             return self.send_json(200, {"ok": True, "deleted": n})
-        admins = [] if admin else [a for a in chat_admins() if a["id"] not in CHAT.off]
-        why = CHAT.may_write(user, admin, peer_id, {a["id"] for a in admins})
+        all_admins = [] if admin else chat_admins()
+        admins = [a for a in all_admins if a["id"] not in CHAT.off]
+        why = CHAT.may_write(
+            user,
+            admin,
+            peer_id,
+            {a["id"] for a in admins},
+            {a["id"] for a in all_admins},
+        )
         if what == "typing":
             if not why:
                 CHAT.set_typing(user["id"], peer_id)
@@ -7566,12 +8094,15 @@ class Handler(BaseHTTPRequestHandler):
             if admin
             else next((a for a in admins if a["id"] == peer_id), None)
         )
+        if not peer and not admin:
+            # Another developer (peer-to-peer chat): from Coder's users table, as the People list shows them.
+            found = chat_people().get(peer_id)
+            if found:
+                peer = {k: found[k] for k in ("id", "username", "name", "admin")}
         if not peer:
             peer = CHAT.peer_from_history(user["id"], peer_id)
             if peer and not admin:
-                peer["admin"] = (
-                    True  # only admins start conversations: whoever a user answers is one
-                )
+                peer["admin"] = peer_id in {a["id"] for a in all_admins}
         if not peer:
             return self.send_json(404, {"error": "That user doesn't exist (any more)."})
         if not CHAT.rate_ok(user["id"], admin):
@@ -7652,6 +8183,7 @@ class Handler(BaseHTTPRequestHandler):
             BASE + "/api/view",
             BASE + "/api/ack",
             BASE + "/api/events/delete",
+            BASE + "/api/events/clear",
             BASE + "/api/classification",
             BASE + "/api/login-page",
             BASE + "/api/keycloak/apply",
@@ -7664,6 +8196,7 @@ class Handler(BaseHTTPRequestHandler):
             BASE + "/api/logo/reset",
             BASE + "/api/backgrounds",
             BASE + "/api/backgrounds/reset",
+            BASE + "/api/banner-pictures",
             BASE + "/api/avatar",
             BASE + "/api/avatar/reset",
             BASE + "/api/quota",
@@ -7763,6 +8296,20 @@ class Handler(BaseHTTPRequestHandler):
             STORE.put_setting("user_quota", value)
             log(event="quota-saved", user=user["username"], default=value["default"], overrides=len(value["users"]))
             return self.send_json(200, {"ok": True, "settings": quota_settings()})
+        if path == BASE + "/api/banner-pictures":
+            if not BANNER_PICTURES or not BANNER_PICTURES.pool:
+                return self.send_json(503, {"error": "Coder's database is not configured for this service."})
+            name = re.sub(r"[\[\]()\\*_`~!]", "", str(payload.get("name") or "")).strip()[:80] or "picture"
+            try:
+                ctype, data = parse_banner_picture(payload.get("dataUrl"))
+                pid = BANNER_PICTURES.put(ctype, data, name, user["username"])
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except Exception as e:  # noqa: BLE001
+                return self.send_json(503, {"error": "Coder's database: %s" % str(e)[:200]})
+            log(event="banner-picture-saved", user=user["username"], id=pid, type=ctype, bytes=len(data), name=name)
+            return self.send_json(200, {"id": pid, "url": "%s/banner-picture/%s" % (BASE, pid), "name": name,
+                                        "type": ctype, "bytes": len(data)})
         if path in (BASE + "/api/backgrounds", BASE + "/api/backgrounds/reset"):
             slot = payload.get("slot")
             if slot not in BG_SLOTS:
@@ -7827,6 +8374,10 @@ class Handler(BaseHTTPRequestHandler):
                 )
             removed = STORE.delete_event(event_id)
             log(event="event-deleted", user=user["username"], announcement=event_id)
+            return self.send_json(200, {"ok": True, "removed": removed})
+        if path == BASE + "/api/events/clear":
+            removed = STORE.clear_events()
+            log(event="events-cleared", user=user["username"], removed=removed)
             return self.send_json(200, {"ok": True, "removed": removed})
         if path == BASE + "/api/classification":
             try:
@@ -8041,7 +8592,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY, BACKGROUNDS, HUD_HISTORY
+    global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY, BACKGROUNDS, BANNER_PICTURES, HUD_HISTORY
     STORE = Store(DB_PATH)
     CHAT = ChatStore(DB_PATH)
     DEFAULTS = Defaults(
@@ -8051,6 +8602,7 @@ def main():
     LOGOS = LogoStore()
     AVATARS = AvatarStore(LOGOS)
     BACKGROUNDS = BackgroundStore(LOGOS)
+    BANNER_PICTURES = BannerPictureStore(LOGOS)
     ICONS = IconStore(LOGOS)
     MONITOR = Monitor()
     HUD_HISTORY = HudHistory(os.path.join(os.path.dirname(DB_PATH) or "/data", "hud.sqlite"))

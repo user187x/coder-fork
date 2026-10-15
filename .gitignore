@@ -30,3 +30,6 @@ __pycache__/
 # ./make --deploy state: generated certificates, keys, client secret, answers
 /helm-chart/.deploy/
 /development/tools/airgap-e2e/inpod-out/
+# NiFi archive and Airflow constraints downloaded by tools/build-dataflow-image.sh
+/development/workspace-image-dataflow/nifi-*-bin.zip*
+/development/workspace-image-dataflow/airflow-constraints.txt

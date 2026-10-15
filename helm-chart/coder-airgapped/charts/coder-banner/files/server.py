@@ -53,15 +53,24 @@ EMOJI_DIR = os.environ.get("EMOJI_DIR", "/emoji")  # emoji-data.js (generated da
 BASE = "/__banner"
 SESSION_COOKIE = "coder_session_token"
 LEVELS = ("info", "success", "warning", "critical")
-# Text effects. The names are the contract with banner.js (which implements them) and admin.html (the drop-down).
-EFFECTS = ("none", "typewriter", "fade", "rise", "wave", "bounce", "flip", "shake", "pulse", "rainbow", "starwars")
+# Text effects. The names are the contract with the dashboard (BANNER_EFFECTS), which draws them; banner.js and
+# admin.html (the service's own loader and editor) know the first ten and show the others as plain text.
+EFFECTS = ("none", "typewriter", "fade", "rise", "wave", "bounce", "flip", "shake", "pulse", "rainbow", "starwars",
+           "pewpew", "flap", "shimmer")
 # The crawl's pace (effect "starwars") and the banner's font (the dashboard's bundled fonts and generic stacks:
 # nothing is fetched, the network may be air-gapped). Keep in sync with the dashboard's bannerFonts.ts.
 SPEEDS = ("slow", "normal", "fast")
+# How the dashboard takes the banner away when someone dismisses it.
+CLOSE_EFFECTS = ("none", "pixelate", "rollup", "fade", "wipe", "matrix", "gaussian", "evaporate")
 FONTS = ("default", "sans", "serif", "condensed", "geist-mono", "ibm-plex-mono", "jetbrains-mono", "fira-code",
          "source-code-pro")
+# The message's alignment, and how the background picture fills the banner's screen (the dashboard's PICTURE_FITS).
+ALIGNS = ("left", "center", "right")
+PICTURE_FITS = ("center", "span", "tile", "fill", "stretch")
+# The countdown's moment: UTC, to the second at most ("2026-10-20T18:00:00Z").
+COUNTDOWN_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?Z$")
 # 4000: long broadcasts are what the crawl and the dashboard's scroll-down view are for.
-LIMITS = {"message": 4000, "title": 80, "linkText": 60, "linkUrl": 500}
+LIMITS = {"message": 4000, "title": 80, "linkText": 60, "linkUrl": 500, "picture": 500}
 CSRF_HEADER = ("X-Requested-With", "coder-banner-admin")
 LIVE_ENABLED = os.environ.get("LIVE_ENABLED", "1") not in ("0", "false", "no", "")
 LIVE_PORT = int(os.environ.get("LIVE_PORT", "8081"))
@@ -86,6 +95,20 @@ FIELDS = {
     "repeat": False,
     "speed": "normal",
     "font": "default",
+    # Receipts: the dashboard records who viewed the announcement and lets them confirm it (the Viewed box, Confirm).
+    # Off for a greeting nobody needs to account for.
+    "receipts": True,
+    "closeEffect": "fade",
+    # The dashboard's editor writes plain text (markdown false); announcements written before it are Markdown.
+    "markdown": True,
+    "align": "center",
+    # The message outlined in a contrasting colour, to stay legible over any background picture.
+    "outline": False,
+    # The banner's background picture (a same-site path or an http(s) URL; "" none) and how it fills the screen.
+    "picture": "",
+    "pictureFit": "span",
+    # The countdown shown as a watch at the banner's left ("" none).
+    "countdown": "",
 }
 # Files the admin page loads, served only to admins: path -> (file, content type, directory; None = APP_DIR)
 ADMIN_FILES = {
@@ -196,7 +219,13 @@ class Banner:
 
     @staticmethod
     def make_id(b, revision):
-        raw = json.dumps([b["level"], b["title"], b["message"], b["linkText"], b["linkUrl"], revision])
+        parts = [b["level"], b["title"], b["message"], b["linkText"], b["linkUrl"], revision]
+        # A background picture or a countdown makes another announcement, as they did in the message; only when
+        # there is one, so the announcements published before them keep their ids (and their dismissals).
+        for key in ("picture", "countdown"):
+            if b.get(key):
+                parts.append([key, b[key]])
+        raw = json.dumps(parts)
         return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
     def effective(self):
@@ -232,7 +261,7 @@ class Banner:
         if not isinstance(payload, dict):
             raise BannerError("Expected a JSON object.")
         out = dict(FIELDS)
-        for key in ("title", "message", "linkText", "linkUrl"):
+        for key in ("title", "message", "linkText", "linkUrl", "picture"):
             value = payload.get(key, "")
             if not isinstance(value, str):
                 raise BannerError("%s must be text." % key)
@@ -240,7 +269,7 @@ class Banner:
             if len(value) > LIMITS[key]:
                 raise BannerError("%s is too long (max %d characters)." % (key, LIMITS[key]))
             out[key] = value
-        for key in ("enabled", "dismissible", "showOnLoginPage", "repeat"):
+        for key in ("enabled", "dismissible", "showOnLoginPage", "repeat", "receipts", "markdown", "outline"):
             value = payload.get(key, FIELDS[key])
             if not isinstance(value, bool):
                 raise BannerError("%s must be true or false." % key)
@@ -248,6 +277,9 @@ class Banner:
         out["level"] = payload.get("level", "info")
         if out["level"] not in LEVELS:
             raise BannerError("Style must be one of: %s." % ", ".join(LEVELS))
+        out["closeEffect"] = payload.get("closeEffect", "fade")
+        if out["closeEffect"] not in CLOSE_EFFECTS:
+            raise BannerError("Close transition must be one of: %s." % ", ".join(CLOSE_EFFECTS))
         out["effect"] = payload.get("effect", "none")
         if out["effect"] not in EFFECTS:
             raise BannerError("Text effect must be one of: %s." % ", ".join(EFFECTS))
@@ -257,12 +289,25 @@ class Banner:
         out["font"] = payload.get("font", "default")
         if out["font"] not in FONTS:
             raise BannerError("Font must be one of: %s." % ", ".join(FONTS))
+        out["align"] = payload.get("align", "center")
+        if out["align"] not in ALIGNS:
+            raise BannerError("Alignment must be one of: %s." % ", ".join(ALIGNS))
+        out["pictureFit"] = payload.get("pictureFit", "span")
+        if out["pictureFit"] not in PICTURE_FITS:
+            raise BannerError("The picture's fit must be one of: %s." % ", ".join(PICTURE_FITS))
+        if out["picture"] and not SAFE_URL.match(out["picture"]):
+            raise BannerError("The picture's address must start with https://, http:// or /.")
+        countdown = payload.get("countdown", "")
+        if not isinstance(countdown, str) or (countdown and not COUNTDOWN_RE.match(countdown)):
+            raise BannerError("The countdown must be a UTC time such as 2026-10-20T18:00:00Z.")
+        out["countdown"] = countdown
         seconds = payload.get("refreshSeconds", FIELDS["refreshSeconds"])
         if isinstance(seconds, bool) or not isinstance(seconds, int) or not 15 <= seconds <= 3600:
             raise BannerError("Check interval must be between 15 and 3600 seconds.")
         out["refreshSeconds"] = seconds
-        if out["enabled"] and not out["message"]:
-            raise BannerError("Write a message before publishing the banner.")
+        # A message, a background picture or a countdown: an announcement may be only a picture.
+        if out["enabled"] and not (out["message"] or out["picture"] or out["countdown"]):
+            raise BannerError("Write a message (or choose a background image or a countdown) before publishing the banner.")
         if out["linkUrl"] and not SAFE_URL.match(out["linkUrl"]):
             raise BannerError("The link must start with https://, http:// or /.")
         return out
