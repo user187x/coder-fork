@@ -743,5 +743,31 @@ class TrackedWorkspaceImageTest(unittest.TestCase):
         self.assertIsNone(ib.addons_of(None))
 
 
+
+class BannerTransitionsTest(unittest.TestCase):
+    """The banner service (coder-banner/files/server.py) takes the dashboard's effects and transitions, and no other."""
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(SRC, "../../charts/coder-banner/files/server.py")
+        spec = importlib.util.spec_from_file_location("banner_server", path)
+        cls.srv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.srv)
+
+    def clean(self, **fields):
+        return self.srv.Banner.clean(dict({"message": "Hello"}, **fields))
+
+    def test_open_transition(self):
+        self.assertEqual(self.clean()["openEffect"], "none")  # saved before it existed: none
+        for effect in ("fade", "rolldown", "kitt", "crt", "glitch"):
+            self.assertEqual(self.clean(openEffect=effect)["openEffect"], effect)
+        with self.assertRaises(self.srv.BannerError):
+            self.clean(openEffect="explode")
+
+    def test_knight_rider(self):
+        self.assertEqual(self.clean(effect="kitt")["effect"], "kitt")
+        self.assertEqual(self.clean(closeEffect="kitt")["closeEffect"], "kitt")
+
+
 if __name__ == "__main__":
     unittest.main()

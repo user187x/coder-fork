@@ -161,6 +161,10 @@ spec:
                 --variable workspace_image="{{ . }}" \
                 {{- end }}
                 --variable namespace="{{ $.Values.namespace | default "coder" }}" \
+                --variable gateway_name="{{ $.Values.icons.gateway.name }}" \
+                --variable gateway_namespace="{{ $.Values.icons.gateway.namespace }}" \
+                --variable coder_service="{{ $.Values.nifiRoute.coderService.name }}" \
+                --variable coder_service_port="{{ $.Values.nifiRoute.coderService.port }}" \
                 --variable home_storage_class="{{ $.Values.storageClass | default "" }}" \
                 {{- with $.Values.global.clusterAccess }}{{ if .enabled }}
                 --variable cluster_oidc_issuer="{{ $.Values.global.oidc.issuerUrl | default (printf "https://keycloak.%s/realms/master" $.Values.global.domain) }}" \

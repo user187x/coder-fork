@@ -4,11 +4,11 @@
 # and Airflow start and answer with no network at all. NiFi's archive is downloaded once (kept in
 # ../workspace-image-dataflow/nifi-<version>-bin.zip, not in git) and checked against Apache's SHA-512; Airflow is
 # pinned with Airflow's own constraints for the image's Python.
-#   ./build-dataflow-image.sh [TAG]       default 1.0.0
+#   ./build-dataflow-image.sh [TAG]       default 1.1.0
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"
 ctx="${dev}/workspace-image-dataflow"
-tag="${1:-1.0.0}"; img="ghcr.io/user187x/coder-workspace-dataflow:${tag}"
+tag="${1:-1.1.0}"; img="ghcr.io/user187x/coder-workspace-dataflow:${tag}"
 nifi="$(sed -n 's/^ARG NIFI_VERSION=//p' "${ctx}/Dockerfile")"
 airflow="$(sed -n 's/^ARG AIRFLOW_VERSION=//p' "${ctx}/Dockerfile")"
 base="$(sed -n 's/^ARG BASE=//p' "${ctx}/Dockerfile")"
@@ -33,7 +33,8 @@ curl -fsL -o "${ctx}/airflow-constraints.txt" \
 docker build --platform linux/amd64 -t "$img" "$ctx"
 
 # NiFi as the template starts it (a ~/.nifi of its own: conf, flows, logs; bin and lib from /opt/nifi; the NARs
-# unpacked in the image), behind nginx with the app's path, and Airflow under its app path: with no network at all.
+# unpacked in the image), sent the app's path and Coder's host as the cluster's Gateway sends them (the template's
+# HTTPRoute), and Airflow under its app path: with no network at all.
 # (--hostname localhost: NiFi looks its host up, and with no network Docker's container name does not resolve; a
 # pod's always does.)
 docker run --rm --network none --hostname localhost --entrypoint bash "$img" -c '
@@ -47,40 +48,23 @@ docker run --rm --network none --hostname localhost --entrypoint bash "$img" -c 
 	       -e "s|^nifi.web.proxy.host=.*|nifi.web.proxy.host=coder.example.com|" \
 	       -e "s|^nifi.sensitive.props.key=.*|nifi.sensitive.props.key=check-$RANDOM-$RANDOM|" conf/nifi.properties
 	/opt/nifi/bin/nifi.sh start >/dev/null
-	cat >nginx.conf <<NGINX
-pid $HOME/.nifi/run/nginx.pid;
-error_log $HOME/.nifi/logs/nginx.log;
-events {}
-http {
-  access_log off;
-  client_body_temp_path /tmp/nginx-body; proxy_temp_path /tmp/nginx-proxy;
-  fastcgi_temp_path /tmp/nginx-fcgi; uwsgi_temp_path /tmp/nginx-uwsgi; scgi_temp_path /tmp/nginx-scgi;
-  server {
-    listen 127.0.0.1:8081;
-    location / {
-      proxy_pass http://127.0.0.1:8080;
-      proxy_set_header Host 127.0.0.1:8080;
-      proxy_set_header X-ProxyContextPath $P/nifi;
-      proxy_set_header X-ProxyScheme https;
-      proxy_set_header X-ProxyHost coder.example.com;
-      proxy_set_header X-ProxyPort 443;
-      proxy_http_version 1.1; proxy_buffering off; client_max_body_size 0;
-    }
-  }
-}
-NGINX
-	nginx -c "$HOME/.nifi/nginx.conf" -e "$HOME/.nifi/logs/nginx.log"
+	# As a request reaches NiFi from the Gateway through Coder: on the Coder host, with the proxy headers.
+	nifi() { curl -fs -H "Host: coder.example.com" -H "X-ProxyContextPath: $P/nifi" -H "X-ProxyScheme: https" \
+		-H "X-ProxyHost: coder.example.com" -H "X-ProxyPort: 443" "$@"; }
 	export AIRFLOW_HOME="$HOME/airflow" AIRFLOW__API__HOST=127.0.0.1 AIRFLOW__API__PORT=8090 AIRFLOW__API__WORKERS=1 \
 		AIRFLOW__API__BASE_URL="http://127.0.0.1:8090$P/airflow" AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=True \
 		AIRFLOW__CORE__EXECUTION_API_SERVER_URL="http://127.0.0.1:8090$P/airflow/execution/" AIRFLOW__CORE__LOAD_EXAMPLES=True \
 		PATH="/opt/airflow/bin:$PATH"
 	/opt/airflow/bin/airflow standalone >"$HOME/airflow.log" 2>&1 &
 	for i in $(seq 1 180); do
-		curl -fs "http://127.0.0.1:8081/nifi-api/flow/about" >/dev/null && curl -fs "http://127.0.0.1:8090$P/airflow/api/v2/monitor/health" >/dev/null && break
+		nifi "http://127.0.0.1:8080/nifi-api/flow/about" >/dev/null && curl -fs "http://127.0.0.1:8090$P/airflow/api/v2/monitor/health" >/dev/null && break
 		sleep 2
 	done
-	curl -fs "http://127.0.0.1:8081/nifi-api/flow/about" || { tail -n 40 logs/nifi-app.log logs/nifi-bootstrap.log; exit 1; }; echo
-	page="$(curl -fs http://127.0.0.1:8081/nifi/)"; echo "$page" | grep -o "<base[^>]*>" || true
+	nifi "http://127.0.0.1:8080/nifi-api/flow/about" || { tail -n 40 logs/nifi-app.log logs/nifi-bootstrap.log; exit 1; }; echo
+	page="$(nifi http://127.0.0.1:8080/nifi/)"; echo "$page" | grep -o "<base[^>]*>" || true
+	# The app'"'"'s root (its button, a panel): NiFi'"'"'s UI, under the app'"'"'s path.
+	to="$(nifi -o /dev/null -w "%{redirect_url}" http://127.0.0.1:8080/)"; echo "/ -> $to"
+	case "$to" in *"$P/nifi/nifi/"*) ;; *) echo "NiFi'"'"'s root does not redirect under the app'"'"'s path" >&2; exit 1 ;; esac
 	curl -fs "http://127.0.0.1:8090$P/airflow/api/v2/monitor/health" || { tail -n 40 "$HOME/airflow.log"; exit 1; }; echo
 	curl -fs "http://127.0.0.1:8090$P/airflow/" | grep -o "<base[^>]*>" || true
 	du -sh "$HOME/.nifi" | sed "s/^/per-workspace NiFi data: /"

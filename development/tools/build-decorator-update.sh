@@ -48,6 +48,21 @@ if [[ -n "$since" ]] && git -C "$top" rev-parse -q --verify "v${since}" >/dev/nu
 		<(awk '!/^#/ && NF >= 2 {print $1, $2}' "${bundle}/images.txt" | sort) | sed -n 's/^> /    /p' | awk '{print $1}' || true)
 fi
 fork_tag=${fork##*:}
+# The ubuntu-dataflow template's image (coder-workspace.dataflowImage), and the one the release the cluster runs had.
+dataflow=$(sed -n 's/^  dataflowImage:.*"\([^"]*\)".*/\1/p' "${chart}/values.yaml" | head -n1)
+[[ -n "$dataflow" ]] || { echo "ERROR: no coder-workspace.dataflowImage in ${chart}/values.yaml" >&2; exit 1; }
+dataflow_then=""
+if [[ -n "$since" ]] && git -C "$top" rev-parse -q --verify "v${since}" >/dev/null; then
+	dataflow_then=$(git -C "$top" show "v${since}:helm-chart/coder-airgapped/values.yaml" |
+		sed -n 's/^  dataflowImage:.*"\([^"]*\)".*/\1/p' | head -n1)
+fi
+dataflow_note=""
+if [[ -n "$dataflow_then" && "$dataflow_then" != "$dataflow" ]]; then
+	dataflow_note="
+${since} had ${dataflow_then}: \"--dataflow keep\" needs this release's in your registry (in the full
+bundle's or the layer's images/custom/: docker load, tag, push), or \"--dataflow <registry>/${dataflow_then#*/}\"
+keeps the earlier one (the release notes say whether this release's template runs on it)."
+fi
 cat >"${out}/README.txt" <<EOF
 coder-airgapped ${version}: the decorator update
 =================================================
@@ -65,9 +80,9 @@ the fork's Coder image and the two charts: everything else the install uses is i
 
 Images that changed since ${since:-the previous release}:
 ${changed:-    (none listed)}
-This update carries the first (Coder). The ubuntu-dataflow template (UBUNTU DATAFLOW: Apache NiFi and Apache Airflow
-in the workspace) runs on ghcr.io/user187x/coder-workspace-dataflow:1.0.0, which is not in it: the helper turns that
-template off (coder-workspace.dataflowTemplate.enabled: false) unless you give it the image (--dataflow).
+This update carries Coder's. The ubuntu-dataflow template (UBUNTU DATAFLOW: Apache NiFi and Apache Airflow in the
+workspace) runs on ${dataflow}, which is not in it: the helper turns that template off
+(coder-workspace.dataflowTemplate.enabled: false) unless you give it the image (--dataflow).${dataflow_note}
 
 Install
 -------
@@ -86,7 +101,7 @@ in to your registry, as for the install - with its CA if it has a private one), 
   --apply     sets both sources' targetRevision to ${version} (and the dataflow template off), keeps your file as
               <file>.<time>.bak, kubectl apply -f <file>, and asks Argo CD to refresh
   --dataflow keep | <image>   keep UBUNTU DATAFLOW on: its image is in your registry already
-              (<registry>/user187x/coder-workspace-dataflow:1.0.0), or runs from <image>
+              (<registry>/${dataflow#*/}), or runs from <image>
 
 Argo CD then syncs: Coder restarts on ${fork_tag} (the new pod first, no gap), the layer's
 services update, and the template pushes run (new template versions; workspaces show "Update" once they are older).

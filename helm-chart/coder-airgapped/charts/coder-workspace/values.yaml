@@ -13,7 +13,7 @@ coder:
   internalUrl: ""
 
 # Image of the template-push Job's coder CLI.
-cliImage: "ghcr.io/user187x/coder-platform:2.0.0-platform.44-airgap"
+cliImage: "ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap"
 # Any image with python3: signs in with coder-init-auth when there is no token Secret.
 loginImage: "docker.io/library/python:3.13-alpine"
 
@@ -44,8 +44,17 @@ dataflowTemplate:
   name: "ubuntu-dataflow"
   displayName: "UBUNTU DATAFLOW"
   icon: "/icon/ubuntu.svg"
-# Its image: the workspace image + NiFi, a Java runtime, nginx and Airflow.
-dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.0.0"
+# Its image: the workspace image + NiFi, a Java runtime and Airflow.
+dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.1.0"
+# Its NiFi under Coder's app path: each dataflow workspace gets an HTTPRoute of its own (files/main.tf, nifi_route) on
+# the Gateway in icons.gateway, to Coder's Service, setting the proxy headers NiFi reads; Coder's service account may
+# manage HTTPRoutes in the namespace, and read the cluster's CRDs (templates/nifi-routes-rbac.yaml), to create and
+# delete them.
+nifiRoute:
+  coderService:
+    name: coder
+    port: 80
+  coderServiceAccount: coder
 
 # Add files/agent-audit.tf (Observability > Agent Activity: every command run in a workspace) to the template.
 # Off by default: the reference cluster's active template is main.tf + certificates.tf only.

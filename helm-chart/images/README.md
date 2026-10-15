@@ -33,10 +33,10 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
-| `ghcr.io_user187x_coder-platform_2.0.0-platform.44-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.44-airgap` | 313 MB | coder (server) and the template push Job's CLI; = the fork's platform.33 (fafe5314b) + Terraform provider mirror |
+| `ghcr.io_user187x_coder-platform_2.0.0-platform.45-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap` | 319 MB | coder (server) and the template push Job's CLI; = the fork's platform.33 (fafe5314b) + Terraform provider mirror |
 | `ghcr.io_user187x_coder-image-tools_1.0.0.tar.gz` | `ghcr.io/user187x/coder-image-tools:1.0.0` | 208 MB | coder-ui-updates and the Images builder's scans: python:3.13-alpine + shellcheck, shfmt, trivy (+ its vulnerability database), regctl (`development/image-tools`) |
 | `ghcr.io_user187x_coder-workspace_1.8.5.tar.gz` | `ghcr.io/user187x/coder-workspace:1.8.5` | 1896 MB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools (btop, bat, vim, eza, fzf, grc, jq, yq), k9s (custom build + config), kubectl, kubelogin (admins' kubectl sign-in), marimo with its Python packages (offline), code-server and File Browser (offline), default ~/.bashrc and desktop background |
-| `ghcr.io_user187x_coder-workspace-dataflow_1.0.0.tar.gz` | `ghcr.io/user187x/coder-workspace-dataflow:1.0.0` | 3.7 GB | workspace pods of the ubuntu-dataflow template: the workspace image + Java 21, Apache NiFi 2.12.0, nginx, Apache Airflow 3.3.2 (`development/workspace-image-dataflow`, `tools/build-dataflow-image.sh`) |
+| `ghcr.io_user187x_coder-workspace-dataflow_1.1.0.tar.gz` | `ghcr.io/user187x/coder-workspace-dataflow:1.1.0` | 3.7 GB | workspace pods of the ubuntu-dataflow template: the workspace image + Java 21, Apache NiFi 2.12.0, Apache Airflow 3.3.2 (`development/workspace-image-dataflow`, `tools/build-dataflow-image.sh`) |
 | `ghcr.io_user187x_coder-upstream_2.38.0-main.70bc2e554-airgap.tar.gz` | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap` | 309 MB | the plain base of the Argo CD decorator install (coder-airgapped-base without the layer), and rollback: pure upstream Coder at the fork's base (70bc2e554) + the same Terraform provider mirror (`development/coder-fork/ROLLBACK.md`) |
 
 ### `public/chart/`

@@ -68,6 +68,29 @@ variable "app_set" {
   }
 }
 
+# The Gateway that serves Coder (the dataflow template's NiFi route attaches to it), and Coder's Service behind it.
+variable "gateway_name" {
+  type        = string
+  description = "The Gateway serving Coder's host (its NiFi route attaches to it)."
+  default     = "traefik-gateway"
+}
+
+variable "gateway_namespace" {
+  type    = string
+  default = "traefik"
+}
+
+variable "coder_service" {
+  type        = string
+  description = "Coder's Service in this namespace, as Coder's own HTTPRoute names it."
+  default     = "coder"
+}
+
+variable "coder_service_port" {
+  type    = number
+  default = 80
+}
+
 # The workspace image; empty: the chart's (substituted for "codercom/enterprise-base:ubuntu" below). The dataflow
 # template's has NiFi and Airflow too (development/workspace-image-dataflow).
 variable "workspace_image" {
@@ -367,24 +390,79 @@ resource "coder_app" "code-server" {
 }
 
 # The dataflow template's apps, in place of code-server and marimo: path-based like the others, so they open in the
-# dashboard's panels (same origin). Started by the startup script (NiFi behind nginx, which tells NiFi its path).
+# dashboard's panels (same origin). Started by the startup script. NiFi learns its path from the headers the cluster's
+# Gateway adds (the HTTPRoute nifi_route below).
 resource "coder_app" "nifi" {
   count        = local.dataflow ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "nifi"
   display_name = "Apache NiFi"
   icon         = "/__icons/nifi.svg" # files/icons/nifi.svg, served by templates/icons.yaml
-  # The root: Coder joins the app URL's path to every request, and NiFi serves at /nifi and /nifi-api (nginx sends
-  # the root to /nifi/, under the app's path).
-  url          = "http://localhost:8081"
+  # The root: Coder joins the app URL's path to every request, and NiFi serves at /nifi and /nifi-api (its root
+  # redirects to its UI, under the app's path).
+  url          = "http://127.0.0.1:8080"
   subdomain    = false
   share        = "owner"
 
-  # NiFi itself (its own port, 8080), not nginx: the dashboard's panel shows the port and protocol it is checked on.
+  # The dashboard's panel shows the port and protocol it is checked on.
   healthcheck {
-    url       = "http://localhost:8080/nifi-api/flow/about"
+    url       = "http://127.0.0.1:8080/nifi-api/flow/about"
     interval  = 5
     threshold = 60
+  }
+}
+
+# NiFi under Coder's app path: NiFi builds its pages' links and API calls from the proxy headers it is sent
+# (X-ProxyContextPath, -Scheme, -Host, -Port), which Coder's app proxy passes on but does not add. The cluster's Gateway
+# (Traefik) adds them, by an HTTPRoute of this workspace's own on Coder's host: only its NiFi path, to Coder as Coder's
+# own route does (the longest path wins), with these headers set. Nothing else in front of NiFi; Coder still decides
+# who may open the app. Needs Coder's service account to manage HTTPRoutes in the namespace (the chart's Role).
+locals {
+  nifi_path   = "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/nifi"
+  coder_https = startswith(data.coder_workspace.me.access_url, "https://")
+}
+
+resource "kubernetes_manifest" "nifi_route" {
+  count = local.dataflow ? 1 : 0
+  manifest = {
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "HTTPRoute"
+    metadata = {
+      name      = "coder-${data.coder_workspace.me.id}-nifi"
+      namespace = var.namespace
+      labels = {
+        "app.kubernetes.io/name"    = "coder-workspace"
+        "app.kubernetes.io/part-of" = "coder"
+        "com.coder.resource"        = "true"
+        "com.coder.workspace.id"    = data.coder_workspace.me.id
+        "com.coder.workspace.name"  = data.coder_workspace.me.name
+        "com.coder.user.username"   = data.coder_workspace_owner.me.name
+      }
+    }
+    spec = {
+      hostnames = [local.coder_host]
+      parentRefs = [{
+        group     = "gateway.networking.k8s.io"
+        kind      = "Gateway"
+        name      = var.gateway_name
+        namespace = var.gateway_namespace
+      }]
+      rules = [{
+        matches = [{ path = { type = "PathPrefix", value = local.nifi_path } }]
+        filters = [{
+          type = "RequestHeaderModifier"
+          requestHeaderModifier = {
+            set = [
+              { name = "X-ProxyContextPath", value = local.nifi_path },
+              { name = "X-ProxyScheme", value = local.coder_https ? "https" : "http" },
+              { name = "X-ProxyHost", value = local.coder_host },
+              { name = "X-ProxyPort", value = local.coder_https ? "443" : "80" },
+            ]
+          }
+        }]
+        backendRefs = [{ name = var.coder_service, port = var.coder_service_port }]
+      }]
+    }
   }
 }
 

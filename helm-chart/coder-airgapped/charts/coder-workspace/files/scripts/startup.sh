@@ -484,8 +484,8 @@ if [ "$APP_SET" = dataflow ]; then
  # NiFi: from /opt/nifi as the image installed it (its NARs unpacked there, read-only); everything it writes is a
  # link into ~/.nifi: conf (the image's, the first time; then the user's flows and settings), logs, state,
  # repositories, work areas. Unsecured HTTP on 127.0.0.1:8080, for this workspace only (the app is its owner's
- # alone). nginx (127.0.0.1:8081, the app's URL) tells NiFi the app's path, so its pages and API calls go through
- # Coder's proxy.
+ # alone). The app's path reaches it in the proxy headers the cluster's Gateway adds (the template's HTTPRoute), so
+ # its pages and API calls go through Coder's proxy; it accepts them for this path and Coder's host only.
  if [ -x /opt/nifi/bin/nifi.sh ]; then
   NIFI_HOME=/home/coder/.nifi
   mkdir -p "$NIFI_HOME"
@@ -506,47 +506,6 @@ if [ "$APP_SET" = dataflow ]; then
    log "Apache NiFi: starting (log: ~/.nifi/logs/nifi-app.log)"
   else
    log "Apache NiFi: running already"
-  fi
-  cat >"$NIFI_HOME/nginx.conf" <<NGINX
-pid $NIFI_HOME/run/nginx.pid;
-error_log $NIFI_HOME/logs/nginx.log;
-events {}
-http {
-  access_log off;
-  client_body_temp_path /tmp/nginx-body;
-  proxy_temp_path /tmp/nginx-proxy;
-  fastcgi_temp_path /tmp/nginx-fcgi;
-  uwsgi_temp_path /tmp/nginx-uwsgi;
-  scgi_temp_path /tmp/nginx-scgi;
-  server {
-    listen 127.0.0.1:8081;
-    # Redirects as paths: the browser is on Coder's host, not this one.
-    absolute_redirect off;
-    # The app's root (its button, a panel): NiFi's UI, under the app's path.
-    location = / {
-      return 302 $APPS/nifi/nifi/;
-    }
-    location / {
-      proxy_pass http://127.0.0.1:8080;
-      proxy_set_header Host 127.0.0.1:8080;
-      proxy_set_header X-ProxyContextPath $APPS/nifi;
-      proxy_set_header X-ProxyScheme https;
-      proxy_set_header X-ProxyHost $ACCESS_HOST;
-      proxy_set_header X-ProxyPort 443;
-      proxy_http_version 1.1;
-      proxy_buffering off;
-      proxy_read_timeout 1h;
-      client_max_body_size 0;
-    }
-  }
-}
-NGINX
-  if [ -f "$NIFI_HOME/run/nginx.pid" ] && kill -0 "$(cat "$NIFI_HOME/run/nginx.pid")" 2>/dev/null; then
-   nginx -c "$NIFI_HOME/nginx.conf" -e "$NIFI_HOME/logs/nginx.log" -s reload </dev/null >/dev/null 2>&1
-  else
-   # Its output not left on the agent's (a daemon holding it keeps the script from ending: a start error).
-   nginx -c "$NIFI_HOME/nginx.conf" -e "$NIFI_HOME/logs/nginx.log" </dev/null >/dev/null 2>&1
-   log "nginx for NiFi: started"
   fi
  else
   log "Apache NiFi is not in this image (/opt/nifi): skipped"

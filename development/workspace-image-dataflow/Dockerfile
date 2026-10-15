@@ -1,6 +1,7 @@
 # The workspace image of the ubuntu-dataflow template: the ubuntu-vnc-desktop image (../workspace-image) and
 #   - Apache NiFi (/opt/nifi, its NARs unpacked here, read-only: each workspace keeps only its own conf, flows,
-#     repositories and logs in ~/.nifi) with a Java 21 runtime, and nginx, which puts NiFi under the app's path;
+#     repositories and logs in ~/.nifi) with a Java 21 runtime; NiFi learns the app's path from the proxy headers
+#     the cluster's Gateway adds (the template's HTTPRoute);
 #   - Apache Airflow (/opt/airflow, a virtual environment pinned with Airflow's own constraints).
 # Built by ../tools/build-dataflow-image.sh, which downloads NiFi (checked against Apache's SHA-512) beforehand: the
 # build itself needs the network only for apt and pip.
@@ -11,11 +12,10 @@ ARG AIRFLOW_VERSION=3.3.2
 USER root
 
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openjdk-21-jre-headless nginx-core unzip \
- && rm -rf /var/lib/apt/lists/* \
- && rm -f /etc/nginx/sites-enabled/default
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openjdk-21-jre-headless unzip \
+ && rm -rf /var/lib/apt/lists/*
 
-# NiFi: unsecured HTTP on 127.0.0.1:8080 (only nginx and the agent reach it; the app is the owner's alone), no login.
+# NiFi: unsecured HTTP on 127.0.0.1:8080 (only Coder's app proxy, through the agent, reaches it; the app is the owner's alone), no login.
 # Its NARs are unpacked once here (a first start), into /opt/nifi/work/nar, which every workspace reads (owned by the
 # workspace's user: NiFi refuses a NAR directory it may not write, though it writes nothing there when the NARs are
 # unpacked already; were it to, the write would stay in that pod's own container layer). It runs
@@ -62,9 +62,6 @@ RUN --mount=type=bind,source=nifi-${NIFI_VERSION}-bin.zip,target=/tmp/nifi.zip \
  && chmod -R a+rX /opt/nifi \
  && chown -R 1000:1000 /opt/nifi/work
 
-# nginx for NiFi (~/.nifi/nginx.conf, written by the template's startup script): run by the workspace's user.
-RUN chmod -R a+rX /usr/share/nginx /etc/nginx
-
 # Airflow, with Airflow's constraints for this Python.
 COPY airflow-constraints.txt /tmp/airflow-constraints.txt
 RUN python3 -m venv /opt/airflow \
@@ -82,8 +79,7 @@ d["software"] += [{"name": "Apache NiFi", "what": "The NiFi app: data flows (/op
                    "version": "__NIFI__"},
                   {"name": "Apache Airflow", "what": "The Airflow app: workflows (/opt/airflow)", "group": "Apps",
                    "version": "__AIRFLOW__"},
-                  {"name": "OpenJDK", "what": "Java runtime for NiFi", "group": "Languages", "version": "21"},
-                  {"name": "nginx", "what": "Puts NiFi under the app's path", "group": "Apps", "version": "core"}]
+                  {"name": "OpenJDK", "what": "Java runtime for NiFi", "group": "Languages", "version": "21"}]
 json.dump(d, open(p, "w"), indent=1)
 PY
 RUN sed -i -e "s/__NIFI__/${NIFI_VERSION}/" -e "s/__AIRFLOW__/${AIRFLOW_VERSION}/" /usr/share/coder-workspace/addons.json

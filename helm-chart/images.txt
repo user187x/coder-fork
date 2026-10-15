@@ -4,9 +4,9 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.44-airgap  sha256:60849c13be9e41f80e4acf43ef1babe9a296e258cb32facdff4868639fc995df   coder (server); = the fork's platform.35 (ac6508b0e) + Terraform provider mirror
+ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap  sha256:e1f958aba7bedbc8430fc2dcccf3bd6af67cb150311137709a8aad9032473efe   coder (server); = the fork's platform.35 (ac6508b0e) + Terraform provider mirror
 ghcr.io/user187x/coder-workspace:1.8.5                    sha256:49281117cc6e1ea15b278fdebaff5fc12cc3c1108a020bb1381e47decd2639f0   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
-ghcr.io/user187x/coder-workspace-dataflow:1.0.0           sha256:b01707b960278f7987534000756c64da0bbaa20b610c767056f1707b3ac67ac6   workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), nginx, Apache Airflow 3.3.2 (development/workspace-image-dataflow)
+ghcr.io/user187x/coder-workspace-dataflow:1.1.0           sha256:05ab59d68bc4fb35ba2cc82c1319d51ebf89142c38d78c687b343e2dc2dbefef   workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), Apache Airflow 3.3.2 (development/workspace-image-dataflow)
 ghcr.io/user187x/coder-image-tools:1.0.0                  sha256:b173c95de907b184a0219d40ac1dedb6c07a929a10406c96856eb9cda092f8af   coder-ui-updates and the Images builder's scans: the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
 ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap sha256:075fdbdd195a5b7649ce6e341f496653615a2e8785cedb46dda08660a2793410   plain base (Argo CD decorator install without the layer) and rollback: pure upstream Coder at the fork's base (70bc2e554) + the same Terraform provider mirror (development/coder-fork/ROLLBACK.md)
 

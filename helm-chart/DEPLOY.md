@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.39.0.tar.gz && cd coder-airgapped-1.39.0
+tar -xzf coder-airgapped-1.39.1.tar.gz && cd coder-airgapped-1.39.1
 ./make --deploy
 ```
 
@@ -38,8 +38,8 @@ just the layers their previous version lacks; Traefik, CloudNativePG, the Gatewa
 images are not in it at all.
 
 ```bash
-sha256sum -c coder-airgapped-1.39.0-layer.tar.gz.sha256
-tar -xzf coder-airgapped-1.39.0-layer.tar.gz && cd coder-airgapped-1.39.0
+sha256sum -c coder-airgapped-1.39.1-layer.tar.gz.sha256
+tar -xzf coder-airgapped-1.39.1-layer.tar.gz && cd coder-airgapped-1.39.1
 ./layer-support info                                   # what it carries, and what the cluster must have
 ./make --deploy                                        # asks for the folder you installed from
 ```
@@ -212,8 +212,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.39.0.tar.gz
-cd coder-airgapped-1.39.0
+tar -xzf coder-airgapped-1.39.1.tar.gz
+cd coder-airgapped-1.39.1
 ./mirror-images.sh list
 ```
 
@@ -224,14 +224,14 @@ machine with internet, or – if your registry already has the public images –
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.39.0` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.39.1` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.39.0
+cd coder-airgapped-1.39.1
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY

@@ -276,14 +276,18 @@ def main():
         rc, _, err = run(["bash", "-n", os.path.join(B, sh)])
         check("shell syntax: %s" % sh, rc == 0, err.strip())
     # The decorator update's helper, on this release's Application set back to an older release (a scratch copy, with
-    # empty stand-ins for the charts and the image): both sources move to this version, the dataflow template goes off,
-    # and the file still parses.
-    import shutil, tempfile
+    # stand-ins for the charts and the image: empty, but the layer's values): both sources move to this version, the
+    # dataflow template goes off, and the file still parses; with --dataflow keep, it stays on, on the layer chart's
+    # image in the Application's registry.
+    import shutil, tarfile, tempfile
     with tempfile.TemporaryDirectory() as tmp:
         version = re.search(r"^version:\s*(\S+)", open(os.path.join(chart, "Chart.yaml")).read(), re.M).group(1)
         os.makedirs(os.path.join(tmp, "charts")); os.makedirs(os.path.join(tmp, "images"))
-        for part in ("base", "layer"):
-            open(os.path.join(tmp, "charts", "coder-airgapped-%s-%s.tgz" % (part, version)), "w").close()
+        open(os.path.join(tmp, "charts", "coder-airgapped-base-%s.tgz" % version), "w").close()
+        with tarfile.open(os.path.join(tmp, "charts", "coder-airgapped-layer-%s.tgz" % version), "w:gz") as tgz:
+            tgz.add(os.path.join(chart, "values.yaml"), "coder-airgapped-layer/values.yaml")
+        dataflow_image = re.search(r'^  dataflowImage:.*"([^"\n]+)"', open(os.path.join(chart, "values.yaml")).read(),
+                                   re.M).group(1)
         open(os.path.join(tmp, "images", "ghcr.io_user187x_coder-platform_0.0.0-test-airgap.tar.gz"), "w").close()
         shutil.copy(os.path.join(B, "argocd", "update-application.sh"), tmp)
         app = os.path.join(tmp, "app.yaml")
@@ -294,6 +298,12 @@ def main():
             "coder-airgapped-base 0.0.1 -> %s" % version, "coder-airgapped-layer 0.0.1 -> %s" % version,
             "dataflowTemplate.enabled: false"))
         check("argocd/update-application.sh: updates an older Application (dry run)", ok,
+              (err or out).strip()[-300:] if not ok else "")
+        rc, out, err = run(["bash", os.path.join(tmp, "update-application.sh"), "--app", app, "--dry-run",
+                            "--dataflow", "keep"])
+        ok = rc == 0 and "dataflowTemplate.enabled: true" in out and \
+            ("/" + dataflow_image.split("/", 1)[1]) in out and "dataflowImage: " in out
+        check("argocd/update-application.sh: --dataflow keep runs the layer chart's image (%s)" % dataflow_image, ok,
               (err or out).strip()[-300:] if not ok else "")
     # the layer bundle's helper (Python): compiles, and answers --help
     rc, out, err = run([sys.executable, os.path.join(B, "layer-support"), "--help"])

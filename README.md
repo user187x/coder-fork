@@ -6,9 +6,9 @@ announcement banner and a full-featured workspace template, packaged as **one He
 every container image it needs**. Nothing is downloaded during the install, and nothing at run time reaches outside
 your network.
 
-| | Current release: [**v1.39.0**](https://github.com/user187x/coder-fork/releases/latest) |
+| | Current release: [**v1.39.1**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
-| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.44-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
+| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.8.5` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
 | Image tools | `ghcr.io/user187x/coder-image-tools:1.0.0` (the platform service, BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
@@ -26,11 +26,11 @@ your network.
 Download the release's parts, verify and join them, then install from inside the air-gapped network:
 
 ```bash
-sha256sum -c coder-airgapped-1.39.0.parts.sha256           # every part: OK
-cat coder-airgapped-1.39.0.tar.gz.part-0* > coder-airgapped-1.39.0.tar.gz
-sha256sum -c coder-airgapped-1.39.0.tar.gz.sha256          # the bundle: OK
+sha256sum -c coder-airgapped-1.39.1.parts.sha256           # every part: OK
+cat coder-airgapped-1.39.1.tar.gz.part-0* > coder-airgapped-1.39.1.tar.gz
+sha256sum -c coder-airgapped-1.39.1.tar.gz.sha256          # the bundle: OK
 
-tar -xzf coder-airgapped-1.39.0.tar.gz && cd coder-airgapped-1.39.0
+tar -xzf coder-airgapped-1.39.1.tar.gz && cd coder-airgapped-1.39.1
 ./make --deploy
 ```
 
@@ -48,8 +48,8 @@ images changed since the previous release, our own ones as thin deltas of the im
 no third-party chart or image. Carry that one file across instead of the whole bundle:
 
 ```bash
-sha256sum -c coder-airgapped-1.39.0-layer.tar.gz.sha256
-tar -xzf coder-airgapped-1.39.0-layer.tar.gz && cd coder-airgapped-1.39.0
+sha256sum -c coder-airgapped-1.39.1-layer.tar.gz.sha256
+tar -xzf coder-airgapped-1.39.1-layer.tar.gz && cd coder-airgapped-1.39.1
 PREVIOUS=../coder-airgapped-1.38.1 ./make --deploy      # the folder you installed from (its .deploy settings)
 ```
 
@@ -65,8 +65,8 @@ with `update-application.sh`, which pushes them to your Harbor and moves your ex
 version (it shows the change and keeps your file as a backup):
 
 ```bash
-sha256sum -c coder-airgapped-1.39.0-decorator-update.tar.gz.sha256
-tar -xzf coder-airgapped-1.39.0-decorator-update.tar.gz && cd coder-airgapped-1.39.0-decorator-update
+sha256sum -c coder-airgapped-1.39.1-decorator-update.tar.gz.sha256
+tar -xzf coder-airgapped-1.39.1-decorator-update.tar.gz && cd coder-airgapped-1.39.1-decorator-update
 ./update-application.sh --app /path/to/your-application.yaml --push --apply
 ```
 
@@ -235,7 +235,8 @@ The full feature list, with where each piece lives and how it is tested, is
   - an editor like a small word processor: plain text, font, an outline for legibility over any background, effect,
     text and banner colours, emoji, alignment, a countdown shown as a split-flap clock at the banner's left;
   - receipts (Viewed, Confirm) optional per announcement, and Clear all for their records;
-  - effects: typewriter, crawl, Pew-Pew, Split-Flap, Ghostwrite and more, and close transitions;
+  - effects: typewriter, crawl, Pew-Pew, Split-Flap, Ghostwrite, Knight Rider and more, and open and close
+    transitions;
   - a "Viewed" receipt with the user's certificate fingerprint;
   - a terminal-style full view (with an easter egg or two).
 - **Inbox:** Clear all (asks twice) beside Mark all as read.
@@ -398,8 +399,8 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **47/47** (1.39.0) |
-| Platform service unit tests | **33/33** (1.39.0) |
+| Static checks | **51/51** (1.39.1) |
+| Platform service unit tests | **45/45** (1.39.1) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Argo CD decorator install (`./make --argocd`; kind, egress blocked, Gateway API v1.6.0, Argo CD 3.5.2) | decorated: Synced / Healthy in ~3 min, **7/7**; layer off: **7/7** (upstream Coder, data kept); layer back: **7/7**, every volume the same (1.38.0) |
 | A real Harbor 2.15.2 with a private CA (`harbor-setup.sh`; installing machine: docker-in-docker, no images) | `./make --push-images`: CA trusted, project created, 11 images (all from the bundle) and 5 charts, all checked; a single-chart Argo CD install (robot account, Harbor's CA) migrated to the decorated one by `./make --argocd` in place: **23/23** objects kept, **7/7** (1.39.0) |

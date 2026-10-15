@@ -13,15 +13,17 @@
 # each with a .sha256. <version> is the chart's version. Lints and renders the chart first. Public image archives that
 # are missing are fetched with `mirror-images.sh save` (needs internet; --no-save fails instead). The custom image
 # archive must exist (tools/build-airgap-image.sh).
-#   ./build-bundle.sh [--no-save] [--layer-base VERSION | --no-layer]
+#   ./build-bundle.sh [--no-save] [--no-slim] [--layer-base VERSION | --no-layer]
+# --no-slim: not the slim tarball (not a release asset; it holds every custom image, the dataflow one among them).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; top="$(cd "${here}/../.." && pwd)"
 bundle="${top}/helm-chart"; chart="${bundle}/coder-airgapped"; dist="${top}/dist"
 version=$(sed -n 's/^version: *//p' "${chart}/Chart.yaml"); name="coder-airgapped-${version}"
-save=1 layer_base=""
+save=1 slim=1 layer_base=""
 while (($#)); do
 	case "$1" in
 	--no-save) save=0 ;;
+	--no-slim) slim=0 ;;
 	--layer-base) layer_base="${2:?--layer-base VERSION}"; shift ;;
 	--no-layer) layer_base=none ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
@@ -57,7 +59,7 @@ build() { # OUT [tar options...]
 	echo "wrote dist/${out} ($(du -h "${dist}/${out}" | cut -f1))"
 }
 build "${name}.tar.gz"
-build "${name}-slim.tar.gz" --exclude='helm-chart/images/public'
+if ((slim)); then build "${name}-slim.tar.gz" --exclude='helm-chart/images/public'; fi
 
 # The layer: the chart and installers, without any image archive or third-party chart; then LAYER.json and the
 # images (and prerequisites) changed since the base, staged under the same paths.

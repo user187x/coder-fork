@@ -17,8 +17,9 @@
 #   --push             push the image and the charts first (the registry: --registry, else global.registry in FILE)
 #   --registry R       <harbor>/<project>: where the images are (default: global.registry in FILE)
 #   --dataflow off     the ubuntu-dataflow template (Apache NiFi and Apache Airflow) stays off (the default: this update
-#                      does not carry its image, ghcr.io/user187x/coder-workspace-dataflow:1.0.0)
-#   --dataflow keep    it is on: its image is in the registry already (<registry>/user187x/coder-workspace-dataflow:1.0.0)
+#                      does not carry its image, ghcr.io/user187x/coder-workspace-dataflow:<tag>, the layer chart's)
+#   --dataflow keep    it is on: the layer chart's image is in the registry already
+#                      (<registry>/user187x/coder-workspace-dataflow:<tag>; the helper says which)
 #   --dataflow IMAGE   it is on, on this image (a full reference)
 #   --apply            apply FILE and refresh the Application in Argo CD (kubectl pointed at Argo CD's cluster)
 #   --dry-run          show what would change; push, write and apply nothing
@@ -66,6 +67,10 @@ fork_archive=$(find "$images" -maxdepth 1 -name 'ghcr.io_user187x_coder-platform
 fork_image=$(basename "$fork_archive" .tar.gz)                       # ghcr.io_user187x_coder-platform_<tag>
 fork_image="ghcr.io/user187x/coder-platform:${fork_image#ghcr.io_user187x_coder-platform_}"
 say "This update: charts ${version}, Coder image ${fork_image}"
+# The ubuntu-dataflow template's image, as the layer chart names it (coder-workspace.dataflowImage).
+dataflow_image=$( (tar -xzOf "$layer_chart" coder-airgapped-layer/values.yaml 2>/dev/null || true) |
+	sed -n 's/^  dataflowImage:.*"\([^"]*\)".*/\1/p' | head -n1)
+echo "    its ubuntu-dataflow template's image: ${dataflow_image:-?}"
 
 if [[ -n "$sums" && -f "$sums" ]]; then
 	(cd "$here" && sha256sum --quiet -c SHA256SUMS) || die "a file of this update is damaged (SHA256SUMS)"
@@ -104,7 +109,10 @@ in_registry() {
 fork_target=$(in_registry "$fork_image")
 case "$dataflow" in
 off) ;;
-keep) dataflow=$(in_registry "ghcr.io/user187x/coder-workspace-dataflow:1.0.0") ;;
+keep)
+	[[ -n "$dataflow_image" ]] || die "--dataflow keep: no coder-workspace.dataflowImage in $(basename "$layer_chart"); give the image"
+	dataflow=$(in_registry "$dataflow_image")
+	;;
 *) [[ "$dataflow" == */* || "$dataflow" == *:* ]] || die "--dataflow: off, keep or an image reference" ;;
 esac
 

@@ -56,12 +56,14 @@ LEVELS = ("info", "success", "warning", "critical")
 # Text effects. The names are the contract with the dashboard (BANNER_EFFECTS), which draws them; banner.js and
 # admin.html (the service's own loader and editor) know the first ten and show the others as plain text.
 EFFECTS = ("none", "typewriter", "fade", "rise", "wave", "bounce", "flip", "shake", "pulse", "rainbow", "starwars",
-           "pewpew", "flap", "shimmer")
+           "pewpew", "flap", "shimmer", "kitt")
 # The crawl's pace (effect "starwars") and the banner's font (the dashboard's bundled fonts and generic stacks:
 # nothing is fetched, the network may be air-gapped). Keep in sync with the dashboard's bannerFonts.ts.
 SPEEDS = ("slow", "normal", "fast")
 # How the dashboard takes the banner away when someone dismisses it.
-CLOSE_EFFECTS = ("none", "pixelate", "rollup", "fade", "wipe", "matrix", "gaussian", "evaporate")
+CLOSE_EFFECTS = ("none", "pixelate", "rollup", "fade", "wipe", "matrix", "gaussian", "evaporate", "kitt")
+# How the banner comes in when it appears (the dashboard's BANNER_OPEN_EFFECTS).
+OPEN_EFFECTS = ("none", "fade", "rolldown", "kitt", "crt", "glitch")
 FONTS = ("default", "sans", "serif", "condensed", "geist-mono", "ibm-plex-mono", "jetbrains-mono", "fira-code",
          "source-code-pro")
 # The message's alignment, and how the background picture fills the banner's screen (the dashboard's PICTURE_FITS).
@@ -99,6 +101,7 @@ FIELDS = {
     # Off for a greeting nobody needs to account for.
     "receipts": True,
     "closeEffect": "fade",
+    "openEffect": "none",
     # The dashboard's editor writes plain text (markdown false); announcements written before it are Markdown.
     "markdown": True,
     "align": "center",
@@ -280,6 +283,9 @@ class Banner:
         out["closeEffect"] = payload.get("closeEffect", "fade")
         if out["closeEffect"] not in CLOSE_EFFECTS:
             raise BannerError("Close transition must be one of: %s." % ", ".join(CLOSE_EFFECTS))
+        out["openEffect"] = payload.get("openEffect", "none")
+        if out["openEffect"] not in OPEN_EFFECTS:
+            raise BannerError("Open transition must be one of: %s." % ", ".join(OPEN_EFFECTS))
         out["effect"] = payload.get("effect", "none")
         if out["effect"] not in EFFECTS:
             raise BannerError("Text effect must be one of: %s." % ", ".join(EFFECTS))

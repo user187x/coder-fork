@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.39.1 – 2026-10-15
+
+Coder `2.0.0-platform.45` (fork `21d206361`), workspace image `coder-workspace:1.8.5` (unchanged), dataflow image
+`coder-workspace-dataflow:1.1.0`.
+
+* **The announcement's Knight Rider**, as a text effect and as a close transition:
+  * the effect: KITT's scanner across the banner's screen, behind the message - a row of red lamps and a light
+    sweeping from one end to the other and back without a pause, each lamp flaring as it passes and fading behind
+    it. One lamp for about every 44 px of the banner; the banner's Speed sets the sweep (2.4, 1.6 or 1.0 s there and
+    back); without "Repeat continuously" it sweeps twice, then the lamps go dark. The message keeps a dark halo over
+    the glow.
+  * the close transition: the banner turns into the scanner, its light runs out to the right and, on its way back,
+    sweeps the banner away behind it (1.3 s).
+* **Open transitions:** how the banner comes in when it appears (the page loads with it, or a new announcement
+  arrives): None (the default, as before), Fade in, Roll down, Knight Rider (the light runs across with the banner
+  lighting up behind it, comes back, and the lamps go out), TV switch-on (a dot of light opens into a line, the line
+  into the banner), Glitch (slices, jitter and split colours, then it settles). In the editor's Controls beside Close
+  transition, with Try it (Replay plays it too). The banner service takes `openEffect` and checks it. Without motion
+  (the browser's setting, or animations off) the banner is simply there.
+* **No nginx in UBUNTU DATAFLOW: the cluster's Gateway gives NiFi its path.** NiFi serves only at `/nifi` and builds
+  its pages' links and API calls from the proxy headers it is sent (`X-ProxyContextPath`, `-Scheme`, `-Host`,
+  `-Port`); 1.39.0 ran an nginx in every dataflow workspace only to add them. Now each dataflow workspace has an
+  HTTPRoute of its own (`main.tf`, `nifi_route`: created with the workspace, deleted with it) on the Gateway that
+  serves Coder, for its NiFi path only, to Coder's Service as Coder's own route (the longer path wins), with these
+  headers set (a `RequestHeaderModifier` filter: Traefik). Coder's app proxy passes them on to NiFi, whose own port
+  (127.0.0.1:8080) is now the app's URL. Nothing else in front of NiFi; Coder still decides who may open the app.
+  * Coder's service account may manage HTTPRoutes in its namespace (the layer's Role `coder-workspace-nifi-routes`)
+    and read the cluster's CRDs (ClusterRole `coder-workspace-nifi-routes-<namespace>`: Terraform's
+    `kubernetes_manifest` looks the HTTPRoute's type up before it plans; definitions only), with the dataflow template
+    only. The Gateway is `coder-workspace.icons.gateway`'s; Coder's Service and service
+    account are `coder-workspace.nifiRoute`'s.
+  * Workspaces of 1.39.0's dataflow template keep running as they are (their nginx) until they update.
+* **Dataflow image 1.1.0:** 1.0.0 without nginx. Its build check now sends NiFi the headers as the Gateway does, on
+  Coder's host, and checks that NiFi's root leads to its UI under the app's path. This template runs on 1.0.0 too
+  (its nginx unused).
+* **The decorator update's `--dataflow keep`** runs the layer chart's dataflow image (it named 1.0.0, whatever the
+  chart said), and the helper says which; its README says when that image changed since the cluster's release, and
+  how to keep the earlier one. A static check runs `--dataflow keep`.
+* `development/tools/build-bundle.sh --no-slim`: without the slim tarball (not a release asset).
+* **Tested** on Minikube: a dataflow workspace's HTTPRoute (Accepted by Traefik), NiFi's root, UI and API under the
+  app's path through Coder, a processor made through its API, both apps in the panels (**7/7**), no nginx in the pod,
+  the route deleted with the workspace; the announcement's Knight Rider effect, the six open transitions and the
+  Knight Rider close transition in the editor's preview (**18/18**, nothing published); static checks **51/51**,
+  platform unit tests **45/45**, the dashboard's announcement unit tests **58/58**.
+
 ## 1.39.0 – 2026-10-15
 
 Coder `2.0.0-platform.44` (fork `6a87d6432`), workspace image `coder-workspace:1.8.5` (unchanged).
