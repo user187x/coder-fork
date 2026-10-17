@@ -14,13 +14,26 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
-APP_SET='${app_set}'         # developer (code-server, marimo) or dataflow (Apache NiFi, Apache Airflow)
-ACCESS_HOST='${access_host}' # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
+APP_SET='${app_set}'           # developer (code-server, marimo) or dataflow (Apache NiFi, Apache Airflow)
+ACCESS_HOST='${access_host}'   # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
+START_DIR='${start_directory}' # the Start folder parameter: where the terminal and File Browser open
 # Path-based apps are proxied under this prefix ("main" = the agent's name).
 APPS="/@$OWNER_NAME/$WORKSPACE_NAME.main/apps"
 # One line per step, for the workspace page's Logs panel (the agent keeps this script's output, with the time).
 log() { printf '%s\n' "$*"; }
 log "Starting workspace $WORKSPACE_NAME of $OWNER_NAME"
+
+# The Start folder: made when it is missing under the home (the agent's sessions start there); a path that steps up
+# (..) or one that cannot be made is the home.
+case "/$START_DIR/" in
+*/../* | */./*) START_DIR=/home/coder ;;
+esac
+if [ ! -d "$START_DIR" ]; then
+ case "$START_DIR" in
+ /home/coder/*) mkdir -p "$START_DIR" && log "Start folder: made $START_DIR" || START_DIR=/home/coder ;;
+ *) log "Start folder $START_DIR does not exist: File Browser opens the home" && START_DIR=/home/coder ;;
+ esac
+fi
 
 # No core dumps (the pod's command already sets this for the agent and all it starts), and remove the ones an
 # earlier workspace image left in the home directory: light-locker crashed at every desktop start, writing
@@ -269,10 +282,10 @@ fi
 # intact, so filebrowser must serve under it or its assets 404 (endless spinner).
 # The agent name ("main") is hardcoded: referencing coder_agent.main here would be a cycle.
 if ! pgrep -x filebrowser >/dev/null; then
- filebrowser --noauth --root /home/coder --port 13339 \
+ filebrowser --noauth --root "$START_DIR" --port 13339 \
   --baseurl "$APPS/filebrowser" \
   >/tmp/filebrowser.log 2>&1 &
- log "File Browser: started (log: /tmp/filebrowser.log)"
+ log "File Browser: started in $START_DIR (log: /tmp/filebrowser.log)"
 else
  log "File Browser: running already"
 fi

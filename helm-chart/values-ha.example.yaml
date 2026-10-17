@@ -1,0 +1,58 @@
+# High availability: Coder on 3 replicas across 3 availability zones, its database on 3 instances (one per zone), the
+# announcement banner on 2. Pass it after your own values (it sets no list you set there: Helm replaces lists):
+#   ./install.sh -f my-values.yaml -f values-ha.example.yaml ...
+# With Argo CD, put the same keys in the Application's valuesObject.
+#
+# Needs (DEPLOY.md "High availability"):
+#   - a Coder license with the high_availability feature: without it, several replicas cannot reach each other's
+#     workspaces;
+#   - nodes for Coder in 3 zones of one region, with room for a 4th replica during a rollout, under 10 ms from each
+#     other and from the database;
+#   - TCP 8080 and 6222 open between Coder's pods (security groups, NetworkPolicies);
+#   - Traefik with 2 or more replicas.
+
+coder:
+  coder:
+    replicaCount: 3
+    # Each replica's size: Coder's reference for up to 1,000 users, 2 vCPU and 8 GiB (the chart's default has 4 GiB),
+    # requests equal to limits so a node under pressure never evicts a replica first. Each replica also runs 3
+    # provisioners (workspace builds), so 3 replicas build 9 workspaces at a time.
+    resources:
+      requests: {cpu: 2000m, memory: 8Gi}
+      limits: {cpu: 2000m, memory: 8Gi}
+    # One replica per node where the nodes allow it, spread evenly over the zones. Preferences, not requirements: a
+    # rollout's extra replica, or the replicas of a zone that is lost, are always scheduled somewhere.
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels: {app.kubernetes.io/name: coder, app.kubernetes.io/instance: coder}
+    topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels: {app.kubernetes.io/name: coder, app.kubernetes.io/instance: coder}
+      matchLabelKeys: [pod-template-hash]
+    # Coder's own node group (static: never scaled down, so no replica is dropped with its connections), e.g.
+    # nodeSelector: {eks.amazonaws.com/nodegroup: coder-control-plane}
+
+database:
+  # A primary and 2 replicas, one per zone. When the primary fails, the operator promotes a replica within seconds;
+  # Coder follows, since it connects through the Cluster's -rw Service.
+  instances: 3
+  affinity:
+    topologyKey: topology.kubernetes.io/zone
+  # Coder's baseline for under 1,000 users is 2 vCPU and 8 GB (its 1,000-user reference: 8 vCPU, 30 GB).
+  resources:                                              # CHANGE-ME to your size
+    requests: {cpu: "2", memory: 8Gi}
+    limits: {memory: 8Gi}
+
+coder-banner:
+  replicaCount: 2
+
+# The platform service (uiUpdates) stays one replica: its data is a SQLite file on a ReadWriteOnce volume. Coder works
+# without it while it restarts (quota and schedule checks let requests through; the dashboard keeps its defaults).

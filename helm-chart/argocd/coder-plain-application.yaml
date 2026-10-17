@@ -114,6 +114,8 @@ spec:
             wildcardTls: tls-wild-cert              # must exist (step 3)
         coder:
           coder:
+            # 3 for high availability, with the rest of ../values-ha.example.yaml (DEPLOY.md › High availability).
+            replicaCount: 1
             # Appended to the chart's Coder environment. Air gap: no telemetry, update check or public STUN.
             extraEnv:
             - name: CODER_TELEMETRY_ENABLE

@@ -10,9 +10,10 @@
  * If the socket cannot be used, it falls back to polling /__banner/banner.json.
  *
  * Text effects (typewriter, wave, ...) use Anime.js, vendored and served from the same service
- * (vendor/anime.umd.min.js). It is fetched only when the banner has an effect, and the banner is fully
- * readable without it: if it cannot load, or the user asked their system for reduced motion, the text is
- * simply shown as it is.
+ * (vendor/anime.umd.min.js); the crawl, Pew-Pew, Split-Flap, Ghostwrite and Knight Rider use the service's
+ * stylesheet (fx.css), which also draws the background picture, the outline and the countdown clock. Each is
+ * fetched only when the banner needs it, and the banner is fully readable without them: if they cannot load,
+ * or the user asked their system for reduced motion, the text is simply shown as it is.
  *
  * Served same-origin because Coder's CSP is `script-src 'self'`. All text is set with textContent.
  */
@@ -36,6 +37,21 @@
   // file in the chart (files/vendor/anime.umd.min.js).
   var LIB_URL = BASE + 'vendor/anime.umd.min.js?v=4.5.0';
   var LIB_TIMEOUT_MS = 4000; // show the plain text if the library has not arrived by then
+  var FX_CSS_URL = BASE + 'fx.css';
+
+  // The banner's fonts: the dashboard's (its bannerFonts.ts) - generic stacks, nothing is fetched.
+  var FONTS = {
+    sans: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    serif: "Georgia, 'Times New Roman', 'Liberation Serif', serif",
+    condensed: "'Franklin Gothic Medium', 'Arial Narrow', 'Liberation Sans Narrow', 'Roboto Condensed', sans-serif",
+    'geist-mono': "'Geist Mono Variable', monospace",
+    'ibm-plex-mono': "'IBM Plex Mono', monospace",
+    'jetbrains-mono': "'JetBrains Mono', monospace",
+    'fira-code': "'Fira Code', monospace",
+    'source-code-pro': "'Source Code Pro', monospace",
+  };
+  var PICTURE_FITS = ['center', 'span', 'tile', 'fill', 'stretch'];
+  var ROLL_PX_PER_SECOND = 24; // a spanning picture's roll through the banner, as on the dashboard
 
   var LIVE_PATH = BASE + 'live';
   var SLOW_POLL_SECONDS = 300; // safety net while the live socket is up
@@ -57,7 +73,32 @@
   // What is drawn, as opposed to which announcement it is: `id` decides whether it was dismissed, this decides
   // whether the element on screen is out of date (e.g. an admin changed only "let people dismiss it").
   function signature(c) {
-    return JSON.stringify([c.level, c.title, c.message, c.linkText, c.linkUrl, !!c.dismissible, c.effect || 'none', !!c.repeat]);
+    return JSON.stringify([c.level, c.title, c.message, c.linkText, c.linkUrl, !!c.dismissible, c.effect || 'none', !!c.repeat,
+      c.speed || 'normal', c.font || 'default', c.align || 'center', c.picture || '', c.pictureFit || 'span', !!c.outline, c.countdown || '']);
+  }
+
+  // What needs the stylesheet: a picture, the outline, the countdown, or an effect it draws.
+  function needsFxCss(c) {
+    return !!(safeUrl(c.picture) || c.outline || c.countdown || CSS_EFFECTS.hasOwnProperty(c.effect || 'none'));
+  }
+
+  // The stylesheet, added to the page once; resolves when it has loaded (or failed: the banner then stays plain).
+  var cssPromise = null;
+  function loadFxCss() {
+    if (!cssPromise) {
+      cssPromise = new Promise(function (resolve) {
+        var existing = document.querySelector('link[data-coder-banner-fx]');
+        if (existing && existing.sheet) return resolve(true);
+        var link = existing || document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = FX_CSS_URL;
+        link.setAttribute('data-coder-banner-fx', '');
+        link.addEventListener('load', function () { resolve(true); });
+        link.addEventListener('error', function () { resolve(false); });
+        if (!existing) (document.head || document.documentElement).appendChild(link);
+      });
+    }
+    return cssPromise;
   }
 
   function isDismissed() {
@@ -78,8 +119,137 @@
     schedule();
   }
 
+  // ---- the dashboard's tokens (its bannerTokens.ts) ------------------------------------------------------
+  // The dashboard's editor keeps custom colours in the (otherwise unused) lead-in, {{colors bg=#rrggbb fg=#rrggbb}};
+  // a Markdown message (markdown true) may hold the inline Markdown subset and live countdowns,
+  // {{countdown to=2026-10-04T02:00:00Z format=dhms|clock|words done="now"}}. Never HTML.
+  var COLORS_RE = /^\{\{colors bg=(#[0-9a-fA-F]{6}) fg=(#[0-9a-fA-F]{6})\}\}$/;
+  var COUNTDOWN_RE = /^\{\{countdown\s+to=([0-9T:.\-+Z]+)(?:\s+format=(dhms|clock|words))?(?:\s+done="([^"]{0,80})")?\s*\}\}/;
+
+  function parseColors(title) {
+    var m = COLORS_RE.exec(String(title || '').trim());
+    return m ? { bg: m[1], fg: m[2] } : null;
+  }
+
+  // Relative luminance (WCAG) of #rrggbb: the outline is the opposite of the text's colour.
+  function luminance(hex) {
+    var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
+    if (!m) return 1;
+    var c = [m[1], m[2], m[3]].map(function (x) {
+      var v = parseInt(x, 16) / 255;
+      return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+
+  function remaining(ms, format) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    var d = Math.floor(s / 86400); s -= d * 86400;
+    var h = Math.floor(s / 3600); s -= h * 3600;
+    var m = Math.floor(s / 60); s -= m * 60;
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    if (format === 'clock') return pad(d * 24 + h) + ':' + pad(m) + ':' + pad(s);
+    if (format === 'words') {
+      var parts = [[d, 'day'], [h, 'hour'], [m, 'minute'], [s, 'second']].filter(function (p) { return p[0] > 0; }).slice(0, 2);
+      return parts.length ? parts.map(function (p) { return p[0] + ' ' + p[1] + (p[0] === 1 ? '' : 's'); }).join(', ') : '0 seconds';
+    }
+    return (d ? d + 'd ' : '') + pad(h) + 'h ' + pad(m) + 'm ' + pad(s) + 's';
+  }
+
+  // A countdown in the text: its time left, kept up to date while it is on the page; then its "done" text.
+  function countdownSpan(to, format, done) {
+    var target = Date.parse(to);
+    var span = document.createElement('span');
+    span.setAttribute('data-countdown', '');
+    if (isNaN(target)) { span.textContent = '(invalid date)'; return span; }
+    var tick = function () {
+      var left = target - Date.now();
+      span.textContent = left > 0 ? remaining(left, format || 'dhms') : done;
+      return left > 0;
+    };
+    tick();
+    var timer = window.setInterval(function () {
+      if (span.isConnected) span.wasConnected = true;
+      else if (span.wasConnected) return window.clearInterval(timer);
+      if (!tick()) window.clearInterval(timer);
+    }, 1000);
+    return span;
+  }
+
+  // The inline Markdown subset, as the dashboard reads it: pictures, countdowns, `code`, **bold**, __bold__,
+  // ~~strike~~, *italic*, _italic_, [links](https://... or /path), and backslash escapes. Appends to `parent`.
+  var INLINE = [
+    [/^!\[([^\]]*)\]\(([^)\s]+)\)/, function (m) {
+      var src = safeUrl(m[2]);
+      if (!src) return document.createTextNode(m[0]);
+      var img = document.createElement('img');
+      img.src = src; img.alt = m[1];
+      img.style.cssText = 'height:1.4em;width:auto;vertical-align:middle;';
+      return img;
+    }],
+    [/^\{\{countdown\s[^}]*\}\}/, function (m) {
+      var c = COUNTDOWN_RE.exec(m[0]);
+      return c ? countdownSpan(c[1], c[2], c[3] === undefined ? 'now' : c[3]) : document.createTextNode(m[0]);
+    }],
+    [/^`([^`]+)`/, function (m) { var code = document.createElement('code'); code.textContent = m[1]; return code; }],
+    [/^\*\*(.+?)\*\*/, function (m) { return wrap('strong', m[1]); }],
+    [/^__(.+?)__/, function (m) { return wrap('strong', m[1]); }],
+    [/^~~(.+?)~~/, function (m) { return wrap('s', m[1]); }],
+    [/^\*([^*\s](?:[^*]*[^*\s])?)\*/, function (m) { return wrap('em', m[1]); }, true],
+    [/^_([^_\s](?:[^_]*[^_\s])?)_(?![A-Za-z0-9])/, function (m) { return wrap('em', m[1]); }, true],
+    [/^\[([^\]]+)\]\(([^)\s]+)\)/, function (m) {
+      var href = safeUrl(m[2]);
+      if (!href) return document.createTextNode(m[0]);
+      return linkTo(href, function (a) { inline(a, m[1]); });
+    }],
+  ];
+
+  function wrap(tag, text) {
+    var el = document.createElement(tag);
+    inline(el, text);
+    return el;
+  }
+
+  function inline(parent, text) {
+    var plain = '';
+    var flush = function () { if (plain) { parent.appendChild(document.createTextNode(plain)); plain = ''; } };
+    for (var i = 0; i < text.length;) {
+      var rest = text.slice(i), hit = null;
+      for (var r = 0; r < INLINE.length && !hit; r++) {
+        var m = INLINE[r][0].exec(rest);
+        // A word character right before * or _ makes it part of a word (snake_case, 2*3), not emphasis.
+        if (m && !(INLINE[r][2] && /[A-Za-z0-9]/.test(text[i - 1] || ''))) hit = [m, INLINE[r][1]];
+      }
+      if (hit) {
+        flush();
+        parent.appendChild(hit[1](hit[0]));
+        i += hit[0][0].length;
+      } else if (text[i] === '\\' && /[\\`*_~[\]{}()]/.test(text[i + 1] || '')) {
+        plain += text[i + 1];
+        i += 2;
+      } else {
+        plain += text[i];
+        i += 1;
+      }
+    }
+    flush();
+  }
+
+  function linkTo(href, fill) {
+    var link = document.createElement('a');
+    link.href = href;
+    fill(link);
+    link.style.cssText = 'color:inherit;text-decoration:underline;font-weight:600;';
+    if (/^https?:/i.test(href)) {
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
+    return link;
+  }
+
   function build(cfg, onDismiss) {
-    var level = LEVELS[cfg.level] || LEVELS.info;
+    var colors = parseColors(cfg.title) || LEVELS[cfg.level] || LEVELS.info;
+    var level = colors;
     var el = document.createElement('div');
     el.id = BANNER_ID;
     el.setAttribute('role', 'status');
@@ -90,26 +260,46 @@
       'box-sizing:border-box;width:100%;padding:10px 24px;font-size:14px;line-height:20px;' +
       'text-align:center;background:' + level.bg + ';color:' + level.fg + ';';
 
+    if (needsFxCss(cfg)) loadFxCss();
+    var picture = safeUrl(cfg.picture);
+    if (picture) {
+      el.classList.add('cb-screen');
+      var fit = PICTURE_FITS.indexOf(cfg.pictureFit) >= 0 ? cfg.pictureFit : 'span';
+      var screen = document.createElement('span');
+      screen.className = 'cb-picture';
+      screen.setAttribute('data-fit', fit);
+      screen.setAttribute('role', 'img');
+      screen.setAttribute('aria-label', 'Picture');
+      screen.style.backgroundImage = 'url("' + picture.replace(/["\\\n\r]/g, '') + '")';
+      if (fit === 'span') rollPicture(el, screen, picture);
+      el.appendChild(screen);
+    }
+    if (cfg.countdown) el.appendChild(countdownClock(cfg.countdown));
+
     var text = document.createElement('span');
     text.setAttribute('data-banner-text', '');
-    if (cfg.title) {
+    if (picture) text.setAttribute('data-over-picture', '');
+    if (cfg.outline) text.setAttribute('data-outline', '');
+    // Its alignment (the text takes the banner's free width for it) and font: kept when an effect ends.
+    var base = '';
+    if (cfg.align === 'left' || cfg.align === 'right') base += 'flex:1 1 auto;min-width:0;text-align:' + cfg.align + ';';
+    if (FONTS.hasOwnProperty(cfg.font)) base += 'font-family:' + FONTS[cfg.font] + ';';
+    text.style.cssText = base;
+    // The outline: the opposite of the text's colour (a light text gets a dark ring, a dark one a light ring).
+    text.style.setProperty('--cb-outline', luminance(level.fg) >= 0.3 ? 'rgb(0 0 0 / 0.92)' : 'rgb(255 255 255 / 0.92)');
+    base = text.style.cssText;
+    // A lead-in that carries custom colours is not shown: the banner is drawn in them instead.
+    if (cfg.title && !parseColors(cfg.title)) {
       var title = document.createElement('strong');
       title.textContent = cfg.title + ' ';
       text.appendChild(title);
     }
-    text.appendChild(document.createTextNode(cfg.message || ''));
+    if (cfg.markdown === false) text.appendChild(document.createTextNode(cfg.message || ''));
+    else inline(text, cfg.message || '');
     var href = safeUrl(cfg.linkUrl);
     if (href) {
       text.appendChild(document.createTextNode(' '));
-      var link = document.createElement('a');
-      link.href = href;
-      link.textContent = cfg.linkText || href;
-      link.style.cssText = 'color:inherit;text-decoration:underline;font-weight:600;';
-      if (/^https?:/i.test(href)) {
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-      }
-      text.appendChild(link);
+      text.appendChild(linkTo(href, function (a) { a.textContent = cfg.linkText || href; }));
     }
     el.appendChild(text);
 
@@ -126,9 +316,61 @@
     return el;
   }
 
+  // A spanning picture rolls through the banner at a steady pace: its height at the banner's width is one round.
+  // Measured once the picture has loaded, and again when the banner's width changes.
+  function rollPicture(el, screen, src) {
+    var img = new Image();
+    var size = function () {
+      if (!img.naturalWidth || !screen.isConnected) return;
+      var px = (el.clientWidth * img.naturalHeight) / img.naturalWidth;
+      screen.style.setProperty('--cb-roll-px', px + 'px');
+      screen.style.animationDuration = Math.max(4, px / ROLL_PX_PER_SECOND) + 's';
+    };
+    img.onload = function () {
+      size();
+      if (window.ResizeObserver) new window.ResizeObserver(size).observe(el);
+    };
+    img.src = src;
+  }
+
+  // The countdown: a clock at the banner's left, [days D] HH:MM:SS, each character on a plate; at zero it blinks.
+  function countdownClock(to) {
+    var target = Date.parse(to);
+    var clock = document.createElement('span');
+    clock.className = 'cb-clock';
+    clock.setAttribute('role', 'timer');
+    if (isNaN(target)) return clock;
+    clock.title = 'Counts down to ' + new Date(target).toLocaleString();
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    var tick = function () {
+      var left = Math.max(0, Math.floor((target - Date.now()) / 1000));
+      var d = Math.floor(left / 86400);
+      var parts = (d > 0 ? d + 'D ' : '') + pad(Math.floor((left % 86400) / 3600)) + ':' + pad(Math.floor((left % 3600) / 60)) + ':' + pad(left % 60);
+      clock.textContent = '';
+      parts.split('').forEach(function (ch) {
+        if (ch === ' ') return;
+        var plate = document.createElement(ch === ':' ? 'i' : 'b');
+        plate.textContent = ch;
+        clock.appendChild(plate);
+      });
+      clock.setAttribute('aria-label', left ? 'Countdown: ' + parts + ' left' : 'Countdown finished');
+      if (left) clock.removeAttribute('data-done');
+      else clock.setAttribute('data-done', '');
+      return left;
+    };
+    tick();
+    var timer = window.setInterval(function () {
+      // Built but not placed yet counts as connected later; once placed and then removed, the clock stops.
+      if (clock.isConnected) clock.wasConnected = true;
+      else if (clock.wasConnected) return window.clearInterval(timer);
+      if (!tick()) window.clearInterval(timer);
+    }, 1000);
+    return clock;
+  }
+
   // ---- text effects -------------------------------------------------------------------------------
   // Each effect gets the Anime.js API, the split text (split.chars / split.words) and `run`, which adds the
-  // repeat settings. Names must match server.py EFFECTS and the drop-down in admin.html.
+  // repeat settings. These and CSS_EFFECTS are server.py's EFFECTS, as the drop-down in admin.html offers them.
   var PAUSE_MS = 2500; // rest between repeats of an effect that ends with the text in place
   var effects = {
     typewriter: function (a, sp, text, run) {
@@ -206,6 +448,24 @@
     return libPromise;
   }
 
+  // The effects drawn by the stylesheet (fx.css), as the dashboard draws them: letters in <b>s with their index
+  // (--i; closer together past maxIndex letters), a class on the whole text, KITT's scanner behind it, the crawl.
+  var CSS_EFFECTS = {
+    pewpew: { cls: 'cb-fx-pewpew', letters: true, maxIndex: 12 },
+    flap: { cls: 'cb-fx-flap', letters: true, maxIndex: 14 },
+    shimmer: { cls: 'cb-fx-shimmer' },
+    kitt: { scanner: true },
+    starwars: { crawl: true },
+  };
+  // Knight Rider: one sweep there and back by the banner's speed; a lamp for about every 44 px; without repeat, two
+  // sweeps and the lamps go dark. The crawl's pace in pixels per second.
+  var KITT_CYCLE_MS = { slow: 2400, normal: 1600, fast: 1000 };
+  var KITT_LAMP_PX = 44;
+  var KITT_MIN_LAMPS = 8;
+  var KITT_MAX_LAMPS = 40;
+  var KITT_ONCE_CYCLES = 2;
+  var CRAWL_PX_PER_SECOND = { slow: 9, normal: 15, fast: 26 };
+
   var activeFx = null; // one banner (or one preview) animates at a time
 
   // Stops the effect and puts the plain text back. Safe to call any time, any number of times.
@@ -217,11 +477,142 @@
     window.clearTimeout(fx.timer);
     try {
       if (fx.split) fx.split.revert(); // also reverts the animations created inside it
+      if (fx.undo) fx.undo();
     } catch (e) {
       /* the text node may already be gone */
     }
-    fx.text.style.visibility = '';
-    fx.text.removeAttribute('style');
+    fx.text.style.cssText = fx.base; // its alignment and font, as built
+  }
+
+  // Pew-Pew, Split-Flap: each letter in a <b> with its index, a word's letters kept together on a line; Ghostwrite:
+  // the class on the whole text. Without repeat, the plain text comes back when the last letter (or the sweep) is
+  // done. Returns what undoes it.
+  function letterEffect(text, c, plan, done) {
+    var original = text.cloneNode(true);
+    var letters = [];
+    var walk = function (node) {
+      [].slice.call(node.childNodes).forEach(function (child) {
+        if (child.nodeType === 1) return walk(child);
+        if (child.nodeType !== 3) return;
+        var frag = document.createDocumentFragment();
+        child.nodeValue.split(/(\s+)/).forEach(function (part) {
+          if (!part) return;
+          if (/^\s+$/.test(part)) return frag.appendChild(document.createTextNode(part));
+          var word = document.createElement('span');
+          word.style.whiteSpace = 'nowrap';
+          Array.from(part).forEach(function (ch) {
+            var b = document.createElement('b');
+            b.textContent = ch;
+            letters.push(b);
+            word.appendChild(b);
+          });
+          frag.appendChild(word);
+        });
+        node.replaceChild(frag, child);
+      });
+    };
+    if (plan.letters) walk(text);
+    var scale = plan.maxIndex ? Math.min(1, plan.maxIndex / Math.max(1, letters.length)) : 1;
+    letters.forEach(function (b, i) {
+      b.style.setProperty('--i', String(Math.round(i * scale * 1000) / 1000));
+    });
+    text.classList.add(plan.cls);
+    var last = plan.letters ? letters[letters.length - 1] : text;
+    var onEnd = function (e) {
+      if (e.target === last && !e.pseudoElement) done();
+    };
+    if (!c.repeat) {
+      text.setAttribute('data-fx-once', '');
+      text.addEventListener('animationend', onEnd);
+    }
+    return function () {
+      text.removeEventListener('animationend', onEnd);
+      text.classList.remove(plan.cls);
+      text.removeAttribute('data-fx-once');
+      if (!plan.letters) return;
+      text.textContent = '';
+      while (original.firstChild) text.appendChild(original.firstChild);
+    };
+  }
+
+  // Knight Rider: a row of red lamps across the banner, behind the message, the light sweeping back and forth.
+  function kittScanner(el, text, c, done) {
+    var cycle = KITT_CYCLE_MS[c.speed] || KITT_CYCLE_MS.normal;
+    var lamps = Math.min(KITT_MAX_LAMPS, Math.max(KITT_MIN_LAMPS, Math.round(el.clientWidth / KITT_LAMP_PX)));
+    var row = document.createElement('span');
+    row.className = 'cb-kitt';
+    row.setAttribute('aria-hidden', 'true');
+    row.style.setProperty('--kitt-cycle', cycle + 'ms');
+    row.style.setProperty('--kitt-n', String(lamps));
+    for (var i = 0; i < lamps; i++) {
+      var lamp = document.createElement('i');
+      lamp.style.setProperty('--i', String(i));
+      row.appendChild(lamp);
+    }
+    if (!c.repeat) {
+      row.setAttribute('data-once', '');
+      row.style.animationDuration = cycle * KITT_ONCE_CYCLES + 'ms';
+      row.addEventListener('animationend', function (e) {
+        if (e.target === row) done();
+      });
+    }
+    var hadScreen = el.classList.contains('cb-screen');
+    el.classList.add('cb-screen');
+    el.insertBefore(row, text);
+    return function () {
+      row.remove();
+      if (!hadScreen) el.classList.remove('cb-screen');
+    };
+  }
+
+  // The opening crawl: the text tilted away, rising from below the banner and receding, at a steady pace (its
+  // duration from its height); without repeat once, then the plain text.
+  function crawl(text, c, done) {
+    var view = document.createElement('span');
+    view.className = 'cb-crawl';
+    var inner = document.createElement('span');
+    inner.className = 'cb-crawl-text';
+    while (text.firstChild) inner.appendChild(text.firstChild);
+    view.appendChild(inner);
+    text.appendChild(view);
+    text.classList.add('cb-crawl-host');
+    var travel = inner.offsetHeight + view.offsetHeight;
+    inner.style.animationDuration = Math.max(4, travel / (CRAWL_PX_PER_SECOND[c.speed] || CRAWL_PX_PER_SECOND.normal)) + 's';
+    inner.style.animationIterationCount = c.repeat ? 'infinite' : '1';
+    if (!c.repeat) {
+      inner.addEventListener('animationend', function (e) {
+        if (e.target === inner) done();
+      });
+    }
+    return function () {
+      text.classList.remove('cb-crawl-host');
+      while (inner.firstChild) text.appendChild(inner.firstChild);
+      view.remove();
+    };
+  }
+
+  // A stylesheet effect: once fx.css is there (hidden until then when asked, as the Anime.js ones).
+  function startCssEffect(el, text, c, plan, hide) {
+    var fx = { stopped: false, split: null, undo: null, timer: 0, text: text, base: text.style.cssText };
+    activeFx = fx;
+    if (hide) {
+      text.style.visibility = 'hidden';
+      fx.timer = window.setTimeout(function () {
+        if (activeFx === fx) stopEffect(); // too slow: this banner stays plain rather than start on visible text
+      }, LIB_TIMEOUT_MS);
+    }
+    loadFxCss().then(function (ok) {
+      if (fx.stopped || !text.isConnected) return;
+      window.clearTimeout(fx.timer);
+      text.style.visibility = '';
+      if (!ok) return stopEffect();
+      var done = function () {
+        if (activeFx === fx) stopEffect();
+      };
+      if (plan.scanner) fx.undo = kittScanner(el, text, c, done);
+      else if (plan.crawl) fx.undo = crawl(text, c, done);
+      else fx.undo = letterEffect(text, c, plan, done);
+    });
   }
 
   // Plays `cfg.effect` on the banner's text. `hide`: keep the text invisible until the effect is ready to
@@ -230,12 +621,14 @@
     stopEffect();
     var name = c.effect || 'none';
     var text = el.querySelector('[data-banner-text]');
-    if (!text || !effects.hasOwnProperty(name) || reducedMotion()) return;
-    var fx = { stopped: false, split: null, timer: 0, text: text };
+    if (!text || reducedMotion()) return;
+    if (CSS_EFFECTS.hasOwnProperty(name)) return startCssEffect(el, text, c, CSS_EFFECTS[name], hide);
+    if (!effects.hasOwnProperty(name)) return;
+    var fx = { stopped: false, split: null, timer: 0, text: text, base: text.style.cssText };
     activeFx = fx;
     // Clip letters that travel outside the line (a rising letter should slide in, not float over the page),
     // with room to spare so nothing is cut at rest.
-    text.style.cssText = 'overflow:hidden;padding:10px 4px;margin:-10px -4px;';
+    text.style.cssText = fx.base + 'overflow:hidden;padding:10px 4px;margin:-10px -4px;';
     if (hide) {
       text.style.visibility = 'hidden';
       fx.timer = window.setTimeout(function () {
@@ -303,7 +696,8 @@
     var animate = announce;
     announce = false;
     var existing = document.getElementById(BANNER_ID);
-    var wanted = cfg && cfg.enabled && cfg.message && !isDismissed();
+    // A message, a background picture or a countdown: an announcement may be only a picture (as on the dashboard).
+    var wanted = cfg && cfg.enabled && (cfg.message || safeUrl(cfg.picture) || cfg.countdown) && !isDismissed();
     if (!wanted) {
       if (existing) discard(existing);
       return;

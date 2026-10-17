@@ -91,6 +91,21 @@ variable "coder_service_port" {
   default = 80
 }
 
+# The owner's safe (the chart's userStorage): their own S3 storage, the same in each of their workspaces. The platform
+# service makes each account's volume (PersistentVolumeClaim coder-safe-<owner id>); the pod waits for it if it is not
+# there yet.
+variable "user_storage" {
+  type        = bool
+  description = "Mount the owner's safe (global user storage, S3) in the workspace."
+  default     = false
+}
+
+variable "user_storage_path" {
+  type        = string
+  description = "Where the safe is mounted."
+  default     = "/home/coder/safe"
+}
+
 # The workspace image; empty: the chart's (substituted for "codercom/enterprise-base:ubuntu" below). The dataflow
 # template's has NiFi and Airflow too (development/workspace-image-dataflow).
 variable "workspace_image" {
@@ -99,9 +114,36 @@ variable "workspace_image" {
   default     = ""
 }
 
+# The Images view's registry as workspace pods pull from it (the chart's imageBuilder); empty: no Workspace image choice.
+variable "images_registry" {
+  type        = string
+  description = "Where the Images view's images are pulled from, e.g. localhost:5000/coder-images."
+  default     = ""
+}
+
 locals {
-  dataflow        = var.app_set == "dataflow"
-  workspace_image = var.workspace_image != "" ? var.workspace_image : "codercom/enterprise-base:ubuntu"
+  dataflow      = var.app_set == "dataflow"
+  default_image = var.workspace_image != "" ? var.workspace_image : "codercom/enterprise-base:ubuntu"
+  # The Workspace image parameter's, where the template offers one.
+  workspace_image = length(data.coder_parameter.workspace_image) > 0 ? data.coder_parameter.workspace_image[0].value : local.default_image
+}
+
+# The workspace's image: the template's own, or one from Templates > Images (built or imported there; in the cluster's
+# registry), so a workspace can run on an image made for it. Its pull reference, as the Images view shows it. Changed on
+# a running workspace, it takes effect at its next start.
+data "coder_parameter" "workspace_image" {
+  count        = var.images_registry != "" ? 1 : 0
+  name         = "workspace_image"
+  display_name = "Workspace image"
+  description  = "The template's image, or one from Templates › Images (${var.images_registry}/<name>:<version>). An image built on the workspace image has everything this template runs."
+  type         = "string"
+  default      = local.default_image
+  mutable      = true
+  icon         = "/icon/docker.svg"
+  validation {
+    regex = "^(${replace(local.default_image, ".", "\\.")}|${replace(var.images_registry, ".", "\\.")}/[a-z0-9][a-z0-9-]{1,38}[a-z0-9]:[0-9]+)$"
+    error = "The template's image (${local.default_image}), or one from Templates › Images: ${var.images_registry}/<name>:<version>."
+  }
 }
 
 data "coder_parameter" "cpu" {
@@ -169,6 +211,22 @@ data "coder_parameter" "home_disk_size" {
   }
 }
 
+# Where the terminal (the agent's sessions) and File Browser (its root) open; made at start if it is missing under the
+# home. Changed on a running workspace, it takes effect at its next start.
+data "coder_parameter" "start_directory" {
+  name         = "start_directory"
+  display_name = "Start folder"
+  description  = "Where the terminal and File Browser open: an absolute path, made at start if it is missing under /home/coder. File Browser shows this folder and what is below it."
+  type         = "string"
+  default      = "/home/coder"
+  icon         = "/icon/folder.svg"
+  mutable      = true
+  validation {
+    regex = "^/([A-Za-z0-9._@+-]+/?)*$"
+    error = "An absolute path of letters, digits and . _ - @ +, such as /home/coder/projects."
+  }
+}
+
 provider "kubernetes" {
   config_path = var.use_kubeconfig == true ? "~/.kube/config" : null
 }
@@ -194,6 +252,8 @@ locals {
 resource "coder_agent" "main" {
   os             = "linux"
   arch           = "amd64"
+  # The terminal's and SSH sessions' starting directory (the Start folder parameter; the startup script makes it).
+  dir = data.coder_parameter.start_directory.value
 
   display_apps {
     web_terminal = true
@@ -214,6 +274,7 @@ resource "coder_agent" "main" {
     cluster_oidc_client_id = var.cluster_oidc_client_id
     app_set                = var.app_set
     access_host            = replace(replace(data.coder_workspace.me.access_url, "https://", ""), "http://", "")
+    start_directory        = data.coder_parameter.start_directory.value
   })
 
   # The metrics, in the same order in both of the dashboard's groups (the keys order them): CPU, RAM, Disk and Ø Load
@@ -683,6 +744,30 @@ resource "kubernetes_deployment_v1" "main" {
             name       = "lockdown"
             read_only  = true
           }
+          # The owner's safe: the same files in every one of their workspaces (and on the Workspaces page).
+          dynamic "volume_mount" {
+            for_each = var.user_storage ? [1] : []
+            content {
+              mount_path = var.user_storage_path
+              name       = "safe"
+            }
+          }
+          # The ISO library (Templates > Images), read-only: the same disk images in every workspace.
+          dynamic "volume_mount" {
+            for_each = var.user_storage ? [1] : []
+            content {
+              mount_path = "/home/coder/isos"
+              name       = "isos"
+              read_only  = true
+            }
+          }
+          dynamic "env" {
+            for_each = var.user_storage ? [1] : []
+            content {
+              name  = "CODER_SAFE"
+              value = var.user_storage_path
+            }
+          }
         }
 
         volume {
@@ -723,6 +808,28 @@ resource "kubernetes_deployment_v1" "main" {
           config_map {
             name     = "coder-lockdown"
             optional = true
+          }
+        }
+
+        # The owner's safe: their S3 prefix, through the cluster's CSI driver (ReadWriteMany: all their workspaces).
+        dynamic "volume" {
+          for_each = var.user_storage ? [1] : []
+          content {
+            name = "safe"
+            persistent_volume_claim {
+              claim_name = "coder-safe-${data.coder_workspace_owner.me.id}"
+            }
+          }
+        }
+        # The ISO library: one read-only volume for every workspace (the platform service makes it).
+        dynamic "volume" {
+          for_each = var.user_storage ? [1] : []
+          content {
+            name = "isos"
+            persistent_volume_claim {
+              claim_name = "coder-isos"
+              read_only  = true
+            }
           }
         }
 

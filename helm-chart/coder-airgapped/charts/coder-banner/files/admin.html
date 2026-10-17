@@ -48,6 +48,11 @@
           <label class="level level-warning"><input type="radio" name="level" value="warning"><span>Warning</span></label>
           <label class="level level-critical"><input type="radio" name="level" value="critical"><span>Critical</span></label>
         </div>
+        <div class="effect-row colors-row">
+          <label class="check"><input id="customColors" type="checkbox"><span>Custom colours <small>(in place of the style's; they take the bold lead-in's place, as in the dashboard's editor)</small></span></label>
+          <label class="check"><span>Banner</span><input id="colorBg" type="color" value="#111111" aria-label="Banner colour"></label>
+          <label class="check"><span>Text</span><input id="colorFg" type="color" value="#ffffff" aria-label="Text colour"></label>
+        </div>
       </fieldset>
 
       <fieldset class="field">
@@ -64,11 +69,38 @@
             <option value="shake" data-hint="The whole message shakes: best kept for urgent notices.">Shake</option>
             <option value="pulse" data-hint="The message gently pulses.">Pulse</option>
             <option value="rainbow" data-hint="Colours sweep through the letters.">Rainbow</option>
+            <option value="starwars" data-hint="The opening crawl: the message rises and recedes into the distance at a steady pace, for long broadcasts.">Star Wars crawl</option>
+            <option value="pewpew" data-hint="Each letter fires in as a laser bolt, flashes white on impact with a spark, recoils and settles into a faint glow.">Pew-Pew</option>
+            <option value="flap" data-hint="A departure board: every letter on its own plate, flipping over.">Split-Flap</option>
+            <option value="shimmer" data-hint="Muted letters with a soft band of light sweeping across them.">Ghostwrite</option>
+            <option value="kitt" data-hint="KITT's scanner: a red light sweeps back and forth across the banner, its trail fading behind it.">Knight Rider</option>
           </select>
+          <label class="check" id="speed-field"><span>Speed</span>
+            <select id="speed" aria-label="Speed of the crawl or the scanner">
+              <option value="slow">Slow</option>
+              <option value="normal">Normal</option>
+              <option value="fast">Fast</option>
+            </select></label>
           <label class="check"><input id="repeat" type="checkbox"><span>Repeat continuously <small>(otherwise it plays once when the banner appears)</small></span></label>
           <button type="button" id="replay" class="btn">▶ Replay</button>
         </div>
         <p class="hint" id="effect-hint"></p>
+      </fieldset>
+
+      <fieldset class="field">
+        <legend class="label">Background picture <em>(optional)</em></legend>
+        <div class="effect-row">
+          <input id="picture" type="text" maxlength="500" placeholder="https://… or /path/picture.png" aria-label="Picture address" aria-describedby="picture-hint">
+          <select id="pictureFit" aria-label="How the picture fills the banner">
+            <option value="span">Span (rolls through)</option>
+            <option value="center">Center</option>
+            <option value="tile">Tile</option>
+            <option value="fill">Fill</option>
+            <option value="stretch">Stretch</option>
+          </select>
+          <label class="check"><input id="outline" type="checkbox"><span>Outline the message <small>(stays legible over any picture)</small></span></label>
+        </div>
+        <p class="hint" id="picture-hint">Behind the message, the banner's size whatever the picture's. Pictures uploaded in the dashboard's editor live under <code>/__coder-ui/banner-picture/</code>. An announcement may be only a picture.</p>
       </fieldset>
 
       <div class="grid">

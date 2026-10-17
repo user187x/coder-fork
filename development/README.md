@@ -18,7 +18,7 @@ Everything needed to keep developing the coder-airgapped deliverable, other than
 | Workspace template `ubuntu-vnc-desktop` (shown as UBUNTU) | `../helm-chart/coder-airgapped/charts/coder-workspace/files/*.tf`, its scripts in `files/scripts/` (format: `shfmt -i 1 -w files/scripts/*.sh`) |
 | Announcement banner | `../helm-chart/coder-airgapped/charts/coder-banner/` |
 | The Coder server itself (UI, API) | the fork, `~/workspace/coder` – see `coder-fork/FORK.md` |
-| Images that are shipped | `../helm-chart/images.txt` (+ `mirror-images.sh save`, or `tools/build-airgap-image.sh` for the custom one) |
+| Images that are shipped | `../helm-chart/images.txt` (+ `mirror-images.sh save`, or `tools/build-airgap-image.sh` / `tools/build-minio-image.sh` for the custom ones) |
 
 After a change: bump `version` in `../helm-chart/coder-airgapped/Chart.yaml`, add a `../CHANGELOG.md` entry, build with
 `tools/build-bundle.sh`, test with `tools/airgap-e2e/`, commit, and tag `v<version>`.
@@ -39,6 +39,7 @@ minikube profile `coder` is the development cluster. Deploy (or redeploy) the wo
 | `tools/build-bundle.sh` | Lint + render the chart, fetch missing public image archives, write `../dist/coder-airgapped-<version>[-slim].tar.gz` |
 | `tools/build-workspace-image.sh` | Build the workspace image, check it, and save it into `../helm-chart/images/custom/` |
 | `tools/build-airgap-image.sh` | Build the `-airgap` image and save it into `../helm-chart/images/custom/` |
+| `tools/build-minio-image.sh` | The safe's MinIO image `ghcr.io/user187x/coder-minio:<MinIO release>` (Chainguard's build, pinned by digest, retagged) into `../helm-chart/images/custom/` |
 | `tools/airgap-e2e/` | Fresh end-to-end test of DEPLOY.md on a kind cluster with egress blocked (`README.md` there) |
 | `tools/apply-platform-patch.py` | Applies the "platform patch" (templated values, `global.imagePullSecrets`, quoted checksums) to a vendored subchart |
 | `tools/render-diff.py` | Compare two `helm template` outputs object by object |

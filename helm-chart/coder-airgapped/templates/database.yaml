@@ -25,4 +25,12 @@ spec:
     {{- with $db.storage.storageClass }}
     storageClass: {{ . }}
     {{- end }}
+  {{- with $db.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $db.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}

@@ -17,8 +17,11 @@
       message: 'Maintenance is complete and Coder is back to normal. Thanks for your patience.',
     },
   };
-  var TEXT_FIELDS = ['message', 'title', 'linkText', 'linkUrl'];
-  var BOOL_FIELDS = ['dismissible', 'showOnLoginPage', 'repeat'];
+  var TEXT_FIELDS = ['message', 'title', 'linkText', 'linkUrl', 'picture'];
+  var BOOL_FIELDS = ['dismissible', 'showOnLoginPage', 'repeat', 'outline'];
+  var SELECT_FIELDS = ['effect', 'speed', 'pictureFit'];
+  // The effects whose pace the speed sets: the crawl and the scanner.
+  var PACED_EFFECTS = ['starwars', 'kitt'];
   var PLAY_DELAY_MS = 600; // let typing settle before (re)playing the effect in the preview
 
   var $ = function (id) { return document.getElementById(id); };
@@ -48,35 +51,68 @@
   }
 
   // ---- form <-> banner
+  // Custom colours, as the dashboard's editor keeps them: a token in the (otherwise unused) lead-in.
+  var COLORS_RE = /^\{\{colors bg=(#[0-9a-fA-F]{6}) fg=(#[0-9a-fA-F]{6})\}\}$/;
+  function colorsOf(title) {
+    var m = COLORS_RE.exec(String(title || '').trim());
+    return m ? { bg: m[1].toLowerCase(), fg: m[2].toLowerCase() } : null;
+  }
+  // The lead-in as compared: a colours token whatever the case of its digits.
+  function leadIn(title) {
+    var c = colorsOf(title);
+    return c ? '{{colors bg=' + c.bg + ' fg=' + c.fg + '}}' : title || '';
+  }
+  // What is published, with this page's fields over it: what only the dashboard's editor sets (the font, the
+  // alignment, the countdown, receipts, the open and close transitions, Markdown) is kept as it is.
   function readForm() {
-    var out = { enabled: server ? server.banner.enabled : true };
+    var out = Object.assign({}, server ? server.banner : { enabled: true });
+    delete out.id;
     TEXT_FIELDS.forEach(function (k) { out[k] = $(k).value.trim(); });
     BOOL_FIELDS.forEach(function (k) { out[k] = $(k).checked; });
+    SELECT_FIELDS.forEach(function (k) { out[k] = $(k).value; });
+    if ($('customColors').checked) out.title = '{{colors bg=' + $('colorBg').value + ' fg=' + $('colorFg').value + '}}';
     var level = document.querySelector('input[name=level]:checked');
     out.level = level ? level.value : 'info';
-    out.effect = $('effect').value;
     out.refreshSeconds = parseInt($('refreshSeconds').value, 10) || 60;
     return out;
   }
 
+  // A banner saved before a field existed does not have it: that means its default, not "changed".
+  var FIELD_DEFAULTS = { effect: 'none', repeat: false, speed: 'normal', picture: '', pictureFit: 'span', outline: false };
+
+  function value(b, k) {
+    return b[k] === undefined && k in FIELD_DEFAULTS ? FIELD_DEFAULTS[k] : b[k];
+  }
+
   function writeForm(b) {
-    TEXT_FIELDS.forEach(function (k) { $(k).value = b[k] || ''; });
-    BOOL_FIELDS.forEach(function (k) { $(k).checked = !!b[k]; });
+    TEXT_FIELDS.forEach(function (k) { $(k).value = value(b, k) || ''; });
+    BOOL_FIELDS.forEach(function (k) { $(k).checked = !!value(b, k); });
+    SELECT_FIELDS.forEach(function (k) {
+      $(k).value = value(b, k);
+      if (!$(k).value) $(k).value = FIELD_DEFAULTS[k]; // a value this page does not know about
+    });
+    var colors = colorsOf(b.title);
+    $('customColors').checked = !!colors;
+    if (colors) {
+      $('colorBg').value = colors.bg;
+      $('colorFg').value = colors.fg;
+      $('title').value = '';
+    }
     var radio = document.querySelector('input[name=level][value=' + (b.level || 'info') + ']');
     if (radio) radio.checked = true;
-    $('effect').value = b.effect || 'none';
-    if (!$('effect').value) $('effect').value = 'none'; // an effect this page does not know about
     $('refreshSeconds').value = b.refreshSeconds || 60;
   }
 
-  // A banner saved before effects existed has no effect fields: that means "none", not "changed".
-  var EFFECT_DEFAULTS = { effect: 'none', repeat: false };
-
   function sameAsServer(form) {
     var s = server.banner;
-    return TEXT_FIELDS.concat(BOOL_FIELDS, ['level', 'effect', 'refreshSeconds']).every(function (k) {
-      return form[k] === (s[k] === undefined && k in EFFECT_DEFAULTS ? EFFECT_DEFAULTS[k] : s[k]);
+    return TEXT_FIELDS.concat(BOOL_FIELDS, SELECT_FIELDS, ['level', 'refreshSeconds']).every(function (k) {
+      return k === 'title' ? leadIn(form.title) === leadIn(s.title) : form[k] === value(s, k);
     });
+  }
+
+  // A message, a background picture or a countdown: an announcement may be only a picture.
+  function hasContent(b) {
+    return !!(b.message || b.picture || b.countdown);
   }
 
   // ---- rendering
@@ -93,6 +129,11 @@
     $('effect-hint').textContent = hint;
     $('repeat').disabled = $('effect').value === 'none';
     $('replay').disabled = $('effect').value === 'none' || !previewEl;
+    $('speed-field').hidden = PACED_EFFECTS.indexOf($('effect').value) < 0;
+    var custom = $('customColors').checked;
+    $('title').disabled = custom;
+    $('emoji-btn').disabled = custom;
+    $('colorBg').disabled = $('colorFg').disabled = !custom;
   }
 
   function renderPreview() {
@@ -102,10 +143,10 @@
     window.__coderBannerPreview.stop();
     previewEl = null;
     box.textContent = '';
-    if (!form.message) {
+    if (!hasContent(form)) {
       var empty = document.createElement('div');
       empty.className = 'preview-empty';
-      empty.textContent = 'Type a message to see a preview.';
+      empty.textContent = 'Type a message (or give a background picture) to see a preview.';
       box.appendChild(empty);
     } else {
       form.enabled = true;
@@ -124,21 +165,21 @@
 
   function renderStatus() {
     var pill = $('status');
-    var on = server.banner.enabled && !!server.banner.message;
+    var on = server.banner.enabled && hasContent(server.banner);
     pill.textContent = on ? '● Live for all developers' + tabsText(' · ', ' connected') : '○ Hidden';
     pill.className = 'pill ' + (on ? 'live' : 'off');
     $('toggle').textContent = on ? 'Hide banner' : 'Show banner';
-    $('reappear').disabled = !server.banner.message;
+    $('reappear').disabled = !hasContent(server.banner);
   }
 
   function renderState() {
     var form = readForm();
     var dirty = !sameAsServer(form);
     $('count').textContent = $('message').value.length + ' / 4000';
-    $('publish').disabled = busy || !dirty || !form.message;
+    $('publish').disabled = busy || !dirty || !hasContent(form);
     $('revert').disabled = busy || !dirty;
     $('toggle').disabled = busy;
-    $('reappear').disabled = busy || !server.banner.message;
+    $('reappear').disabled = busy || !hasContent(server.banner);
     $('reset').hidden = !server.overrideActive;
     var note = '';
     if (dirty) note = 'You have unpublished changes.';
@@ -212,7 +253,7 @@
   function toggle() {
     var current = Object.assign({}, server.banner);
     current.enabled = !server.banner.enabled;
-    if (current.enabled && !current.message) { showProblem('Write and publish a message first.'); return; }
+    if (current.enabled && !hasContent(current)) { showProblem('Write and publish a message first.'); return; }
     run(api('banner', current), current.enabled ? 'Banner is showing again.' : 'Banner hidden.');
   }
 

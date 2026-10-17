@@ -17,18 +17,48 @@ app.kubernetes.io/part-of: coder
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{/* The text effect must be one banner.js knows (keep in step with EFFECTS in files/server.py); a typo fails the install
-     with a clear message instead of silently showing no effect. */}}
-{{- define "coder-banner.effect" -}}
-{{- $allowed := list "none" "typewriter" "fade" "rise" "wave" "bounce" "flip" "shake" "pulse" "rainbow" -}}
-{{- $effect := .Values.banner.effect | default "none" -}}
-{{- if not (has $effect $allowed) -}}
-{{- fail (printf "banner.effect %q is not valid: use one of %s" $effect (join ", " $allowed)) -}}
-{{- end -}}
-{{- $effect -}}
+{{/* What each banner choice may be: the lists of files/server.py (LEVELS, EFFECTS, SPEEDS, FONTS, ALIGNS, PICTURE_FITS,
+     OPEN_EFFECTS, CLOSE_EFFECTS), which the service also checks what admins publish against.
+     development/tools/verify/chart_checks.py fails when the two differ. */}}
+{{- define "coder-banner.choices" -}}
+level: [info, success, warning, critical]
+effect: [none, typewriter, fade, rise, wave, bounce, flip, shake, pulse, rainbow, starwars, pewpew, flap, shimmer, kitt]
+speed: [slow, normal, fast]
+font: [default, sans, serif, condensed, geist-mono, ibm-plex-mono, jetbrains-mono, fira-code, source-code-pro]
+align: [left, center, right]
+pictureFit: [center, span, tile, fill, stretch]
+openEffect: [none, fade, rolldown, kitt, crt, glitch]
+closeEffect: [none, pixelate, rollup, fade, wipe, matrix, gaussian, evaporate, kitt]
 {{- end -}}
 
-{{/* Stable banner id: re-shows for users who dismissed an older banner whenever the content changes. */}}
+{{/* banner.<key>, one of its choices (empty: the default); a typo fails the install with a clear message instead of a
+     banner the service would not draw.   include "coder-banner.choice" (list . "effect" "none") */}}
+{{- define "coder-banner.choice" -}}
+{{- $root := index . 0 -}}{{- $key := index . 1 -}}
+{{- $allowed := get (include "coder-banner.choices" $root | fromYaml) $key -}}
+{{- $value := get $root.Values.banner $key | default (index . 2) -}}
+{{- if not (has $value $allowed) -}}
+{{- fail (printf "banner.%s %q is not valid: use one of %s" $key (toString $value) (join ", " $allowed)) -}}
+{{- end -}}
+{{- $value -}}
+{{- end -}}
+
+{{/* banner.<key>, which must be true or false.   include "coder-banner.bool" (list . "repeat") */}}
+{{- define "coder-banner.bool" -}}
+{{- $value := get (index . 0).Values.banner (index . 1) -}}
+{{- if not (kindIs "bool" $value) -}}
+{{- fail (printf "banner.%s must be true or false, not %q" (index . 1) (toString $value)) -}}
+{{- end -}}
+{{- $value -}}
+{{- end -}}
+
+{{/* Stable banner id: re-shows for users who dismissed an older banner whenever the content changes. A picture or a
+     countdown counts only when there is one, so banners without them keep the ids they had. */}}
 {{- define "coder-banner.id" -}}
-{{- .Values.banner.id | default (printf "%s|%s|%s|%s|%s" .Values.banner.level .Values.banner.title .Values.banner.message .Values.banner.linkText .Values.banner.linkUrl | sha256sum | trunc 12) -}}
+{{- $b := .Values.banner -}}
+{{- $parts := list $b.level $b.title $b.message $b.linkText $b.linkUrl -}}
+{{- range $key := list "picture" "countdown" -}}
+{{- if get $b $key -}}{{- $parts = append $parts (printf "%s=%s" $key (get $b $key)) -}}{{- end -}}
+{{- end -}}
+{{- $b.id | default (join "|" $parts | sha256sum | trunc 12) -}}
 {{- end -}}

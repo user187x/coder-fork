@@ -56,6 +56,11 @@ nifiRoute:
     port: 80
   coderServiceAccount: coder
 
+# The Images view's registry as workspace pods pull from it (the parent chart's imageBuilder: localhost:<localPort>/
+# coder-images): the templates then offer a Workspace image parameter, the template's image or one built or imported
+# there. Empty: no such choice.
+imagesRegistry: ""
+
 # Add files/agent-audit.tf (Observability > Agent Activity: every command run in a workspace) to the template.
 # Off by default: the reference cluster's active template is main.tf + certificates.tf only.
 agentAudit: false

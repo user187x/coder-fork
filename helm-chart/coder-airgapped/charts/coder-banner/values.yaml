@@ -39,6 +39,10 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []    # e.g. [{name: internal-registry}]
 nodeSelector: {}        # e.g. {kubernetes.io/arch: amd64} when the image is single-architecture
+# Replicas. More than one keeps the banner up while a node is drained or lost (they spread over nodes and zones). Each
+# re-reads the stored banner every few seconds, so one published through a replica reaches the others' tabs within
+# about 15 seconds.
+replicaCount: 1
 
 # Live push: open Coder tabs hold a WebSocket to the banner service, so a published banner appears at once
 # (without it tabs poll every banner.refreshSeconds). One replica holds thousands of idle tabs cheaply.
@@ -77,8 +81,27 @@ banner:
   # Coder's login page has no header to anchor under, so show the banner above the page instead.
   showOnLoginPage: true
   refreshSeconds: 60     # how often open browser tabs re-check banner.json (min 15)
-  # Text effect (Anime.js, bundled in the chart - nothing is downloaded). Browsers whose user asked for
-  # reduced motion always see plain text.
+  # Text effect (bundled in the chart - nothing is downloaded). Browsers whose user asked for reduced motion always
+  # see plain text.
   #   none | typewriter | fade | rise | wave | bounce | flip | shake | pulse | rainbow
+  #   starwars (the opening crawl) | pewpew (letters fired in as laser bolts) | flap (split-flap board)
+  #   shimmer (a light sweeping muted letters) | kitt (Knight Rider's scanner behind the message)
   effect: none
   repeat: false          # true = keep repeating; false = play once each time the banner appears
+  speed: normal          # slow | normal | fast: the crawl's pace and the scanner's sweep
+  font: default          # default | sans | serif | condensed | geist-mono | ibm-plex-mono | jetbrains-mono | fira-code | source-code-pro
+  align: center          # left | center | right
+  # The message is Markdown (the dashboard's editor writes plain text and sets this to false).
+  markdown: true
+  # The banner's background picture: a same-site path (/...) or an http(s) URL; "" none. An announcement may be only a
+  # picture. pictureFit: span (as wide as the banner, rolling through it) | center | tile | fill | stretch
+  picture: ""
+  pictureFit: span
+  outline: false         # the message ringed in a contrasting colour, to stay legible over any picture
+  # A countdown shown as a clock at the banner's left: a UTC time such as 2026-10-20T18:00:00Z; "" none.
+  countdown: ""
+  # Who viewed the announcement is recorded and they can confirm it (the dashboard's Viewed box and Confirm).
+  receipts: true
+  # How the dashboard brings the banner in, and takes it away when someone dismisses it.
+  openEffect: none       # none | fade | rolldown | kitt | crt | glitch
+  closeEffect: fade      # none | pixelate | rollup | fade | wipe | matrix | gaussian | evaporate | kitt

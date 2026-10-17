@@ -4,6 +4,7 @@
 Served on the Coder host under /__banner/ (the HTTPRoute sends that prefix here):
 
   public  GET  banner.js, banner.json     the loader script injected into Coder, and the live banner
+          GET  fx.css                     the loader's stylesheet: pictures and the stylesheet text effects
           GET  vendor/anime.umd.min.js    the text-effects library (Anime.js, MIT), loaded only when an effect is set
   admin   GET  admin (+ app.js/app.css)   single-page editor, Coder admins only
           GET  admin/emoji-picker.js, admin/emoji-data.js   the emoji picker and its (self-contained) emoji list
@@ -54,7 +55,8 @@ BASE = "/__banner"
 SESSION_COOKIE = "coder_session_token"
 LEVELS = ("info", "success", "warning", "critical")
 # Text effects. The names are the contract with the dashboard (BANNER_EFFECTS), which draws them; banner.js and
-# admin.html (the service's own loader and editor) know the first ten and show the others as plain text.
+# admin.html (the service's own loader and editor) draw and offer them all too (the first ten with Anime.js, the
+# others with fx.css). The chart's defaults are checked against these lists as well (templates/_helpers.tpl).
 EFFECTS = ("none", "typewriter", "fade", "rise", "wave", "bounce", "flip", "shake", "pulse", "rainbow", "starwars",
            "pewpew", "flap", "shimmer", "kitt")
 # The crawl's pace (effect "starwars") and the banner's font (the dashboard's bundled fonts and generic stacks:
@@ -406,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
     ADMIN_HEADERS = {
         "Cache-Control": "no-store",
         "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-        "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        "img-src 'self' data: https: http:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
     }
@@ -482,6 +484,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, "ok\n")
         if path == BASE + "/banner.js":
             return self.send_file("banner.js", "application/javascript", {"Cache-Control": "no-cache"})
+        if path == BASE + "/fx.css":
+            return self.send_file("fx.css", "text/css", {"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"})
         if path == BASE + "/vendor/anime.umd.min.js":
             # Versioned by the ?v= the loader adds, so it can be cached for good.
             return self.send_file(

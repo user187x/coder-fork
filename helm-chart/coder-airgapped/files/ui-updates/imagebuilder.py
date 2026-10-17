@@ -30,6 +30,9 @@ before building on it, or using it in an enclave.
     POST /__coder-ui/api/images/lint {script}           shellcheck;   /format {script}: shfmt -i 1
     POST /__coder-ui/api/images/dockerfile {spec}       the Dockerfile a spec makes (the builder's review step)
     GET/POST /__coder-ui/api/images/settings            apt sources and S3 (admins)
+    POST /__coder-ui/api/images/import {name, description, ref, username?, password?}   an image copied from a registry
+    PUT  /__coder-ui/api/images/import-upload?name=&description=&file=   an image from a `docker save` / OCI archive
+    GET  /__coder-ui/api/images/in-use                  the images workspaces run now, and the templates' own
     GET  /__coder-ui/internal/builds/<token>/context.tar    (build Job)   POST .../report (scan Job)
 """
 
@@ -92,6 +95,15 @@ PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+(?::[a-z0-9-]+)?(?:=[A-Za-z0-9.+:~-]+
 FILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,120}$")
 DOTFILE_RE = re.compile(r"^(?!.*\.\.)[A-Za-z0-9._-][A-Za-z0-9._/-]{0,199}$")
 MAX_UPLOAD = 2 * 1024 * 1024 * 1024
+# Imports: the largest archive taken, and what an image reference may look like (registry/repo:tag or @digest).
+IMPORT_MAX = int(float(os.environ.get("BUILDER_IMPORT_MAX_GIB", "20")) * 1024 ** 3)
+REF_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?(?:/[a-z0-9][a-z0-9._-]*)+(?::[A-Za-z0-9._-]{1,128}|@sha256:[0-9a-f]{64})$")
+# The templates the chart pushes (BUILDER_TEMPLATES: [{name, displayName, image}]): the In use list, and where a
+# workspace can be made on an image (their Workspace image parameter).
+try:
+    TEMPLATES = [t for t in json.loads(os.environ.get("BUILDER_TEMPLATES", "") or "[]") if isinstance(t, dict)]
+except ValueError:
+    TEMPLATES = []
 DESKTOPS = ("keep", "xfce", "gnome", "none")
 HARDENING = {
     "purgeDocs": "Remove documentation, man pages and caches (smaller image, less to scan)",
@@ -177,6 +189,7 @@ class DB:
         spec = json.loads(r["spec"])
         tracked = spec.get("tracked")
         out["tracked"] = tracked or None
+        out["imported"] = spec.get("imported") or None
         if tracked:
             # what workspace templates name: the image itself, not the builder's copy that is scanned
             out["pullRef"] = tracked.get("image") if r["ref"] else None
@@ -1464,6 +1477,240 @@ def start_rescan(image_id, user):
     return build_id
 
 
+def registry_host(ref):
+    """The registry of an image reference (Docker Hub's for a name without one)."""
+    first = ref.split("/", 1)[0]
+    return first if "/" in ref and ("." in first or ":" in first or first == "localhost") else "docker.io"
+
+
+class Import(Build):
+    """A container image brought in rather than built: copied from a registry (regctl image copy) or read from an
+    uploaded archive (`docker save` or an OCI layout; regctl image import), stored as coder-images/<name>:<version> in
+    the cluster's registry, then scanned like a built image. It shows as a build with these steps; a registry's
+    credentials go to regctl in a config file of its own (never on a command line), removed afterwards."""
+
+    def __init__(self, image_id, build_id, version, token, spec, user, source):
+        super().__init__(image_id, build_id, version, token, spec, user)
+        self.source = source
+        first = (("copy", "Copying it from %s" % source["ref"]) if source["kind"] == "registry"
+                 else ("load", "Reading %s" % source["name"]))
+        self.plan = [first, ("push", "Storing it in the cluster's registry"),
+                     ("scan", "Scanning it for vulnerabilities and secrets"),
+                     ("checks", "Checking its security and FIPS readiness")]
+        self.current = first[0]
+
+    def _regctl(self, args, home):
+        STORE.append_log(self.build_id, "$ regctl %s\n" % " ".join(args))
+        proc = subprocess.Popen(["regctl", "-v", "info"] + args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, env=dict(os.environ, HOME=home))
+        self.proc = proc
+        for line in proc.stdout:
+            STORE.append_log(self.build_id, line)
+            if self.cancelled:
+                proc.kill()
+        if proc.wait() != 0:
+            raise RuntimeError("cancelled" if self.cancelled else "regctl failed (exit %d). See the log." % proc.returncode)
+
+    def _run(self):
+        STORE.update_build(self.build_id, status="building", steps=self.steps(), message=dict(self.plan)[self.current])
+        STORE.set(self.image_id, status="building")
+        if LOG:
+            LOG(event="image-import", image=self.image_id, build=self.build_id, version=self.version, by=self.user,
+                source=self.source.get("ref") or self.source.get("name"))
+        dest = "%s/%s/%s:%d" % (REGISTRY, REPO, self.image_id, self.version)
+        home = os.path.join(FILES, "imports", "home-%d" % self.build_id)
+        os.makedirs(os.path.join(home, ".regctl"), exist_ok=True)
+        try:
+            hosts = {REGISTRY: {"tls": "disabled"}}
+            if self.source["kind"] == "registry" and self.source.get("user"):
+                hosts[registry_host(self.source["ref"])] = {"user": self.source["user"], "pass": self.source["password"]}
+            with open(os.path.join(home, ".regctl", "config.json"), "w") as f:
+                os.fchmod(f.fileno(), 0o600)
+                json.dump({"hosts": hosts}, f)
+            if self.source["kind"] == "registry":
+                self._regctl(["image", "copy", self.source["ref"], dest], home)
+            else:
+                self._regctl(["image", "import", dest, self.source["file"]], home)
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+            if self.source.get("file"):
+                try:
+                    os.remove(self.source["file"])
+                except OSError:
+                    pass
+        if self.cancelled:
+            raise RuntimeError("cancelled")
+        self.finish_step(self.plan[0][0])
+        self.advance("push")
+        repo = "%s/%s" % (REPO, self.image_id)
+        _, digest = manifest(repo, str(self.version))
+        size = image_size(repo, str(self.version))
+        self.finish_step("push")
+        report = self._scan()
+        STORE.set(self.image_id, status="ready", version=self.version, ref=dest, digest=digest, size=size,
+                  builtAt=now(), builtBy=self.user, report=report)
+        self.done = {k for k, _ in self.plan}
+        STORE.update_build(self.build_id, status="ready", progress=1.0, stage="done", finished_at=now(),
+                           message="Ready: %s/%s:%d" % (PULL_PREFIX, repo, self.version), steps=self.steps())
+        if LOG:
+            LOG(event="image-imported", image=self.image_id, build=self.build_id, version=self.version, size=size,
+                grade=(report_summary(report) or {}).get("grade"))
+
+
+def start_import(name, description, source, user):
+    """A new imported image, or a new version of one: (image id, build id)."""
+    image_id = str(name or "").strip().lower()
+    if not NAME_RE.match(image_id):
+        raise ValueError("A name of 3-40 lowercase letters, digits and dashes (it becomes the image's name).")
+    if image_id in RESERVED_NAMES:
+        raise ValueError("'%s' is a name the Images view uses itself: pick another." % image_id)
+    origin = source.get("ref") or source.get("name")
+    imported = {"source": source["kind"], "from": origin, "at": now(), "by": user}
+    img = STORE.image(image_id)
+    if img and not img.get("imported"):
+        raise ValueError("There is an image called '%s' already, built here: pick another name." % image_id)
+    if img and STORE.active_build(image_id):
+        raise ValueError("This image is being imported or scanned already.")
+    if not img:
+        STORE.create(image_id, text(description, 2000, "The description"),
+                     dict(empty_spec(), imported=imported), user)
+    else:
+        STORE.save(image_id, user, spec=dict(img["spec"], imported=imported),
+                   description=text(description, 2000, "The description") if description else None)
+    img = STORE.image(image_id)
+    version = img["version"] + 1
+    build_id, token = STORE.new_build(image_id, version, img["spec"], user)
+    b = Import(image_id, build_id, version, token, img["spec"], user, source)
+    STORE.update_build(build_id, steps=b.steps())
+    BUILDS[build_id] = b
+    b.start()
+    return image_id, build_id
+
+
+INDEX_TYPES = ("application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json")
+
+
+def complete_layout(path):
+    """A `docker save` from Docker's containerd image store names every platform of a multi-platform image in its OCI
+    index (index.json), but holds only the platforms that were pulled; regctl then finds blobs missing. Point the index
+    at the platform manifests the archive holds (linux/amd64 first). The archive is rewritten only when it must be."""
+    def blob(digest):
+        return "blobs/" + digest.replace(":", "/")
+    with tarfile.open(path) as tf:
+        names = set(tf.getnames())
+        if "index.json" not in names:
+            return False
+        index = json.load(tf.extractfile("index.json"))
+        manifests, changed = [], False
+        for desc in index.get("manifests") or []:
+            if desc.get("mediaType") not in INDEX_TYPES or blob(desc.get("digest", "")) not in names:
+                manifests.append(desc)
+                continue
+            children = json.load(tf.extractfile(blob(desc["digest"]))).get("manifests") or []
+            present = [m for m in children if blob(m.get("digest", "")) in names]
+            if len(present) == len(children):
+                manifests.append(desc)
+                continue
+            if not present:
+                raise ValueError("The archive holds none of the platforms its index names.")
+            pick = next((m for m in present if (m.get("platform") or {}).get("architecture") == "amd64"
+                         and (m.get("platform") or {}).get("os", "linux") == "linux"), present[0])
+            manifests.append(dict(pick, annotations=desc.get("annotations") or {}))
+            changed = True
+    if not changed:
+        return False
+    index["manifests"] = manifests
+    data = json.dumps(index).encode()
+    with tarfile.open(path) as src, tarfile.open(path + ".fix", "w") as dst:
+        for m in src:
+            if m.name == "index.json":
+                info = tarfile.TarInfo("index.json")
+                info.size, info.mtime, info.mode = len(data), m.mtime, m.mode
+                dst.addfile(info, io.BytesIO(data))
+            else:
+                dst.addfile(m, src.extractfile(m) if m.isfile() else None)
+    os.replace(path + ".fix", path)
+    return True
+
+
+def import_upload(h, q_, user):
+    """An image archive streamed to the builder volume (gzip is taken off as it comes), then imported."""
+    first = lambda k: (q_.get(k) or [""])[0]  # noqa: E731
+    name, description, filename = first("name"), first("description"), first("file") or "image.tar"
+    if not NAME_RE.match(name.strip().lower()):
+        raise ValueError("A name of 3-40 lowercase letters, digits and dashes (it becomes the image's name).")
+    n = int(h.headers.get("Content-Length") or -1)
+    if n < 0:
+        raise ValueError("The upload needs a Content-Length.")
+    if n > IMPORT_MAX:
+        raise ValueError("An image archive can be at most %d GB." % (IMPORT_MAX // 1024 ** 3))
+    os.makedirs(os.path.join(FILES, "imports"), exist_ok=True)
+    if shutil.disk_usage(FILES).free < n * 2.5:
+        raise ValueError("Not enough room on the image builder's volume for this archive (imageBuilder.files.size).")
+    dest = os.path.join(FILES, "imports", "%s.tar" % secrets.token_hex(8))
+    try:
+        with open(dest + ".part", "wb") as out:
+            left = n
+            while left > 0:
+                chunk = h.rfile.read(min(1024 * 1024, left))
+                if not chunk:
+                    raise ValueError("The upload was cut short.")
+                out.write(chunk)
+                left -= len(chunk)
+        with open(dest + ".part", "rb") as f:
+            gzipped = f.read(2) == b"\x1f\x8b"
+        if gzipped:  # a .tar.gz: regctl takes the tar
+            with gzip.open(dest + ".part", "rb") as gz, open(dest, "wb") as out:
+                shutil.copyfileobj(gz, out, 1024 * 1024)
+            os.remove(dest + ".part")
+        else:
+            os.replace(dest + ".part", dest)
+        if not tarfile.is_tarfile(dest):
+            raise ValueError("%s is not an image archive: a `docker save` tar (or .tar.gz) or an OCI layout." % filename)
+        if complete_layout(dest):
+            LOG(event="image-import-platform", file=filename, note="index pointed at the platform the archive holds")
+    except Exception:
+        for f in (dest, dest + ".part"):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        raise
+    source = {"kind": "upload", "file": dest, "name": re.sub(r"[^A-Za-z0-9._ -]", "_", filename)[:120]}
+    image_id, build_id = start_import(name, description, source, user["username"])
+    LOG(event="image-import-upload", image=image_id, bytes=n, by=user["username"])
+    h.send_json(200, {"image": image_id, "build": build_id})
+    return True
+
+
+def images_in_use():
+    """The images workspaces run now (their pods' first container), with which workspaces, and the ones the templates
+    run; each with its entry here when it has one."""
+    found = {}
+    status, pods = kube_call("GET", "/api/v1/namespaces/%s/pods?labelSelector=%s" % (
+        NAMESPACE, urllib.parse.quote("com.coder.workspace.id")))
+    for pod in (pods.get("items") or []) if status == 200 and isinstance(pods, dict) else []:
+        containers = (pod.get("spec") or {}).get("containers") or []
+        if not containers or (pod.get("status") or {}).get("phase") not in ("Running", "Pending"):
+            continue
+        labels = (pod.get("metadata") or {}).get("labels") or {}
+        ws = "%s/%s" % (labels.get("com.coder.user.username", "?"), labels.get("com.coder.workspace.name", "?"))
+        found.setdefault(containers[0]["image"], {"workspaces": [], "templates": []})["workspaces"].append(ws)
+    for t in TEMPLATES:
+        if t.get("image"):
+            found.setdefault(t["image"], {"workspaces": [], "templates": []})["templates"].append(
+                t.get("displayName") or t.get("name"))
+    entries = {}
+    for img in STORE.images():
+        if img.get("pullRef"):
+            entries[img["pullRef"]] = img["id"]
+        if (img.get("tracked") or {}).get("image"):
+            entries[img["tracked"]["image"]] = img["id"]
+    return sorted(({"image": k, "workspaces": sorted(v["workspaces"]), "templates": sorted(v["templates"]),
+                    "entry": entries.get(k)} for k, v in found.items()),
+                  key=lambda x: (-len(x["workspaces"]), x["image"]))
+
+
 RESCAN_ALL = {"running": False, "queued": [], "done": [], "failed": [], "startedAt": None}
 
 
@@ -1499,6 +1746,9 @@ def cancel_build(image_id, build_id):
         raise ValueError("No such build.")
     if b:
         b.cancelled = True
+        proc = getattr(b, "proc", None)  # an import's regctl: stopped now, not at its next line
+        if proc and proc.poll() is None:
+            proc.kill()
     for kind in ("build", "scan"):
         kube_call("DELETE", "/apis/batch/v1/namespaces/%s/jobs/%s?propagationPolicy=Background" % (
             NAMESPACE, job_name(kind, image_id, build_id)))
@@ -1931,7 +2181,9 @@ def route(h, method, rest, query, user, editor, admin):
     try:
         if rest in ("", "/") and method == "GET":
             return h.send_json(200, {"images": STORE.images(), "canEdit": editor, "pullPrefix": PULL_PREFIX,
-                                     "baseImage": BASE_IMAGE.rsplit("/", 1)[-1]}) or True
+                                     "baseImage": BASE_IMAGE.rsplit("/", 1)[-1],
+                                     "templates": [{"name": t.get("name"), "displayName": t.get("displayName")}
+                                                   for t in TEMPLATES if t.get("name")]}) or True
         if rest in ("", "/") and method == "POST":
             need(editor)
             body = read_json(h)
@@ -2018,6 +2270,23 @@ def route(h, method, rest, query, user, editor, admin):
             need(editor)
             APT.load(force=True)
             return h.send_json(200, {"index": APT.status()}) or True
+        if rest == "/import" and method == "POST":
+            need(editor)
+            body = read_json(h)
+            ref = str(body.get("ref") or "").strip()
+            if not REF_RE.match(ref):
+                raise ValueError("An image reference with its registry, such as registry.example.org/team/tool:1.2 "
+                                 "(or @sha256:...).")
+            source = {"kind": "registry", "ref": ref, "user": str(body.get("username") or "")[:256],
+                      "password": str(body.get("password") or "")[:4096]}
+            image_id, build_id = start_import(str(body.get("name") or ""), body.get("description"), source,
+                                              user["username"])
+            return h.send_json(200, {"image": image_id, "build": build_id}) or True
+        if rest == "/import-upload" and method == "PUT":
+            need(editor)
+            return import_upload(h, q_, user) or True
+        if rest == "/in-use" and method == "GET":
+            return h.send_json(200, {"images": images_in_use()}) or True
         m = re.match(r"^/([a-z0-9-]+)(/.*)?$", rest)
         if not m:
             return h.send_json(404, {"error": "not found"}) or True
@@ -2029,6 +2298,8 @@ def route(h, method, rest, query, user, editor, admin):
                 (sub == "" and method == "POST") or sub in ("/delete", "/build", "/s3", "/s3/backup", "/files/delete")
                 or sub.startswith("/files/")):
             raise ValueError(TRACKED_NOTE % img["tracked"].get("image"))
+        if img.get("imported") and (sub in ("/build", "/files/delete") or sub.startswith("/files/")):
+            raise ValueError(IMPORTED_NOTE % img["imported"].get("from"))
 
         def detail(img):
             """The image page's view (GET, and what a save answers with, so the dashboard can keep it)."""
@@ -2139,7 +2410,10 @@ def _quiet(fn, *args):
 
 
 RESERVED_NAMES = {"security-data", "rescan-all", "settings", "apt-check", "apt-search", "apt-refresh", "lint", "format",
-                  "dockerfile", TRACKED_ID}
+                  "dockerfile", "import", "import-upload", "in-use", TRACKED_ID}
+
+IMPORTED_NOTE = ("This image was imported (%s), not built here: import a new version of it instead of building, or "
+                 "build on it with New Image.")
 
 TRACKED_NOTE = ("This is the image the workspace template runs (%s), listed so everyone can see its security and its "
                 "add-ons. It comes with the platform (development/workspace-image) and is not changed here: build on "

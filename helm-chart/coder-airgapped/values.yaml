@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.45 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.51 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.45-airgap
+      tag: 2.0.0-platform.51-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -97,6 +97,11 @@ global:
     oidcCa: keycloaking-coder-ca       # ca.crt: CA of the OIDC provider
     oidcClient: keycloaking-coder-oidc # client-secret
     wildcardTls: tls-wild-cert         # kubernetes.io/tls, mounted into Coder
+  # The safe: each account's own files on S3, mounted at mountPath in all of its workspaces and opened from the
+  # Workspaces page (userStorage below has the storage itself). Here for both charts: the workspace template mounts it.
+  userStorage:
+    enabled: true
+    mountPath: /home/coder/safe
 
 # ---------------------------------------------------------------------------------------------------------------
 # Coder server: the upstream coder chart 2.37.3 (+ platform patch) running the fork's image. (Argo CD app argocd/coder)
@@ -109,9 +114,16 @@ coder:
       repo: '{{ include "platform.coderImage" (list . "repo") }}'
       tag: '{{ include "platform.coderImage" (list . "tag") }}'
       pullSecrets: []
-    # No gap during rollouts. The new pod starts first and must be ready before the old one stops (the defaults with
-    # one replica: maxSurge 25% rounds up to 1, maxUnavailable 25% down to 0). The old pod then keeps serving for 15 s
-    # after it is taken out of the Service, so Traefik stops sending it requests before Coder closes its server
+    # Coder's replicas. More than one is Coder's high availability: the replicas find each other through the database,
+    # relay workspace connections to each other (the chart gives each its pod IP as CODER_DERP_SERVER_RELAY_URL and
+    # CODER_CLUSTER_HOST; they reach each other on TCP 8080 and 6222), and any one of them serves any user. It needs a
+    # Coder license with the high_availability feature: without it, several replicas cannot reach each other's
+    # workspaces. Above 1 the chart adds a PodDisruptionBudget (one replica down at a time). ../values-ha.example.yaml
+    # has the rest (3 replicas across zones, their size, the database's) and DEPLOY.md "High availability" the why.
+    replicaCount: 1
+    # No gap during rollouts. A new pod starts first and must be ready before an old one stops (the defaults: maxSurge
+    # 25% rounds up to 1, maxUnavailable 25% down to 0, with one replica or three). The old pod then keeps serving for
+    # 15 s after it is taken out of the Service, so Traefik stops sending it requests before Coder closes its server
     # (otherwise those requests get a 502). Well inside terminationGracePeriodSeconds (60).
     lifecycle:
       preStop:
@@ -231,6 +243,10 @@ database:
   storage:
     size: 10Gi
     storageClass: standard-k8s
+  # The Cluster's own spec.affinity and spec.resources, as given (empty: the operator's defaults, which keep the
+  # instances on separate nodes when they can). E.g. one instance per zone: {topologyKey: topology.kubernetes.io/zone}.
+  affinity: {}
+  resources: {}
   # Kept on `helm uninstall` / Argo CD prune: the database holds every user, template and workspace.
   keep: true
 
@@ -333,6 +349,51 @@ imageBuilder:
     Components: main universe restricted multiverse
 
 # ---------------------------------------------------------------------------------------------------------------
+# The safe (global.userStorage.enabled): each account's own storage, a prefix users/<user id>/ in one S3 bucket. The
+# platform service makes every account's volume (a PersistentVolume of the CSI driver below, its claim coder-safe-<id>)
+# and serves the Workspaces page's safe; every workspace of the account mounts it (ReadWriteMany). The files are on the
+# chart's MinIO (minio.enabled), or on an S3 service of yours (s3). templates/user-storage.yaml.
+# ---------------------------------------------------------------------------------------------------------------
+userStorage:
+  bucket: coder-user-storage
+  # Each account's limit for what is uploaded on the Workspaces page (files written in a workspace count towards what
+  # it shows, but S3 has no per-prefix quota: the mount is not stopped there).
+  quotaGiB: 10
+  # The largest single upload on the Workspaces page.
+  maxUploadGiB: 5
+  # MinIO in the cluster (one instance on a ReadWriteOnce volume; its credentials: Secret coder-user-storage-s3,
+  # generated). For high availability or more room use an S3 service of yours instead (s3 below).
+  minio:
+    enabled: true
+    # cgr.dev/chainguard/minio (the MinIO project publishes no images since 2025) with its MinIO version as the tag
+    # (development/tools/build-minio-image.sh).
+    image: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-minio:RELEASE.2026-09-22T19-25-18Z") }}'
+    size: 50Gi
+    storageClass: ""
+    resources:
+      requests: {cpu: 50m, memory: 256Mi}
+      limits: {memory: 1Gi}
+  # With minio.enabled false: an S3 service (AWS S3, Ceph, another MinIO...). The bucket must exist or the keys may
+  # create it; existingSecret holds accessKeyID and secretAccessKey.
+  s3:
+    endpoint: ""            # e.g. https://s3.us-east-1.amazonaws.com
+    region: ""
+    existingSecret: ""
+  # The CSI driver that mounts the safes on the nodes (k8s-csi-s3 with GeeseFS, Apache-2.0): a privileged DaemonSet
+  # (FUSE), running GeeseFS as a systemd unit of the node so mounts outlive the driver's restarts. Off when the cluster
+  # has the driver (ru.yandex.s3.csi) already.
+  csi:
+    enabled: true
+    image: '{{ include "platform.image" (list . "cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-s3-driver:0.43.7") }}'
+    registrarImage: '{{ include "platform.image" (list . "cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-node-driver-registrar:v2.16.0") }}'
+    kubeletPath: /var/lib/kubelet
+    # GeeseFS per mounted safe: its memory (MB, on the node), the files as the workspace user (coder, 1000), and how long
+    # it trusts its listing (files uploaded on the Workspaces page show in workspaces within that).
+    mountOptions: "--memory-limit 256 --dir-mode 0750 --file-mode 0640 --uid 1000 --gid 1000 --stat-cache-ttl 10s"
+    tolerations: []
+    nodeSelector: {}
+
+# ---------------------------------------------------------------------------------------------------------------
 # coder-ui-updates: the platform service under /__coder-ui/ (General, Health, Certificates, Chat, Network,
 # Monitoring, Keycloak, logo, avatars...). Files: files/ui-updates/ (source: devbox coder-ui-updates/resources).
 # The platform image renders the UI natively, so no Traefik rewrite middleware is involved for these.
@@ -420,6 +481,9 @@ coder-banner:
 # ---------------------------------------------------------------------------------------------------------------
 coder-workspace:
   enabled: true
+  # The Images view's registry as workspace pods pull it (imageBuilder.registry.localPort): the templates' Workspace
+  # image parameter offers its images. "" with imageBuilder.enabled false.
+  imagesRegistry: localhost:5000/coder-images
   namePrefix: coder-workspace
   namespace: '{{ .Release.Namespace }}'
   coder:

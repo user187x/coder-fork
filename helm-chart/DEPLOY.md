@@ -406,6 +406,22 @@ Images › Settings. The package check and the builds both use it. The vulnerabi
 `coder-image-tools`, dated when the bundle was made); Java archives are not scanned, because their database is not
 bundled. Set S3 backups (bucket, region, keys, or an S3-compatible endpoint such as MinIO) in Images › Settings.
 
+**Importing instead of building.** **Import** brings in a container image as it is: copied from a registry the
+cluster reaches (its reference, and a user and password if that registry asks; they go to `regctl` in a file of its
+own, never on a command line), or uploaded as a `docker save` or OCI archive (`.tar` / `.tar.gz`, up to 20 GB,
+`BUILDER_IMPORT_MAX_GIB`; the builder volume needs room for it). It is stored and scanned like a built image, and a
+new version is imported the same way. **In use** lists the images workspaces run now and the templates' own, each
+opened or imported from there.
+
+**Running a workspace on an image.** The chart's templates take any image here as their **Workspace image** parameter
+(`coder-workspace.imagesRegistry`, `localhost:5000/coder-images` by default; `""` takes it away): a new workspace on
+it (the image's page has a button per template), or an existing one switched to it in its settings, from its next
+start. An image built on the workspace image has everything the templates run.
+
+**The ISO library** (with the safe's storage, `global.userStorage`): disk images for every workspace, read-only at
+`~/isos` in each. Admins and template admins upload ISOs (or `.img`) or have the platform service fetch one from an
+address the cluster reaches; up to 20 GB each (`SAFE_ISO_MAX_GIB`). Personal ones go in each user's safe.
+
 Builds start from the workspace image in the builder's own registry in the cluster, so BuildKit needs no access
 to your registry. `./make --deploy` puts it there (on any cluster); after an Argo CD or plain Helm install, run
 `./mirror-images.sh seed-builder coder` once (Step 8). Until then, builds use the workspace image in your registry
@@ -457,6 +473,103 @@ volume (`imageBuilder.enabled`) and the platform service's permission to manage 
 > desktop, Firefox, code-server, File Browser, marimo (with all its packages), tmux, k9s/kubectl and the JetBrains Mono
 > Nerd Font. Nothing is downloaded when a workspace starts (`coder-workspace:1.8.0` and later).
 
+## The safe (each account's own storage)
+
+Every account has a **safe**: its own files on S3, opened on the Workspaces page (under **New workspace**) and mounted
+at `~/safe` in each of its workspaces, the same files everywhere. On by default (`global.userStorage.enabled`).
+
+* **Where the files are:** one bucket (`userStorage.bucket`), a prefix `users/<user id>/` per account. By default on
+  the chart's MinIO (one instance, a `userStorage.minio.size` volume; its keys in Secret `coder-user-storage-s3`,
+  generated). For high availability or more room, use your own S3 instead: `userStorage.minio.enabled: false`,
+  `userStorage.s3.endpoint`, `.region`, and `.existingSecret` (a Secret with `accessKeyID` and `secretAccessKey`).
+* **How workspaces get it:** the CSI driver `ru.yandex.s3.csi` (k8s-csi-s3 with GeeseFS; `userStorage.csi`) runs on
+  every node as a **privileged DaemonSet**: it needs `/dev/fuse` and systemd on the nodes (EKS's Amazon Linux nodes
+  have both). If your cluster already runs that driver, set `userStorage.csi.enabled: false`. Clusters that enforce
+  Pod Security "baseline" or "restricted" on the namespace must allow it.
+* **Each account's volume:** the platform service makes a PersistentVolume and claim `coder-safe-<user id>` for every
+  account within a minute of its creation (Retain: removing them never removes files). A workspace started before
+  that waits for it.
+* **Mount options** (`userStorage.csi.mountOptions`) are written into each account's volume when it is made. To give
+  an account the new ones, delete its claim and volume `coder-safe-<user id>` while none of its workspaces runs; the
+  files stay, and the platform service makes them again within a minute.
+* **Limits:** `userStorage.quotaGiB` (10) per account for uploads on the page, `userStorage.maxUploadGiB` (5) a file.
+  Files written inside a workspace are not stopped at the quota (S3 has none per prefix); the page shows what is used.
+* **Images:** `ghcr.io/user187x/coder-minio` (Chainguard's MinIO build; the MinIO project publishes no images since
+  2025: `development/tools/build-minio-image.sh`) and the driver's two images, all in `images.txt` and the bundle.
+
+## High availability
+
+Coder can run as several replicas behind one address. Any replica serves any user and relays to any workspace, and
+when one stops, the others carry on. This is Coder's own high availability: the fork leaves it as it is. The chart
+gives each replica what it needs to find the others: its pod IP as `CODER_DERP_SERVER_RELAY_URL` and
+`CODER_CLUSTER_HOST`. `values-ha.example.yaml` turns it on, on top of your values:
+
+```bash
+./install.sh -f my-values.yaml -f values-ha.example.yaml ...    # Argo CD: the same keys in the valuesObject
+```
+
+| | Default | `values-ha.example.yaml` |
+|---|---|---|
+| Coder | 1 replica, 2 vCPU and 4 GiB | 3 replicas of 2 vCPU and 8 GiB (Coder's reference for up to 1,000 users), one per node, spread over the zones; a PodDisruptionBudget lets node drains take only one down at a time |
+| Database (CloudNativePG) | 2 instances | 3 instances, one per zone. The operator promotes a replica when the primary fails, and Coder follows, because it connects through the `-rw` Service. The operator makes the database's own PodDisruptionBudgets |
+| Banner | 1 replica | 2 replicas |
+
+**What it needs:**
+
+- [ ] **A Coder license with the `high_availability` feature** (Deployment › Licenses). Without it, Coder warns
+      "You have multiple replicas but high availability is an Enterprise feature", and users on one replica cannot
+      reach workspaces connected to another.
+- [ ] **Nodes for Coder in 3 zones of one region**, in a static node group (one the autoscaler never scales down, so
+      no replica is dropped with its connections), with room for a 4th replica during a rollout. Under 10 ms
+      between them and to the database. Never across regions.
+- [ ] **Coder's pods reach each other on TCP 8080** (relayed workspace connections) **and 6222** (the replicas'
+      message bus). EKS's node security group allows traffic between nodes by default. With NetworkPolicies in
+      `coder`, allow both ports between the pods labelled `app.kubernetes.io/name: coder`.
+- [ ] **Traefik with 2 or more replicas**, so the Gateway isn't a single pod. In Traefik's chart, set
+      `deployment.replicas: 2` and `podDisruptionBudget: {enabled: true, maxUnavailable: 1}`, behind a load balancer
+      in all three zones.
+
+**Upgrades.** A rolling update replaces one replica at a time, and each new replica is ready before an old one stops.
+Connections through a stopping replica drop for a moment and reconnect to another. A new Coder version
+(`global.coderImages.upstream` changes, so the fork's upstream base changes) can bring database migrations, and old
+replicas can hold the locks those migrations need. Before such an upgrade, scale Coder to one replica, then upgrade:
+
+- **Plain Helm:** run `kubectl -n coder scale deploy/coder --replicas=1`, then `./install.sh ...` (Helm restores the
+  3 replicas on the new version).
+- **Argo CD:** set `coder.coder.replicaCount: 1` and sync, update, then set it back to 3. A `kubectl scale` would be
+  undone by Argo CD's self-heal.
+
+The fork adds no migrations of its own, so a new fork build on the same upstream base upgrades with a plain rolling
+update. If a migration still waits on a lock, follow Coder's
+[upgrade best practices](https://coder.com/docs/install/operate/upgrade/best-practices). On an existing install,
+going from 2 database instances to 3 adds a replica online. A new `database.affinity` restarts the instances one
+at a time, the primary last. Coder's database requests pause while the primary moves, and then Coder reconnects.
+
+**What stays a single copy:**
+
+- **The platform service** (`coder-ui-updates`: Health, Chat, Images, Monitoring and the other platform views). Its
+  data is a SQLite file on a ReadWriteOnce volume. While it restarts, Coder keeps working: quota and schedule checks
+  let requests through, and the dashboard starts with its defaults. On EKS its EBS volume is in one zone, so it
+  stays down if that zone is lost.
+- **The image builder's registry** (`coder-image-registry`, ReadWriteOnce). While it is down, nodes cannot pull
+  images built in Templates › Images that they don't already have.
+- **Workspaces.** Each is one pod (or VM) with its volume in one zone. Coder's high availability keeps the dashboard
+  and connections up, but it does not protect a workspace whose node or zone is lost.
+
+**Sizing and monitoring** (Coder's [scale guide](https://coder.com/docs/tutorials/best-practices/scale-coder)):
+
+- Grow replicas vertically before adding more. Keep Coder under about 10 replicas, and don't autoscale it.
+- Each replica runs 3 provisioners, so 3 replicas build 9 workspaces at a time. More builds at once need external
+  provisioner daemons (with `CODER_PROVISIONER_DAEMONS=0` on Coder), which this chart doesn't have yet.
+- With STUN off (the air-gap values), every CLI and IDE connection to a workspace is relayed through a Coder replica.
+  Size the replicas for that traffic.
+- Each replica opens up to 10 database connections (`CODER_PG_CONN_MAX_OPEN`). PostgreSQL's `max_connections`
+  (100) must cover all replicas' connections plus about 20%.
+- To expose metrics, add `CODER_PROMETHEUS_ENABLE=true`, `CODER_PROMETHEUS_COLLECT_DB_METRICS=true` and
+  `CODER_PROMETHEUS_AGGREGATE_AGENT_STATS_BY=agent_name` to `coder.coder.extraEnv`. That is a list, so repeat your
+  values' entries in it. Then scrape port 2112 of each Coder pod and alert on the tail latency of
+  `coderd_api_request_latencies_seconds` and `coderd_db_query_latencies_seconds`.
+
 ---
 
 ## If something goes wrong
@@ -470,6 +583,10 @@ volume (`imageBuilder.enabled`) and the platform service's permission to manage 
 | Login page doesn't load | DNS and the Gateway's HTTPS certificate for `coder.<your-domain>` |
 | `admin` / `admin` is refused | The admin's password was changed, or the database was not fresh: `kubectl -n coder logs job/coder-bootstrap-first-user` |
 | No workspace template in Coder | `kubectl -n coder logs job/coder-bootstrap-first-user` and `job/coder-workspace-push-template` |
+| "You have multiple replicas but …" in Coder | High availability needs a license with `high_availability`. Until one is added, set `coder.coder.replicaCount: 1` |
+| An upgrade hangs with a `coder` pod Pending | High availability: Coder's nodes have no room for the rollout's extra replica (`kubectl -n coder describe pod`) |
+| A new workspace waits in `ContainerCreating` | The safe: `kubectl -n coder get pvc coder-safe-<user id>` (made by the platform service), `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-csi` (FUSE and systemd on the node) |
+| The safe says its storage cannot be reached | `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-minio`, or your S3's endpoint and keys (`userStorage.s3`) |
 
 ---
 

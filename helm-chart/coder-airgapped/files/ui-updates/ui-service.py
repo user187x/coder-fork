@@ -22,7 +22,8 @@
   Network map (admins; nodes, pods and metrics read cluster-wide through the ClusterRole coder-ui-updates-<namespace>)
   GET  /__coder-ui/api/network            nodes (addresses, capacity, usage), Coder's pods, running workspaces per node
   GET  /__coder-ui/api/cluster/usage      CPU / memory totals (allocatable, in use, requested, free) and the last 15 minutes
-                                         of the cluster's network traffic: the Settings menu's bars and graph
+                                         of the cluster's CPU and memory in use and of its network traffic: the Settings
+                                         menu's bars and graphs
 
   Classification banner
   GET  /__coder-ui/api/classification     public (the marking shows on the sign-in page too)
@@ -129,6 +130,7 @@ import pgwire  # noqa: E402  (next to this file)
 import imagebuilder  # noqa: E402  (next to this file: the Images view)
 import workspacevolumes  # noqa: E402  (workspace icons, home backups, disk growth)
 import lockdown  # noqa: E402  (Lock Down: admins jail a workspace's network and sudo)
+import safe  # noqa: E402  (the safe: each account's own files on S3, on the Workspaces page and in its workspaces)
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -6873,6 +6875,23 @@ class HudHistory(threading.Thread):
         points = [{"t": r["t"], "rx": round(r["net_rx"], 1), "tx": round(r["net_tx"], 1)} for r in rows]
         return {"rx": points[-1]["rx"], "tx": points[-1]["tx"], "points": points, "every": HUD_SAMPLE_EVERY}
 
+    def usage_recent(self, seconds=900):
+        """The cluster's CPU (cores) and memory (bytes) in use and allocatable over the last `seconds`, one point a
+        round: {"points": [{"t", "cpu", "cpuTotal", "memory", "memoryTotal"}], "every"}, or None before there is any.
+        The Settings menu's CPU and memory graphs; "in use" as the bars have it (live, or requested without
+        metrics-server)."""
+        with self.connect() as db:
+            rows = db.execute("""SELECT t, cpu, cpu_total, mem, mem_total FROM samples
+                WHERE t >= ? AND cpu IS NOT NULL AND mem IS NOT NULL ORDER BY t""",
+                              (int(time.time()) - seconds,)).fetchall()
+        if not rows:
+            return None
+        gib = 1024 ** 3
+        return {"points": [{"t": r["t"], "cpu": round(r["cpu"], 3), "cpuTotal": round(r["cpu_total"] or 0, 3),
+                            "memory": round(r["mem"] * gib), "memoryTotal": round((r["mem_total"] or 0) * gib)}
+                           for r in rows],
+                "every": HUD_SAMPLE_EVERY}
+
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
@@ -7323,6 +7342,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if lockdown.handle(self, "GET", path, url.query):
             return
+        if safe.handle(self, "GET", path, url.query) or safe.handle_isos(self, "GET", path, url.query):
+            return
         if path.startswith(TEMPLATE_ICONS_PATH):
             return self.template_icon(path[len(TEMPLATE_ICONS_PATH):])
         if path == BASE + "/refresh":
@@ -7626,7 +7647,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 return self.send_json(200, {
                     **cluster_usage(),
-                    # The Settings menu's network graph: the last 15 minutes of the HUD's samples.
+                    # The Settings menu's graphs: the last 15 minutes of the HUD's samples.
+                    "history": HUD_HISTORY.usage_recent() if HUD_HISTORY else None,
                     "network": HUD_HISTORY.network_recent() if HUD_HISTORY else None,
                 })
             except Exception as e:  # noqa: BLE001
@@ -8147,6 +8169,8 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlsplit(self.path)
         if url.path.startswith(BASE + "/internal/") and workspacevolumes.handle_internal(self, "PUT", url.path):
             return
+        if safe.handle(self, "PUT", url.path, url.query) or safe.handle_isos(self, "PUT", url.path, url.query):
+            return
         if not imagebuilder.handle(self, "PUT", url.path, url.query, ADMIN_ROLES):
             self.send(404, "not found\n")
 
@@ -8178,6 +8202,8 @@ class Handler(BaseHTTPRequestHandler):
         if workspacevolumes.handle(self, "POST", path, url.query):
             return
         if lockdown.handle(self, "POST", path, url.query):
+            return
+        if safe.handle(self, "POST", path, url.query) or safe.handle_isos(self, "POST", path, url.query):
             return
         routes = {
             BASE + "/api/view",
@@ -8591,6 +8617,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
 
+def safe_accounts():
+    """Every account (Coder's database), for their safes' volumes: [(id, username)]; None before the database is up."""
+    pool = LOGOS.pool if LOGOS else None
+    if not pool:
+        return None
+    return [(r[0], r[1]) for r in pool.query("SELECT id::text, username FROM users WHERE deleted = false")]
+
+
 def main():
     global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY, BACKGROUNDS, BANNER_PICTURES, HUD_HISTORY
     STORE = Store(DB_PATH)
@@ -8614,6 +8648,8 @@ def main():
     workspacevolumes.start()
     lockdown.setup(log, KUBE, workspace_info, ADMIN_ROLES, CODER_ACCESS_URL)
     lockdown.start()
+    safe.setup(log, KUBE, safe_accounts, lambda user: imagebuilder.can_edit(user, ADMIN_ROLES))
+    safe.start()
     if imagebuilder.ENABLED:
         # the apt indices for the package check, ready before anyone opens the builder
         threading.Thread(target=lambda: imagebuilder.APT.load(), daemon=True).start()

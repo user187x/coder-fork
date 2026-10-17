@@ -2,7 +2,7 @@
 keep it fast under load, and keep the image builder honest offline. Imported as modules, nothing started.
 
   python3 -m unittest platform_unit_test.py"""
-import importlib.util, os, sys, threading, unittest
+import importlib.util, json, os, sys, threading, unittest
 from unittest import mock
 
 SRC = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -468,6 +468,21 @@ class ClusterNetworkTest(unittest.TestCase):
         recent = hud.network_recent()
         self.assertEqual((recent["rx"], recent["tx"], len(recent["points"])), (2048.2, 512.5, 1))
 
+    def test_cpu_and_memory_of_the_last_15_minutes(self):
+        import time as t
+        now = int(t.time())
+        with self.hud.connect() as db:
+            for at, cpu, mem in ((now - 1200, 9.0, 9.0), (now - 30, 0.5, 2.0), (now, 1.25, 3.5)):
+                db.execute("INSERT INTO samples (t, live, cpu, cpu_total, mem, mem_total) VALUES (?, 1, ?, 8, ?, 16)",
+                           (at, cpu, mem))
+            db.execute("INSERT INTO samples (t, live, net_rx, net_tx) VALUES (?, 1, 10, 20)", (now - 15,))  # traffic only
+        recent = self.hud.usage_recent()
+        self.assertEqual(recent["every"], ui.HUD_SAMPLE_EVERY)
+        self.assertEqual(recent["points"], [                                   # older than 15 minutes: left out
+            {"t": now - 30, "cpu": 0.5, "cpuTotal": 8, "memory": 2 * 1024 ** 3, "memoryTotal": 16 * 1024 ** 3},
+            {"t": now, "cpu": 1.25, "cpuTotal": 8, "memory": int(3.5 * 1024 ** 3), "memoryTotal": 16 * 1024 ** 3}])
+        self.assertIsNone(ui.HudHistory(os.path.join(self.dir.name, "empty.sqlite")).usage_recent())
+
 
 class BannerPictureTest(unittest.TestCase):
     """Insert picture: what is accepted, and how pictures are kept (named by their content, the newest kept)."""
@@ -771,3 +786,258 @@ class BannerTransitionsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SafeTest(unittest.TestCase):
+    """The safe (safe.py): only ever the caller's own prefix, every account's volume made, the nodes' endpoint."""
+
+    UID = "3f0c2a52-7d7e-4c5b-9a3e-2f4b8c1d0e9a"
+
+    def setUp(self):
+        self.safe = load("safe", "safe.py")
+        self.safe.LOG = lambda **kw: None
+
+    def test_paths_stay_inside_the_safe(self):
+        c = self.safe.clean_path
+        self.assertEqual(c("/docs/a b.txt/"), "docs/a b.txt")
+        self.assertEqual(c(""), "")
+        for bad in ("../x", "a/../../b", "a//b", "./a", "a/\x00b", "a/\nb", "x" * 256):
+            with self.assertRaises(ValueError, msg=bad):
+                c(bad)
+        self.assertEqual(self.safe.root_of(self.UID), "users/%s/" % self.UID)
+        with self.assertRaises(PermissionError):
+            self.safe.root_of("../other")
+
+    def test_volume_is_the_accounts_prefix_retained(self):
+        pv, pvc = self.safe.volume_objects(self.UID, "alice")
+        self.assertEqual(pv["metadata"]["name"], "coder-safe-" + self.UID)
+        self.assertEqual(pv["spec"]["csi"]["volumeHandle"], "coder-user-storage/users/" + self.UID)
+        self.assertEqual(pv["spec"]["persistentVolumeReclaimPolicy"], "Retain")
+        self.assertEqual(pv["spec"]["claimRef"], {"namespace": "coder", "name": "coder-safe-" + self.UID})
+        self.assertEqual(pv["spec"]["csi"]["nodePublishSecretRef"]["name"], "coder-user-storage-mount")
+        self.assertEqual((pvc["spec"]["volumeName"], pvc["spec"]["accessModes"], pvc["spec"]["storageClassName"]),
+                         (pv["metadata"]["name"], ["ReadWriteMany"], ""))
+
+    def test_reconcile_makes_what_is_missing_and_the_nodes_endpoint(self):
+        import base64
+        calls = []
+        have = {"/api/v1/persistentvolumes/coder-safe-" + self.UID: {}}                # the PV is there already
+
+        class Kube:
+            ok = True
+
+            def call(self, method, path, body=None, patch_type=None):
+                calls.append((method, path))
+                if method == "GET" and path.endswith("/services/coder-user-storage-minio"):
+                    return 200, {"spec": {"clusterIP": "10.96.4.5"}}
+                if method == "GET":
+                    return (200, have[path]) if path in have else (404, {})
+                have[path + "/" + body["metadata"]["name"]] = body                      # POST: made
+                return 201, body
+
+        self.safe.KUBE = Kube()
+        self.safe.NODE_SERVICE = "coder-user-storage-minio"
+        self.safe.USERS = lambda: [(self.UID, "alice")]
+        s3 = mock.Mock()
+        s3.bucket_exists.return_value = False
+        with mock.patch.object(self.safe, "client", return_value=s3), \
+                mock.patch.dict(os.environ, {"S3_ACCESS_KEY": "k", "S3_SECRET_KEY": "s"}):
+            self.safe.reconcile()
+            self.safe.reconcile()                                                       # nothing more to make
+        s3.create_bucket.assert_called_with("coder-user-storage")
+        self.assertEqual([p for m, p in calls if m in ("POST", "PUT")],
+                         ["/api/v1/namespaces/coder/secrets",                            # the mount Secret
+                          "/api/v1/persistentvolumes",                                   # the ISO library's
+                          "/api/v1/namespaces/coder/persistentvolumeclaims",
+                          "/api/v1/namespaces/coder/persistentvolumeclaims"])            # the account's (its PV was there)
+        secret = have["/api/v1/namespaces/coder/secrets/coder-user-storage-mount"]["data"]
+        self.assertEqual({k: base64.b64decode(v).decode() for k, v in secret.items()},
+                         {"accessKeyID": "k", "secretAccessKey": "s", "endpoint": "http://10.96.4.5:9000"})
+        # the account's volume is asked about once in ten minutes, not every round
+        self.assertEqual(sum(1 for m, p in calls if p.endswith("persistentvolumeclaims/coder-safe-" + self.UID)), 1)
+
+    def test_listing_shows_folders_and_files_not_the_folder_marker(self):
+        prefix = "users/%s/docs/" % self.UID
+        s3 = mock.Mock()
+        s3.list.return_value = ([{"key": prefix, "size": 0, "modified": "t"},
+                                 {"key": prefix + "b.txt", "size": 5, "modified": "t"},
+                                 {"key": prefix + "A.txt", "size": 3, "modified": "t"}],
+                                [prefix + "zeta/", prefix + "Alpha/"])
+        with mock.patch.object(self.safe, "client", return_value=s3):
+            out = self.safe.listing({"id": self.UID}, "docs")
+        s3.list.assert_called_with("coder-user-storage", prefix=prefix, delimiter="/")
+        self.assertEqual(out["folders"], [{"name": "Alpha"}, {"name": "zeta"}])
+        self.assertEqual([f["name"] for f in out["files"]], ["A.txt", "b.txt"])
+
+    def test_writes_need_the_dashboards_header(self):
+        self.safe.ENABLED = True
+        sent = []
+        h = mock.Mock()
+        h.headers = {"Origin": "https://coder.example", "Host": "coder.example"}
+        h.send_json = lambda status, body: sent.append(status)
+        self.assertTrue(self.safe.handle(h, "POST", "/__coder-ui/api/safe/delete", ""))
+        self.assertEqual(sent, [403])
+        h.user.assert_not_called()
+        h.headers = {"X-Requested-With": "coder-ui", "Origin": "https://evil.example", "Host": "coder.example"}
+        self.safe.handle(h, "PUT", "/__coder-ui/api/safe/upload", "path=a")
+        self.assertEqual(sent, [403, 403])
+        self.assertFalse(self.safe.handle(h, "GET", "/__coder-ui/api/other", ""))
+
+
+class ImageImportTest(unittest.TestCase):
+    """Images brought in (imagebuilder.py: Import): references, names, archives, and what workspaces run."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.files = mock.patch.object(ib, "FILES", self.dir.name)
+        self.files.start()
+        self.store = mock.patch.object(ib, "STORE", ib.DB(os.path.join(self.dir.name, "images.sqlite")))
+        self.store.start()
+        self.started = mock.patch.object(ib.Import, "start")  # nothing runs
+        self.started.start()
+        ib.LOG = lambda **kw: None
+
+    def tearDown(self):
+        self.started.stop()
+        self.store.stop()
+        self.files.stop()
+        self.dir.cleanup()
+
+    def test_references_and_their_registry(self):
+        for ok in ("registry.example.org/team/tool:1.2", "harbor.local:8443/a/b@sha256:" + "0" * 64,
+                   "ghcr.io/user187x/coder-workspace:1.8.5"):
+            self.assertTrue(ib.REF_RE.match(ok), ok)
+        for bad in ("tool:1.2", "registry.example.org/team/tool", "registry.example.org/team/tool:1.2 extra",
+                    "https://registry.example.org/a:1"):
+            self.assertFalse(ib.REF_RE.match(bad), bad)
+        self.assertEqual(ib.registry_host("harbor.local:8443/a/b:1"), "harbor.local:8443")
+        self.assertEqual(ib.registry_host("library/python:3"), "docker.io")
+
+    def test_an_import_is_an_image_of_its_own_and_its_versions(self):
+        src = {"kind": "registry", "ref": "registry.example.org/team/tool:1.2", "user": "", "password": ""}
+        image_id, build_id = ib.start_import("Team-Tool", "the team's tool", src, "alice")
+        img = ib.STORE.image("team-tool")
+        self.assertEqual((image_id, img["imported"]["source"], img["imported"]["from"]),
+                         ("team-tool", "registry", "registry.example.org/team/tool:1.2"))
+        self.assertEqual(ib.STORE.build(build_id)["version"], 1)
+        steps = [s["key"] for s in json.loads(ib.STORE.build(build_id)["steps"])]
+        self.assertEqual(steps, ["copy", "push", "scan", "checks"])
+        with self.assertRaisesRegex(ValueError, "being imported"):
+            ib.start_import("team-tool", "", src, "alice")
+        ib.STORE.update_build(build_id, status="ready")
+        ib.STORE.set("team-tool", version=1, ref="x", status="ready")
+        _, second = ib.start_import("team-tool", "", src, "bob")
+        self.assertEqual(ib.STORE.build(second)["version"], 2)
+        ib.STORE.create("built-here", "", ib.empty_spec(), "alice")
+        with self.assertRaisesRegex(ValueError, "built here"):
+            ib.start_import("built-here", "", src, "alice")
+        with self.assertRaisesRegex(ValueError, "uses itself"):
+            ib.start_import("in-use", "", src, "alice")
+
+    def test_an_uploaded_archive_gzip_or_not(self):
+        import gzip as gz, io, tarfile
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode="w") as tf:
+            info = tarfile.TarInfo("manifest.json")
+            info.size = 2
+            tf.addfile(info, io.BytesIO(b"[]"))
+        for body, label in ((raw.getvalue(), "tar"), (gz.compress(raw.getvalue()), "tar.gz"), (b"not a tar" * 100, "junk")):
+            sent = []
+            h = mock.Mock()
+            h.headers = {"Content-Length": str(len(body))}
+            h.rfile = io.BytesIO(body)
+            h.send_json = lambda status, payload: sent.append((status, payload))
+            q = {"name": ["up-" + label.replace(".", "-")], "file": ["x." + label]}
+            if label == "junk":
+                before = sorted(os.listdir(os.path.join(self.dir.name, "imports")))
+                with self.assertRaisesRegex(ValueError, "not an image archive"):
+                    ib.import_upload(h, q, {"username": "alice"})
+                self.assertEqual(sorted(os.listdir(os.path.join(self.dir.name, "imports"))), before)  # nothing left
+                continue
+            ib.import_upload(h, q, {"username": "alice"})
+            self.assertEqual(sent[0][0], 200, sent)
+            build = ib.STORE.build(sent[0][1]["build"])
+            self.assertEqual([s["key"] for s in json.loads(build["steps"])][0], "load")
+        files = os.listdir(os.path.join(self.dir.name, "imports"))
+        self.assertEqual(len(files), 2)                                         # one tar each, unpacked
+        for f in files:
+            self.assertTrue(tarfile.is_tarfile(os.path.join(self.dir.name, "imports", f)))
+
+    def test_images_in_use(self):
+        pods = {"items": [
+            {"metadata": {"labels": {"com.coder.user.username": "alice", "com.coder.workspace.name": "w1"}},
+             "spec": {"containers": [{"image": "ghcr.io/user187x/coder-workspace:1.8.5"}]}, "status": {"phase": "Running"}},
+            {"metadata": {"labels": {"com.coder.user.username": "bob", "com.coder.workspace.name": "w2"}},
+             "spec": {"containers": [{"image": "localhost:5000/coder-images/team-tool:2"}]}, "status": {"phase": "Running"}},
+            {"metadata": {"labels": {}}, "spec": {"containers": [{"image": "old:1"}]}, "status": {"phase": "Succeeded"}}]}
+        ib.STORE.create("team-tool", "", dict(ib.empty_spec(), imported={"source": "registry"}), "alice")
+        ib.STORE.set("team-tool", version=2, ref="r", status="ready")
+        with mock.patch.object(ib, "kube_call", return_value=(200, pods)), \
+                mock.patch.object(ib, "TEMPLATES", [
+                    {"name": "ubuntu-vnc-desktop", "displayName": "UBUNTU", "image": "ghcr.io/user187x/coder-workspace:1.8.5"},
+                    {"name": "ubuntu-dataflow", "displayName": "UBUNTU DATAFLOW",
+                     "image": "ghcr.io/user187x/coder-workspace-dataflow:1.1.0"}]):
+            out = {x["image"]: x for x in ib.images_in_use()}
+        self.assertEqual(out["ghcr.io/user187x/coder-workspace:1.8.5"]["workspaces"], ["alice/w1"])
+        self.assertEqual(out["ghcr.io/user187x/coder-workspace:1.8.5"]["templates"], ["UBUNTU"])
+        self.assertEqual(out["ghcr.io/user187x/coder-workspace-dataflow:1.1.0"]["workspaces"], [])
+        self.assertEqual(out["localhost:5000/coder-images/team-tool:2"]["entry"], "team-tool")
+        self.assertNotIn("old:1", out)
+
+
+class IsoLibraryTest(unittest.TestCase):
+    def setUp(self):
+        self.safe = load("safe", "safe.py")
+        self.safe.LOG = lambda **kw: None
+
+    def test_names_and_the_shared_read_only_volume(self):
+        for ok in ("ubuntu-26.04-desktop-amd64.iso", "disk.IMG"):
+            self.assertEqual(self.safe.iso_name(ok), ok)
+        for bad in ("../x.iso", "notes.txt", "a b.iso", ".iso"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.safe.iso_name(bad)
+        pv, pvc = self.safe.iso_volume_objects()
+        self.assertEqual((pv["spec"]["csi"]["volumeHandle"], pv["spec"]["accessModes"], pv["spec"]["csi"]["readOnly"]),
+                         ("coder-user-storage/library/isos", ["ReadOnlyMany"], True))
+        self.assertEqual(pvc["spec"]["volumeName"], "coder-isos")
+
+    def test_only_editors_change_it(self):
+        self.safe.ENABLED = True
+        self.safe.CAN_EDIT = lambda user: "owner" in user["roles"]
+        sent = []
+        h = mock.Mock()
+        h.headers = {"X-Requested-With": "coder-ui"}
+        h.user.return_value = ({"id": "u", "username": "dev", "roles": []}, None)
+        h.send_json = lambda status, body: sent.append(status)
+        self.safe.handle_isos(h, "POST", "/__coder-ui/api/isos/delete", "")
+        self.assertEqual(sent, [403])
+
+
+class ArchiveLayoutTest(unittest.TestCase):
+    def test_an_index_of_platforms_not_all_held_points_at_the_one_held(self):
+        import io as io_, tarfile, tempfile
+        amd = b'{"schemaVersion":2,"config":{},"layers":[]}'
+        amd_d = "sha256:" + __import__("hashlib").sha256(amd).hexdigest()
+        lst = json.dumps({"schemaVersion": 2, "manifests": [
+            {"digest": "sha256:" + "a" * 64, "platform": {"architecture": "arm64", "os": "linux"}},
+            {"digest": amd_d, "platform": {"architecture": "amd64", "os": "linux"}, "size": len(amd)}]}).encode()
+        lst_d = "sha256:" + __import__("hashlib").sha256(lst).hexdigest()
+        index = json.dumps({"schemaVersion": 2, "manifests": [{
+            "mediaType": "application/vnd.docker.distribution.manifest.list.v2+json", "digest": lst_d,
+            "annotations": {"org.opencontainers.image.ref.name": "3.10.1"}}]}).encode()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "a.tar")
+            with tarfile.open(path, "w") as tf:
+                for name, data in (("index.json", index), ("oci-layout", b'{"imageLayoutVersion":"1.0.0"}'),
+                                   ("blobs/sha256/" + lst_d[7:], lst), ("blobs/sha256/" + amd_d[7:], amd)):
+                    info = tarfile.TarInfo(name)
+                    info.size = len(data)
+                    tf.addfile(info, io_.BytesIO(data))
+            self.assertTrue(ib.complete_layout(path))
+            with tarfile.open(path) as tf:
+                fixed = json.load(tf.extractfile("index.json"))
+                self.assertEqual(len(tf.getnames()), 4)                    # every other file kept
+            self.assertEqual(fixed["manifests"][0]["digest"], amd_d)
+            self.assertEqual(fixed["manifests"][0]["annotations"]["org.opencontainers.image.ref.name"], "3.10.1")
+            self.assertFalse(ib.complete_layout(path))                     # complete now: left alone

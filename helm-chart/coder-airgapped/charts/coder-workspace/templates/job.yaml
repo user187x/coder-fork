@@ -166,6 +166,15 @@ spec:
                 --variable coder_service="{{ $.Values.nifiRoute.coderService.name }}" \
                 --variable coder_service_port="{{ $.Values.nifiRoute.coderService.port }}" \
                 --variable home_storage_class="{{ $.Values.storageClass | default "" }}" \
+                {{- with $.Values.imagesRegistry }}
+                --variable images_registry="{{ . }}" \
+                {{- end }}
+                {{- /* The owner's safe (global user storage, the parent chart's userStorage): their PersistentVolumeClaim
+                     coder-safe-<owner id>, which the platform service makes for every account. */}}
+                {{- with ($.Values.global.userStorage | default dict) }}{{ if eq (toString .enabled) "true" }}
+                --variable user_storage=true \
+                --variable user_storage_path="{{ .mountPath | default "/home/coder/safe" }}" \
+                {{- end }}{{ end }}
                 {{- with $.Values.global.clusterAccess }}{{ if .enabled }}
                 --variable cluster_oidc_issuer="{{ $.Values.global.oidc.issuerUrl | default (printf "https://keycloak.%s/realms/master" $.Values.global.domain) }}" \
                 --variable cluster_oidc_client_id="{{ .clientId }}" \

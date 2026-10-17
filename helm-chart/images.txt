@@ -4,10 +4,11 @@
 # mirror-images.sh pulls by that digest (save) and pushes the image under its tag (push).
 
 [custom]    images/custom/             NOT on any public registry - always keep in the bundle
-ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap  sha256:e1f958aba7bedbc8430fc2dcccf3bd6af67cb150311137709a8aad9032473efe   coder (server); = the fork's platform.35 (ac6508b0e) + Terraform provider mirror
+ghcr.io/user187x/coder-platform:2.0.0-platform.51-airgap  sha256:00a9aabce04800d236690f256d3988470f201b4ed9096e9a58eb321df601418a   coder (server); = the fork's platform.51 (1bf586ae6) + Terraform provider mirror
 ghcr.io/user187x/coder-workspace:1.8.5                    sha256:49281117cc6e1ea15b278fdebaff5fc12cc3c1108a020bb1381e47decd2639f0   workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image)
 ghcr.io/user187x/coder-workspace-dataflow:1.1.0           sha256:05ab59d68bc4fb35ba2cc82c1319d51ebf89142c38d78c687b343e2dc2dbefef   workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), Apache Airflow 3.3.2 (development/workspace-image-dataflow)
 ghcr.io/user187x/coder-image-tools:1.0.0                  sha256:b173c95de907b184a0219d40ac1dedb6c07a929a10406c96856eb9cda092f8af   coder-ui-updates and the Images builder's scans: the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
+ghcr.io/user187x/coder-minio:RELEASE.2026-09-22T19-25-18Z sha256:c93745c56fccdaf0e5dcb88999a96a65a136428beb045ef5d546255a80d747a7   the safe's storage (userStorage.minio): cgr.dev/chainguard/minio retagged with its MinIO release (development/tools/build-minio-image.sh)
 ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap sha256:075fdbdd195a5b7649ce6e341f496653615a2e8785cedb46dda08660a2793410   plain base (Argo CD decorator install without the layer) and rollback: pure upstream Coder at the fork's base (70bc2e554) + the same Terraform provider mirror (development/coder-fork/ROLLBACK.md)
 
 [chart]     images/public/chart/       public; every pod the chart starts - must be in your registry
@@ -16,6 +17,8 @@ docker.io/library/python:3.13-alpine                      sha256:2d9aefe2fef018a
 docker.io/moby/buildkit:v0.33.0-rootless                  sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef   Images view: the build Jobs (BuildKit rootless)
 docker.io/library/registry:3.1.2                          sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8   Images view: coder-image-registry, where built images are kept
 registry.k8s.io/metrics-server/metrics-server:v0.8.1     sha256:b2d2efaf5ac3b366ed0f839d2412a2c4279d4fc2a2a733f12c52133faed36c41   metrics-server (live CPU / memory for the HUD, Health, quotas; metricsServer.enabled: auto)
+cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-s3-driver:0.43.7 sha256:8e4259545a065be3c21362ddeb5739f499d980a9c3d97f71dd8c1efd0d8629ea   the safe's CSI driver (userStorage.csi; k8s-csi-s3 + GeeseFS, Apache-2.0)
+cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-node-driver-registrar:v2.16.0 sha256:080b91dd6672ad452697775546c86193c818c7ba6b4cd05dbd41a026b6213bff   the safe's CSI driver: kubelet registration
 
 [prereqs]   images/public/prereqs/     public; only if you install these from prereqs/
 ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0              sha256:a2701eb97cdd2a34b1fdb2cb51987f544b706e40bec72ae7146cd8580efefebb   CloudNativePG operator (prereqs/cloudnative-pg-0.29.0.tgz, install.sh --cnpg)

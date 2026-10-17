@@ -30,6 +30,8 @@ argocd-support                   the steps of `./make --argocd <harbor>[/<projec
                                  Secrets, Argo CD's repository and the Application (DEPLOY.md › Argo CD)
 layer-support                    the layer bundle (update a cluster from the previous release): build, check, restore
 values-eks-airgap.example.yaml   the same settings as a values file for plain Helm / install.sh
+values-ha.example.yaml           high availability on top of it: Coder on 3 replicas across zones, its database on 3
+                                 instances (DEPLOY.md › High availability)
 make                             `./make --deploy`: the guided install (Minikube or EKS; domain, certificates, ...);
                                  `./make --push-images <harbor>[/<project>]`: images + charts into your Harbor
 harbor-support                   the steps of --push-images: Harbor's CA, docker + helm logins (Harbor, Docker Hub),

@@ -1,4 +1,24 @@
 {{- include "coder-banner.platform.values" . -}}
+{{- $b := .Values.banner -}}
+{{- /* The free-form values, checked as the service checks what admins publish (files/server.py clean()). */ -}}
+{{- $safeUrl := "^(?i)(https?://\\S+|/([^/]\\S*)?)$" -}}
+{{- range $key, $max := dict "title" 80 "message" 4000 "linkText" 60 "linkUrl" 500 "picture" 500 -}}
+{{- if gt (len (get $b $key | default "" | toString)) (int $max) -}}
+{{- fail (printf "banner.%s is too long (max %d characters)" $key (int $max)) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key := list "linkUrl" "picture" -}}
+{{- if and (get $b $key) (not (regexMatch $safeUrl (get $b $key | toString))) -}}
+{{- fail (printf "banner.%s must start with https://, http:// or /" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- if and $b.countdown (not (regexMatch "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z$" ($b.countdown | default "" | toString))) -}}
+{{- fail (printf "banner.countdown must be a UTC time such as 2026-10-20T18:00:00Z, not %q" ($b.countdown | default "" | toString)) -}}
+{{- end -}}
+{{- $secs := $b.refreshSeconds -}}
+{{- if not (and (or (kindIs "float64" $secs) (kindIs "int64" $secs) (kindIs "int" $secs)) (ge (int $secs) 15) (le (int $secs) 3600)) -}}
+{{- fail "banner.refreshSeconds must be a number of seconds from 15 to 3600" -}}
+{{- end -}}
 # Chart defaults for the banner (from values.yaml), used until an admin publishes something.
 apiVersion: v1
 kind: ConfigMap
@@ -10,18 +30,29 @@ metadata:
 data:
   banner.json: |
     {{- dict
-        "enabled" .Values.banner.enabled
+        "enabled" (include "coder-banner.bool" (list . "enabled") | eq "true")
         "id" (include "coder-banner.id" .)
-        "level" .Values.banner.level
-        "title" .Values.banner.title
-        "message" .Values.banner.message
-        "linkText" .Values.banner.linkText
-        "linkUrl" .Values.banner.linkUrl
-        "dismissible" .Values.banner.dismissible
-        "showOnLoginPage" .Values.banner.showOnLoginPage
-        "refreshSeconds" .Values.banner.refreshSeconds
-        "effect" (include "coder-banner.effect" .)
-        "repeat" (.Values.banner.repeat | default false)
+        "level" (include "coder-banner.choice" (list . "level" "info"))
+        "title" ($b.title | default "" | toString)
+        "message" ($b.message | default "" | toString)
+        "linkText" ($b.linkText | default "" | toString)
+        "linkUrl" ($b.linkUrl | default "" | toString)
+        "dismissible" (include "coder-banner.bool" (list . "dismissible") | eq "true")
+        "showOnLoginPage" (include "coder-banner.bool" (list . "showOnLoginPage") | eq "true")
+        "refreshSeconds" (int $b.refreshSeconds)
+        "effect" (include "coder-banner.choice" (list . "effect" "none"))
+        "repeat" (include "coder-banner.bool" (list . "repeat") | eq "true")
+        "speed" (include "coder-banner.choice" (list . "speed" "normal"))
+        "font" (include "coder-banner.choice" (list . "font" "default"))
+        "align" (include "coder-banner.choice" (list . "align" "center"))
+        "markdown" (include "coder-banner.bool" (list . "markdown") | eq "true")
+        "picture" ($b.picture | default "" | toString)
+        "pictureFit" (include "coder-banner.choice" (list . "pictureFit" "span"))
+        "outline" (include "coder-banner.bool" (list . "outline") | eq "true")
+        "countdown" ($b.countdown | default "" | toString)
+        "receipts" (include "coder-banner.bool" (list . "receipts") | eq "true")
+        "openEffect" (include "coder-banner.choice" (list . "openEffect" "none"))
+        "closeEffect" (include "coder-banner.choice" (list . "closeEffect" "fade"))
       | toPrettyJson | nindent 4 }}
 ---
 apiVersion: v1
@@ -32,7 +63,7 @@ metadata:
   labels:
     {{- include "coder-banner.labels" . | nindent 4 }}
 data:
-  {{- range $name := list "banner.js" "server.py" "live.py" "admin.html" "app.js" "app.css" "emoji-picker.js" }}
+  {{- range $name := list "banner.js" "fx.css" "server.py" "live.py" "admin.html" "app.js" "app.css" "emoji-picker.js" }}
   {{ $name }}: |
     {{- $.Files.Get (printf "files/%s" $name) | nindent 4 }}
   {{- end }}

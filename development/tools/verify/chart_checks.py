@@ -39,6 +39,107 @@ def objects(render):
     return out
 
 
+def ha_checks(B, ha_render, default_render):
+    """High availability (values-ha.example.yaml): 3 Coder replicas with a PodDisruptionBudget, 3 database instances,
+    2 banners; one Coder replica gets no budget (it would only block node drains)."""
+    import yaml
+    docs = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(ha_render) if d}
+    got = {"coder": docs.get(("Deployment", "coder"), {}).get("spec", {}).get("replicas"),
+           "coder-db": docs.get(("Cluster", "coder-db"), {}).get("spec", {}).get("instances"),
+           "coder-banner": docs.get(("Deployment", "coder-banner"), {}).get("spec", {}).get("replicas"),
+           "budget": docs.get(("PodDisruptionBudget", "coder"), {}).get("spec")}
+    check("high availability: 3 Coder replicas (one down at a time), 3 database instances, 2 banners",
+          got == {"coder": 3, "coder-db": 3, "coder-banner": 2, "budget": {
+              "maxUnavailable": 1, "selector": {"matchLabels": {"app.kubernetes.io/name": "coder",
+                                                                "app.kubernetes.io/instance": "coder"}}}}, got)
+    check("one Coder replica: no PodDisruptionBudget", ("PodDisruptionBudget", "coder") not in objects(default_render))
+
+
+def banner_checks(chart):
+    """The banner chart's four copies of the banner's contract agree with its service (files/server.py): the chart's
+    defaults (values.yaml, the ConfigMap's banner.json, the choices _helpers.tpl checks them against), the admin page's
+    lists and the loader's effects. They drifted once: the defaults could not set a picture, Pew-Pew was unknown."""
+    import ast, yaml
+    d = os.path.join(chart, "charts/coder-banner")
+    tree = ast.parse(open(os.path.join(d, "files/server.py")).read())
+    server = {t.id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+              for t in n.targets if isinstance(t, ast.Name) and t.id in (
+                  "LEVELS", "EFFECTS", "SPEEDS", "FONTS", "ALIGNS", "PICTURE_FITS", "OPEN_EFFECTS", "CLOSE_EFFECTS")}
+    fields = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                  and any(isinstance(t, ast.Name) and t.id == "FIELDS" for t in n.targets))
+    helpers = open(os.path.join(d, "templates/_helpers.tpl")).read()
+    choices = yaml.safe_load(re.search(r'define "coder-banner.choices" -\}\}\n(.*?)\{\{- end', helpers, re.S).group(1))
+    pairs = {"level": "LEVELS", "effect": "EFFECTS", "speed": "SPEEDS", "font": "FONTS", "align": "ALIGNS",
+             "pictureFit": "PICTURE_FITS", "openEffect": "OPEN_EFFECTS", "closeEffect": "CLOSE_EFFECTS"}
+    differ = {k: (choices.get(k), list(server[v])) for k, v in pairs.items() if choices.get(k) != list(server[v])}
+    check("banner: the chart's choices are the service's (templates/_helpers.tpl vs files/server.py)", not differ, differ)
+    values = yaml.safe_load(open(os.path.join(d, "values.yaml")))["banner"]
+    check("banner: every field the service takes can be set as a chart default (values.yaml banner.*)",
+          set(fields) <= set(values), sorted(set(fields) - set(values)))
+    rc, out, err = run(["helm", "template", "t", d])
+    m = re.search(r"banner\.json: \|\n((?:    .*\n)+)", out)
+    keys = set(json.loads(m.group(1))) if rc == 0 and m else set()
+    check("banner: the chart's default banner.json has every field the service has, and only those",
+          keys == set(fields) | {"id"}, (err.strip()[-200:] if rc else sorted(keys ^ (set(fields) | {"id"}))))
+    page = open(os.path.join(d, "files/admin.html")).read()
+    lists = {k: re.findall(r'<option value="([\w-]+)"', (re.search(r'<select id="%s"[^>]*>(.*?)</select>' % k, page, re.S)
+                                                          or [None, ""])[1]) for k in ("effect", "speed", "pictureFit")}
+    want = {"effect": list(server["EFFECTS"]), "speed": list(server["SPEEDS"]), "pictureFit": sorted(server["PICTURE_FITS"])}
+    got = dict(lists, pictureFit=sorted(lists["pictureFit"]))
+    check("banner: the admin page offers every effect, speed and picture fit (files/admin.html)", got == want,
+          {k: (got[k], want[k]) for k in want if got[k] != want[k]})
+    js = open(os.path.join(d, "files/banner.js")).read()
+    drawn = set(re.findall(r"^    (\w+): function \(a, sp", js, re.M)) | set(
+        re.findall(r"^    (\w+): \{", re.search(r"var CSS_EFFECTS = \{\n(.*?)\n  \};", js, re.S).group(1), re.M))
+    check("banner: the loader draws every effect (files/banner.js: Anime.js and fx.css)",
+          drawn == set(server["EFFECTS"]) - {"none"}, sorted(drawn ^ (set(server["EFFECTS"]) - {"none"})))
+
+
+def safe_checks(chart, default_render):
+    """The safe (global.userStorage): on, the template push mounts it, the platform service serves it and the chart
+    runs its MinIO and CSI driver; off, nothing of it anywhere; an S3 service of one's own needs its endpoint and keys."""
+    import yaml
+    docs = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d}
+    ui_env = {e["name"]: e.get("value") for c in docs[("Deployment", "coder-ui-updates")]["spec"]["template"]["spec"]["containers"]
+              for e in c.get("env", [])}
+    push = "\n".join(c["args"][0] for k, d in docs.items() if k[0] == "Job" and "push-template" in k[1]
+                     for c in d["spec"]["template"]["spec"]["containers"])
+    want = {("Deployment", "coder-user-storage-minio"), ("Service", "coder-user-storage-minio"),
+            ("DaemonSet", "coder-user-storage-csi"), ("CSIDriver", "ru.yandex.s3.csi"), ("Secret", "coder-user-storage-s3")}
+    check("safe: on by default - MinIO, the CSI driver, the platform service's safe, the templates mount it",
+          want <= set(docs) and ui_env.get("SAFE_ENABLED") == "true" and ui_env.get("SAFE_NODE_SERVICE")
+          and push.count("--variable user_storage=true") >= 1,
+          sorted(want - set(docs)) or {k: ui_env.get(k) for k in ("SAFE_ENABLED", "SAFE_NODE_SERVICE")})
+    def parsed(out):
+        found = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(out) if d}
+        env = {e["name"]: e for c in found[("Deployment", "coder-ui-updates")]["spec"]["template"]["spec"]["containers"]
+               for e in c.get("env", [])}
+        args = "\n".join(c["args"][0] for k, d in found.items() if k[0] == "Job" and "push-template" in k[1]
+                         for c in d["spec"]["template"]["spec"]["containers"])
+        return found, env, args
+
+    rc, off, err = run(["helm", "template", "coder", chart, "--namespace", "coder", "--set", "global.userStorage.enabled=false"])
+    found, env, args = parsed(off) if rc == 0 else ({}, {}, "")
+    check("safe: off - no MinIO, no CSI driver, no mount in the templates",
+          rc == 0 and not want & set(found) and "--variable user_storage" not in args and "SAFE_ENABLED" not in env,
+          err.strip()[-200:] or sorted(want & set(found)))
+    rc, _, err = run(["helm", "template", "coder", chart, "--set", "userStorage.minio.enabled=false"])
+    check("safe: an S3 service of one's own needs s3.endpoint and s3.existingSecret", rc != 0 and "s3.endpoint" in err,
+          err.strip()[-160:])
+    rc, ext, err = run(["helm", "template", "coder", chart, "--namespace", "coder", "--set", "userStorage.minio.enabled=false",
+                        "--set", "userStorage.s3.endpoint=https://s3.us-east-1.amazonaws.com",
+                        "--set", "userStorage.s3.existingSecret=my-s3"])
+    found, env, args = parsed(ext) if rc == 0 else ({}, {}, "")
+    keys = {k: env.get(k, {}).get("valueFrom", {}).get("secretKeyRef") for k in ("S3_ACCESS_KEY", "S3_SECRET_KEY")}
+    check("safe: with an S3 service of one's own, no MinIO, its keys from its Secret",
+          rc == 0 and ("Deployment", "coder-user-storage-minio") not in found
+          and ("DaemonSet", "coder-user-storage-csi") in found
+          and env.get("S3_ENDPOINT", {}).get("value") == "https://s3.us-east-1.amazonaws.com"
+          and keys == {"S3_ACCESS_KEY": {"name": "my-s3", "key": "accessKeyID"},
+                       "S3_SECRET_KEY": {"name": "my-s3", "key": "secretAccessKey"}},
+          err.strip()[-200:] or keys)
+
+
 def decorator_checks(B, chart, full_render):
     """The Argo CD decorator install: the two charts packaged from coder-airgapped, and its two Applications."""
     import shutil, tempfile
@@ -172,6 +273,8 @@ def main():
     scenarios = {
         "Minikube defaults": [],
         "EKS (values-eks-airgap.example.yaml)": ["-f", os.path.join(B, "values-eks-airgap.example.yaml")],
+        "high availability (values-ha.example.yaml)": ["-f", os.path.join(B, "values-eks-airgap.example.yaml"),
+                                                       "-f", os.path.join(B, "values-ha.example.yaml")],
         "a private registry (global.registry)": ["--set", "global.registry=registry.internal.example:5000"],
         "Keycloak-only sign-in (disablePasswordAuth)": ["--set", "global.disablePasswordAuth=true"],
         "admins' kubectl (clusterAccess)": ["--set", "global.clusterAccess.enabled=true"],
@@ -203,6 +306,8 @@ def main():
     forks = sorted(set(re.findall(r'image: "?(\S*/user187x/coder-platform:[^"\s]+)"?', r)))
     check("the template push's CLI is Coder's own image (same tag as the server)", len(forks) == 1, forks)
     decorator_checks(B, chart, r)
+    ha_checks(B, renders["high availability (values-ha.example.yaml)"], r)
+    safe_checks(chart, r)
     check("Coder starts without Keycloak's Secrets (optional)",
           re.search(r"name: keycloaking-coder-oidc\s*\n\s*optional: true", r) and
           re.search(r"secretName: keycloaking-coder-ca\s*\n\s*optional: true|optional: true\s*\n\s*secretName: keycloaking-coder-ca", r),
@@ -241,6 +346,7 @@ def main():
                 if os.path.isfile(os.path.join(ui_dir, m + ".py"))} | {"lockdown.sh"}
     check("platform service: every module it imports is shipped (templates/ui-updates.yaml's file list)",
           imported <= listed, sorted(imported - listed) or "%d modules" % len(imported))
+    banner_checks(chart)
     ui_lock = os.path.join(chart, "files/ui-updates/lockdown.sh")
     tpl_lock = os.path.join(tf_dir, "scripts", "lockdown.sh")
     check("Lock Down: the platform service's lockdown.sh is the template's (one script, two places)",

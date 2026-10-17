@@ -3,7 +3,7 @@ Coder banner installed in namespace {{ include "coder-banner.namespace" . }}.
 
   Admin page  : https://{{ .Values.coder.host }}/__banner/admin      (Coder {{ join " / " .Values.admin.roles }} only; sign in with your Coder account)
   Live config : https://{{ .Values.coder.host }}/__banner/banner.json
-  Defaults    : {{ .Values.banner.message | quote }} (level: {{ .Values.banner.level }}, enabled: {{ .Values.banner.enabled }}, text effect: {{ include "coder-banner.effect" . }}{{ if and .Values.banner.repeat (ne (include "coder-banner.effect" .) "none") }}, repeating{{ end }})
+  Defaults    : {{ .Values.banner.message | quote }} (level: {{ .Values.banner.level }}, enabled: {{ .Values.banner.enabled }}, text effect: {{ include "coder-banner.choice" (list . "effect" "none") }}{{ if and .Values.banner.repeat (ne (include "coder-banner.choice" (list . "effect" "none")) "none") }}, repeating{{ end }}{{ with .Values.banner.picture }}, picture: {{ . }} ({{ include "coder-banner.choice" (list $ "pictureFit" "span") }}){{ end }})
 
 The values above are only the DEFAULTS. Once an admin publishes from the admin page, that takes over
 (and survives `helm upgrade`) until "use the chart defaults" is pressed there.

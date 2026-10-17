@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "coder-banner.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       app.kubernetes.io/name: coder-banner
@@ -28,6 +28,18 @@ spec:
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if gt (int .Values.replicaCount) 1 }}
+      topologySpreadConstraints:
+        {{- range list "kubernetes.io/hostname" "topology.kubernetes.io/zone" }}
+        - maxSkew: 1
+          topologyKey: {{ . }}
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: coder-banner
+              app.kubernetes.io/instance: {{ $.Release.Name }}
+        {{- end }}
       {{- end }}
       securityContext:
         runAsNonRoot: true
