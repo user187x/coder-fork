@@ -1,6 +1,6 @@
 {{- include "ca.values" . -}}
-{{- /* The safe (global.userStorage.enabled, values userStorage): each account's own files, a prefix users/<user id>/ in
-     one S3 bucket. Here: the bucket's credentials, the chart's MinIO, and the CSI driver that mounts the safes into
+{{- /* The Cloud Drive (global.userStorage.enabled, values userStorage): each account's own files, a prefix users/<user id>/ in
+     one S3 bucket. Here: the bucket's credentials, the chart's MinIO, and the CSI driver that mounts the Cloud Drives into
      workspace pods. The platform service makes each account's PersistentVolume and claim (files/ui-updates/safe.py). */ -}}
 {{- $g := .Values.global.userStorage | default dict -}}
 {{- $u := .Values.userStorage -}}

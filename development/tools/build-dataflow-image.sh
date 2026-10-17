@@ -71,8 +71,7 @@ docker run --rm --network none --hostname localhost --entrypoint bash "$img" -c 
 	echo "NiFi and Airflow offline checks passed"'
 # Into the delivery bundle (helm-chart/images/custom/), replacing the previous one; then update its [custom] line (tag,
 # digest) in helm-chart/images.txt and coder-workspace.dataflowImage in helm-chart/coder-airgapped/values.yaml.
-top="$(dirname "$dev")"; out="${top}/helm-chart/images/custom"; mkdir -p "$out"
-rm -f "$out"/ghcr.io_user187x_coder-workspace-dataflow_*.tar.gz
-docker save --platform linux/amd64 "$img" | gzip -1 >"${out}/$(echo "$img" | tr '/:@' '___').tar.gz"
-(cd "$out" && sha256sum ./*.tar.gz | sed 's|  \./|  |' >SHA256SUMS)
-echo "built $img (NiFi ${nifi}, Airflow ${airflow}, Python ${py}); saved to ${out}; image ID $(docker image inspect --format '{{.Id}}' "$img")"
+top="$(dirname "$dev")"
+# its archive in the bundle, in its section's folder of images.txt (replacing the previous tag's)
+"${top}/helm-chart/mirror-images.sh" store "$img"
+echo "built $img (NiFi ${nifi}, Airflow ${airflow}, Python ${py}); image ID $(docker image inspect --format '{{.Id}}' "$img")"

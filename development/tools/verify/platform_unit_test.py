@@ -2,7 +2,7 @@
 keep it fast under load, and keep the image builder honest offline. Imported as modules, nothing started.
 
   python3 -m unittest platform_unit_test.py"""
-import importlib.util, json, os, sys, threading, unittest
+import importlib.util, json, os, sys, threading, unittest, urllib.parse
 from unittest import mock
 
 SRC = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -484,6 +484,33 @@ class ClusterNetworkTest(unittest.TestCase):
         self.assertIsNone(ui.HudHistory(os.path.join(self.dir.name, "empty.sqlite")).usage_recent())
 
 
+class BuiltinBackgroundTest(unittest.TestCase):
+    """A background that is one of the dashboard's own pictures: stored as its path (once Coder serves it as a
+    picture), drawn from Coder, never uploaded."""
+
+    def test_a_dashboard_picture_by_its_path(self):
+        resp = mock.MagicMock()
+        resp.__enter__.return_value.headers = {"Content-Type": "image/gif", "Content-Length": "3959943"}
+        with mock.patch.object(ui.urllib.request, "urlopen", return_value=resp) as urlopen:
+            ctype, data = ui.parse_background_picture("/pictures/creeper.gif")
+        self.assertEqual(urlopen.call_args[0][0].full_url, ui.CODER_URL + "/pictures/creeper.gif")
+        self.assertEqual(urlopen.call_args[0][0].get_method(), "HEAD")
+        bg = {"type": ctype, "data": data, "sha": "x", "opacity": 0.06, "fit": "cover", "layer": "under"}
+        self.assertEqual(ui.background_picture(bg), ("/pictures/creeper.gif", 3959943))
+        pub = ui.background_public("dashboard", bg)
+        self.assertEqual((pub["url"], pub["kind"], pub["builtin"]), ("/pictures/creeper.gif", "image", True))
+
+    def test_only_the_dashboard_pictures_and_only_pictures(self):
+        for bad in ("/etc/passwd", "/pictures/../x.gif", "https://x/a.gif", "/pictures/a.svg", "/assets/a.gif"):
+            with self.assertRaises(ValueError, msg=bad):
+                ui.parse_background_picture(bad)
+        resp = mock.MagicMock()
+        resp.__enter__.return_value.headers = {"Content-Type": "text/html", "Content-Length": "100"}
+        with mock.patch.object(ui.urllib.request, "urlopen", return_value=resp):
+            with self.assertRaises(ValueError):
+                ui.parse_background_picture("/pictures/missing.gif")   # Coder's index page: not a picture
+
+
 class BannerPictureTest(unittest.TestCase):
     """Insert picture: what is accepted, and how pictures are kept (named by their content, the newest kept)."""
 
@@ -623,6 +650,138 @@ class PeerChatTest(unittest.TestCase):
         self.assertEqual(self.chat.purge(), 2)
         self.assertEqual(self.chat.stats()["messages"], 0)
         self.assertEqual(self.chat.settings["purgeVersion"], version + 1)
+
+
+class ChatPresenceAndFilesTest(unittest.TestCase):
+    """Who is online, idle or gone (each tab's own report, pushed to every poll), and files attached to messages."""
+
+    ANN = PeerChatTest.ANN
+    BOB = PeerChatTest.BOB
+    ADMIN = PeerChatTest.ADMIN
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        self.chat = ui.ChatStore(os.path.join(self.dir, "ui.sqlite"))
+
+    def test_online_idle_and_gone_with_its_tabs(self):
+        ann = self.ANN["id"]
+        self.assertEqual(self.chat.presence(ann)["status"], "offline")
+        v0 = self.chat.presence_ver
+        self.chat.tab(ann, "tab-one-1234")                       # a tab's poll: online, active
+        self.assertEqual(self.chat.presence(ann)["status"], "active")
+        self.assertGreater(self.chat.presence_ver, v0)
+        v1 = self.chat.presence_ver
+        self.chat.tab(ann, "tab-one-1234")                       # polling again changes nothing
+        self.assertEqual(self.chat.presence_ver, v1)
+        self.chat.tab(ann, "tab-two-1234")                       # a second tab
+        self.chat.tab(ann, "tab-one-1234", idle=True)            # one tab idle: still active
+        self.assertEqual(self.chat.presence(ann)["status"], "active")
+        self.chat.tab(ann, "tab-two-1234", idle=True)            # every tab idle: idle, everyone hears of it
+        self.assertEqual(self.chat.presence(ann)["status"], "idle")
+        self.assertGreater(self.chat.presence_ver, v1)
+        self.assertEqual(self.chat.presence(ann)["tabs"], 2)
+        self.chat.tab(ann, "tab-two-1234", idle=False)           # back
+        self.assertEqual(self.chat.presence(ann)["status"], "active")
+        self.chat.tab(ann, "tab-one-1234", leave=True)
+        self.chat.tab(ann, "tab-two-1234", leave=True)           # the last tab closed: gone at once
+        self.assertEqual(self.chat.presence(ann)["status"], "offline")
+        self.assertFalse(self.chat.is_online(ann))
+        # a tab that stopped polling goes with the sweep
+        self.chat.tab(ann, "tab-three-1234")
+        self.chat.tabs[ann]["tab-three-1234"]["seen"] -= ui.CHAT_ONLINE_SECONDS + 1
+        self.assertEqual(self.chat.presence(ann)["status"], "offline")
+
+    def test_a_late_poll_from_a_closed_tab_does_not_bring_it_back(self):
+        ann = self.ANN["id"]
+        self.chat.tab(ann, "old-page-1234")                      # the page before a reload
+        self.chat.tab(ann, "new-page-1234")                      # the reloaded page
+        self.chat.tab(ann, "old-page-1234", leave=True)          # the old page's goodbye
+        self.chat.tab(ann, "old-page-1234")                      # its last poll, sent as it closed, arrives after
+        self.assertEqual(self.chat.presence(ann)["tabs"], 1)
+        self.chat.tab(ann, "new-page-1234", idle=True)           # so the open page alone says idle
+        self.assertEqual(self.chat.presence(ann)["status"], "idle")
+
+    def test_a_poll_wakes_when_someone_comes_or_goes(self):
+        import threading as th
+        import time
+        known = self.chat.presence_ver
+        woke = []
+        t = th.Thread(target=lambda: woke.append(self.chat.wait(self.BOB["id"], 10 ** 9, [], 10 ** 15,
+                                                                10 ** 15, known)))
+        t.start()
+        time.sleep(0.2)
+        self.chat.tab(self.ANN["id"], "ann-tab-12345")
+        t.join(3)
+        self.assertFalse(t.is_alive())
+
+    def test_people_say_who_is_idle(self):
+        directory = {p["id"]: {**{k: p[k] for k in ("id", "username", "name", "admin")}, "lastSeen": None}
+                     for p in (self.ADMIN, self.ANN, self.BOB)}
+        self.chat.put_settings({"peers": True}, "boss")
+        self.chat.tab(self.BOB["id"], "bob-tab-12345", idle=True)
+        with mock.patch.object(ui, "CHAT", self.chat), mock.patch.object(ui, "chat_people", lambda: directory):
+            people = {p["username"]: p for p in ui.chat_people_for(self.ANN, False)}
+        self.assertTrue(people["bob"]["online"])
+        self.assertTrue(people["bob"]["idle"])
+
+    def test_a_file_goes_with_its_message_to_those_two_only(self):
+        import io
+        self.chat.put_settings({"peers": True}, "boss")
+        up = self.chat.put_upload(self.ANN["id"], self.BOB["id"], "notes.txt", "text/plain", 5, io.BytesIO(b"hello"))
+        self.assertIsNone(self.chat.take_upload(self.BOB["id"], up["upload"], self.ANN["id"]))  # not theirs
+        taken = self.chat.take_upload(self.ANN["id"], up["upload"], self.BOB["id"])
+        message = self.chat.send(self.ANN, False, self.BOB, "", attachment=taken)
+        self.assertEqual(message["file"]["name"], "notes.txt")
+        self.assertEqual(message["file"]["size"], 5)
+        self.assertIsNone(self.chat.take_upload(self.ANN["id"], up["upload"], self.BOB["id"]))  # sent once
+        path, name, ctype, size = self.chat.attachment(self.BOB["id"], message["id"])
+        self.assertEqual(open(path, "rb").read(), b"hello")
+        self.assertIsNone(self.chat.attachment(self.ADMIN["id"], message["id"]))  # not in the conversation
+        self.assertEqual(self.chat.stats()["attachments"], 1)
+        # deleting the conversation removes the file
+        self.chat.delete(self.ANN["id"], self.BOB["id"])
+        self.assertFalse(os.path.exists(path))
+
+    def test_retention_and_purge_remove_files(self):
+        import io
+        sent = []
+        for text in ("old", "new"):
+            up = self.chat.put_upload(self.ADMIN["id"], self.ANN["id"], text + ".bin", "application/octet-stream",
+                                      3, io.BytesIO(b"abc"))
+            m = self.chat.send(self.ADMIN, True, self.ANN, text,
+                               attachment=self.chat.take_upload(self.ADMIN["id"], up["upload"], self.ANN["id"]))
+            sent.append(self.chat._file_path(m["id"]))
+        with self.chat.connect() as db:
+            db.execute("UPDATE chat_messages SET sent_at = '2020-01-01T00:00:00Z' WHERE text = 'old'")
+        self.chat.prune()
+        self.assertEqual([os.path.exists(p) for p in sent], [False, True])
+        self.chat.purge()
+        self.assertFalse(os.path.exists(sent[1]))
+
+    def test_an_upload_cut_short_leaves_nothing(self):
+        import io
+        with self.assertRaises(ValueError):
+            self.chat.put_upload(self.ANN["id"], self.BOB["id"], "x", "text/plain", 10, io.BytesIO(b"short"))
+        self.assertEqual([n for n in os.listdir(self.chat.files_dir) if n.startswith("pending-")], [])
+
+    def test_file_names_kept_plain(self):
+        self.assertEqual(ui.chat_file_name("../../etc/passwd"), "passwd")
+        self.assertEqual(ui.chat_file_name('C:\\Users\\a\\report "final".pdf'), "report final.pdf")
+        self.assertEqual(ui.chat_file_name(""), "file")
+
+    def test_online_users_report(self):
+        directory = {p["id"]: {**{k: p[k] for k in ("id", "username", "name", "admin")},
+                               "lastSeen": ui.now()} for p in (self.ADMIN, self.ANN, self.BOB)}
+        self.chat.tab(self.ANN["id"], "ann-tab-12345")
+        self.chat.tab(self.BOB["id"], "bob-tab-12345", idle=True)
+        running = {"workspaces": [{"id": "w1", "name": "dev", "owner_id": self.ANN["id"], "owner_name": "ann"}]}
+        with mock.patch.object(ui, "CHAT", self.chat), mock.patch.object(ui, "chat_people", lambda: directory), \
+                mock.patch.object(ui, "_coder_get", lambda token, path, timeout=10: (200, running)):
+            report = ui.presence_report("token")
+        self.assertEqual([(p["username"], p["status"]) for p in report["online"]], [("ann", "active"), ("bob", "idle")])
+        self.assertEqual(report["online"][0]["workspaces"][0]["name"], "dev")
+        self.assertEqual([p["username"] for p in report["recent"]], ["boss"])  # seen by Coder, no tab open
 
 
 class LoginPageSettingsTest(unittest.TestCase):
@@ -784,9 +943,6 @@ class BannerTransitionsTest(unittest.TestCase):
         self.assertEqual(self.clean(closeEffect="kitt")["closeEffect"], "kitt")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class SafeTest(unittest.TestCase):
     """The safe (safe.py): only ever the caller's own prefix, every account's volume made, the nodes' endpoint."""
@@ -830,12 +986,15 @@ class SafeTest(unittest.TestCase):
                 calls.append((method, path))
                 if method == "GET" and path.endswith("/services/coder-user-storage-minio"):
                     return 200, {"spec": {"clusterIP": "10.96.4.5"}}
+                if method == "GET" and path.endswith("/pods"):
+                    return 200, {"items": []}
                 if method == "GET":
                     return (200, have[path]) if path in have else (404, {})
                 have[path + "/" + body["metadata"]["name"]] = body                      # POST: made
                 return 201, body
 
         self.safe.KUBE = Kube()
+        self.safe.SETTINGS_FILE = "/nonexistent/cloud-drive.json"                      # the chart's backend
         self.safe.NODE_SERVICE = "coder-user-storage-minio"
         self.safe.USERS = lambda: [(self.UID, "alice")]
         s3 = mock.Mock()
@@ -848,6 +1007,8 @@ class SafeTest(unittest.TestCase):
         self.assertEqual([p for m, p in calls if m in ("POST", "PUT")],
                          ["/api/v1/namespaces/coder/secrets",                            # the mount Secret
                           "/api/v1/persistentvolumes",                                   # the ISO library's
+                          "/api/v1/namespaces/coder/persistentvolumeclaims",
+                          "/api/v1/persistentvolumes",                                   # the model library's
                           "/api/v1/namespaces/coder/persistentvolumeclaims",
                           "/api/v1/namespaces/coder/persistentvolumeclaims"])            # the account's (its PV was there)
         secret = have["/api/v1/namespaces/coder/secrets/coder-user-storage-mount"]["data"]
@@ -993,14 +1154,45 @@ class IsoLibraryTest(unittest.TestCase):
 
     def test_names_and_the_shared_read_only_volume(self):
         for ok in ("ubuntu-26.04-desktop-amd64.iso", "disk.IMG"):
-            self.assertEqual(self.safe.iso_name(ok), ok)
-        for bad in ("../x.iso", "notes.txt", "a b.iso", ".iso"):
+            self.assertEqual(self.safe.library_name("isos", ok), ok)
+        for bad in ("../x.iso", "notes.txt", "a b.iso", ".iso", "model.gguf"):
             with self.assertRaises(ValueError, msg=bad):
-                self.safe.iso_name(bad)
-        pv, pvc = self.safe.iso_volume_objects()
+                self.safe.library_name("isos", bad)
+        pv, pvc = self.safe.library_volume_objects("isos")
         self.assertEqual((pv["spec"]["csi"]["volumeHandle"], pv["spec"]["accessModes"], pv["spec"]["csi"]["readOnly"]),
                          ("coder-user-storage/library/isos", ["ReadOnlyMany"], True))
         self.assertEqual(pvc["spec"]["volumeName"], "coder-isos")
+
+    def test_the_model_library(self):
+        """GGUF models for the AI workspaces: their own prefix and read-only volume, mounted at ~/models."""
+        for ok in ("Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf", "model-00001-of-00003.GGUF"):
+            self.assertEqual(self.safe.library_name("models", ok), ok)
+        for bad in ("../x.gguf", "disk.iso", "a b.gguf", ".gguf", "model.bin"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.safe.library_name("models", bad)
+        pv, pvc = self.safe.library_volume_objects("models")
+        self.assertEqual((pv["spec"]["csi"]["volumeHandle"], pv["spec"]["accessModes"], pv["spec"]["csi"]["readOnly"]),
+                         ("coder-user-storage/library/models", ["ReadOnlyMany"], True))
+        self.assertEqual((pvc["metadata"]["name"], pvc["spec"]["volumeName"]), ("coder-models", "coder-models"))
+        self.assertEqual(self.safe.LIBRARIES["models"]["mountPath"], "/home/coder/models")
+        self.assertEqual(pv["spec"]["capacity"]["storage"], "100Gi")
+
+    def test_each_library_answers_on_its_own_path(self):
+        self.safe.ENABLED = True
+        self.safe.CAN_EDIT = lambda user: True
+        self.safe.client = lambda: mock.Mock(list=mock.Mock(return_value=([
+            {"key": "library/models/a.gguf", "size": 5, "modified": "2026-10-17T00:00:00Z"}], None)))
+        sent = []
+        h = mock.Mock()
+        h.headers = {}
+        h.user.return_value = ({"id": "u", "username": "dev", "roles": ["owner"]}, None)
+        h.send_json = lambda status, body: sent.append((status, body))
+        self.assertTrue(self.safe.handle_libraries(h, "GET", "/__coder-ui/api/models", ""))
+        self.assertEqual(sent[0][0], 200)
+        self.assertEqual([f["name"] for f in sent[0][1]["files"]], ["a.gguf"])
+        self.assertEqual(sent[0][1]["mountPath"], "/home/coder/models")
+        self.assertFalse(self.safe.handle_libraries(h, "GET", "/__coder-ui/api/modelsx", ""))
+        self.assertFalse(self.safe.handle_libraries(h, "GET", "/__coder-ui/api/safe", ""))
 
     def test_only_editors_change_it(self):
         self.safe.ENABLED = True
@@ -1010,7 +1202,7 @@ class IsoLibraryTest(unittest.TestCase):
         h.headers = {"X-Requested-With": "coder-ui"}
         h.user.return_value = ({"id": "u", "username": "dev", "roles": []}, None)
         h.send_json = lambda status, body: sent.append(status)
-        self.safe.handle_isos(h, "POST", "/__coder-ui/api/isos/delete", "")
+        self.safe.handle_libraries(h, "POST", "/__coder-ui/api/isos/delete", "")
         self.assertEqual(sent, [403])
 
 
@@ -1041,3 +1233,214 @@ class ArchiveLayoutTest(unittest.TestCase):
             self.assertEqual(fixed["manifests"][0]["digest"], amd_d)
             self.assertEqual(fixed["manifests"][0]["annotations"]["org.opencontainers.image.ref.name"], "3.10.1")
             self.assertFalse(ib.complete_layout(path))                     # complete now: left alone
+
+
+class CloudDriveQuotaTest(unittest.TestCase):
+    """Cloud Drive > Settings: every account's capacity, as an admin sets it, over the chart's."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.safe = load("safe", "safe.py")
+        self.safe.LOG = lambda **kw: None
+        self.safe.QUOTA_FILE = os.path.join(self.dir.name, "cloud-drive-quota.json")
+        self.safe.QUOTA_BYTES = 10 * 1024 ** 3
+        self.safe.IS_ADMIN = lambda user: "owner" in user["roles"]
+        self.admin = {"id": "a", "username": "admin", "roles": ["owner"]}
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_an_admin_sets_it_and_goes_back_to_the_chart(self):
+        self.assertEqual(self.safe.quota_bytes(), 10 * 1024 ** 3)
+        view = self.safe.save_quota(self.admin, {"quotaGiB": 250})
+        self.assertEqual((view["gib"], view["chartGib"], view["custom"]), (250, 10, True))
+        self.assertEqual(self.safe.quota_bytes(), 250 * 1024 ** 3)
+        self.assertEqual(self.safe.capacity(), "250Gi")
+        view = self.safe.save_quota(self.admin, {"reset": True})
+        self.assertEqual((view["gib"], view["custom"]), (10, False))
+
+    def test_only_admins_and_only_sensible_values(self):
+        with self.assertRaises(PermissionError):
+            self.safe.save_quota({"id": "u", "username": "dev", "roles": []}, {"quotaGiB": 5})
+        for bad in (0, -1, 10241, 2.5, "50", True, None):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                self.safe.save_quota(self.admin, {"quotaGiB": bad})
+        self.assertEqual(self.safe.save_quota(self.admin, {"quotaGiB": 40.0})["gib"], 40)
+
+
+class CloudDriveConnectionsTest(unittest.TestCase):
+    """The owner connects and disconnects their workspaces from their Cloud Drive (safe.py): kept in LINKS_FILE, set
+    at once on the running pod's annotation (the workspace links ~/cloud-drive by it), and kept so by the watcher."""
+
+    OWNER = {"id": "3f0c2a52-7d7e-4c5b-9a3e-2f4b8c1d0e9a", "username": "ann", "roles": []}
+    WS = "11111111-2222-4333-8444-555555555555"
+    OLD = "66666666-7777-4888-9999-aaaaaaaaaaaa"
+
+    class Kube:
+        ok = True
+
+        def __init__(self, pods):
+            self.pods = pods
+            self.patches = []
+
+        def call(self, method, path, body=None, patch_type=None):
+            if method == "GET":
+                sel = urllib.parse.unquote(path.split("labelSelector=", 1)[1]) if "labelSelector=" in path else ""
+                want = sel.split("=", 1)[1] if "=" in sel else None
+                items = [p for p in self.pods
+                         if want is None or p["metadata"]["labels"]["com.coder.workspace.id"] == want]
+                return 200, {"items": items}
+            if method == "PATCH":
+                name = path.rsplit("/", 1)[1]
+                self.patches.append((name, body["metadata"]["annotations"]))
+                for p in self.pods:
+                    if p["metadata"]["name"] == name:
+                        p["metadata"].setdefault("annotations", {}).update(body["metadata"]["annotations"])
+                return 200, {}
+            raise AssertionError(method)
+
+    @staticmethod
+    def pod(name, wid, owner, annotation="on"):
+        return {"metadata": {"name": name, "labels": {"com.coder.workspace.id": wid, "com.coder.user.id": owner},
+                             "annotations": {} if annotation is None else {"platform.coder/cloud-drive": annotation}},
+                "status": {"phase": "Running"}}
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.safe = load("safe", "safe.py")
+        self.safe.LOG = lambda **kw: None
+        self.safe.LINKS_FILE = os.path.join(self.dir.name, "cloud-drive-links.json")
+        self.kube = self.Kube([self.pod("coder-ws-1", self.WS, self.OWNER["id"]),
+                               self.pod("coder-old-1", self.OLD, self.OWNER["id"], annotation=None),
+                               self.pod("coder-bob-1", "bbbbbbbb-2222-4333-8444-555555555555", "bob")])
+        self.safe.KUBE = self.kube
+        owners = {self.WS: self.OWNER["id"], self.OLD: self.OWNER["id"]}
+        self.safe.WORKSPACE_INFO = lambda token, wid: (
+            {"id": wid, "name": "dev", "owner_id": owners[wid]} if wid in owners else None)
+        self.h = mock.Mock()
+        self.h.token.return_value = "t"
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_disconnect_and_connect_again_at_once_in_the_running_pod(self):
+        self.assertEqual(self.safe.connections(self.OWNER), {"disconnected": [], "older": [self.OLD]})
+        out = self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": False})
+        self.assertEqual((out["disconnected"], out["applied"]), ([self.WS], True))
+        self.assertEqual(self.kube.patches, [("coder-ws-1", {"platform.coder/cloud-drive": "off"})])
+        out = self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": True})
+        self.assertEqual(out["disconnected"], [])
+        self.assertEqual(self.kube.patches[-1], ("coder-ws-1", {"platform.coder/cloud-drive": "on"}))
+
+    def test_a_restarted_workspace_gets_its_disconnection_back(self):
+        self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": False})
+        # a new pod starts "on", from its template
+        self.kube.pods[0] = self.pod("coder-ws-2", self.WS, self.OWNER["id"])
+        self.kube.patches.clear()
+        self.safe.links_once()
+        self.assertEqual(self.kube.patches, [("coder-ws-2", {"platform.coder/cloud-drive": "off"})])
+        self.safe.links_once()  # nothing more to do
+        self.assertEqual(len(self.kube.patches), 1)
+
+    def test_an_older_pod_is_recorded_not_patched(self):
+        out = self.safe.set_connected(self.h, self.OWNER, self.OLD, {"connected": False})
+        self.assertEqual((out["disconnected"], out["applied"], out["older"]), ([self.OLD], False, [self.OLD]))
+        self.assertEqual(self.kube.patches, [])
+
+    def test_only_the_owner_and_only_a_workspace(self):
+        with self.assertRaises(PermissionError):
+            self.safe.set_connected(self.h, {"id": "bob", "username": "bob", "roles": []}, self.WS,
+                                    {"connected": False})
+        for wid, body in (("../etc", {"connected": False}), (self.WS, {"connected": "no"}),
+                          ("99999999-2222-4333-8444-555555555555", {"connected": False})):
+            with self.assertRaises(ValueError, msg=wid):
+                self.safe.set_connected(self.h, self.OWNER, wid, body)
+        self.assertEqual(self.kube.patches, [])
+        # another user's disconnections are not listed
+        self.assertEqual(self.safe.connections({"id": "bob", "username": "bob"})["disconnected"], [])
+
+
+class CloudDriveBackendTest(unittest.TestCase):
+    """Cloud Drive > Settings (safe.py): the backend admins set over the chart's, its check, and volumes following a
+    new bucket once nothing uses them."""
+
+    UID = "3f0c2a52-7d7e-4c5b-9a3e-2f4b8c1d0e9a"
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.safe = load("safe", "safe.py")
+        self.safe.LOG = lambda **kw: None
+        self.safe.SETTINGS_FILE = os.path.join(self.dir.name, "cloud-drive.json")
+        self.safe.IS_ADMIN = lambda user: "owner" in user["roles"]
+        self.env = mock.patch.dict(os.environ, {"S3_ACCESS_KEY": "chartkey", "S3_SECRET_KEY": "chartsecret",
+                                                "SAFE_BUCKET": "coder-user-storage"})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.dir.cleanup()
+
+    def test_validation(self):
+        good = {"endpoint": "https://s3.us-east-1.amazonaws.com", "region": "us-east-1", "bucket": "team-drive",
+                "accessKey": "AK", "secretKey": "SK"}
+        self.assertEqual(self.safe.clean_backend(good)["bucket"], "team-drive")
+        for change in ({"endpoint": "s3.amazonaws.com"}, {"bucket": "Bad_Bucket"}, {"region": "US East"},
+                       {"secretKey": ""}):
+            with self.assertRaises(ValueError, msg=change):
+                self.safe.clean_backend(dict(good, **change))
+        self.assertEqual(self.safe.clean_backend(dict(good, secretKey=""), keep_secret="old")["secretKey"], "old")
+
+    def test_only_admins_and_never_an_unreachable_one(self):
+        admin, dev = {"username": "a", "roles": ["owner"]}, {"username": "d", "roles": []}
+        body = {"endpoint": "http://minio.example:9000", "bucket": "team-drive", "accessKey": "AK", "secretKey": "SK"}
+        with self.assertRaises(PermissionError):
+            self.safe.save_settings(dev, body)
+        with mock.patch.object(self.safe, "check", return_value={"connected": False, "error": "refused"}):
+            with self.assertRaisesRegex(ValueError, "could not be reached"):
+                self.safe.save_settings(admin, body)
+        self.assertEqual(self.safe.backend()["source"], "chart")
+        s3 = mock.Mock()
+        with mock.patch.object(self.safe, "check", return_value={"connected": True, "error": None, "bucketExists": False}), \
+                mock.patch.object(self.safe, "client", return_value=s3):
+            view = self.safe.save_settings(admin, body)
+        s3.create_bucket.assert_called_with("team-drive")
+        self.assertEqual((view["source"], view["bucket"], self.safe.backend()["secretKey"]), ("custom", "team-drive", "SK"))
+        self.assertEqual(oct(os.stat(self.safe.SETTINGS_FILE).st_mode & 0o777), "0o600")
+        self.assertEqual(self.safe.settings_view(dev)["accessKey"], "")                # keys only for admins
+        with mock.patch.object(self.safe, "check", return_value={"connected": True}):
+            self.safe.save_settings(admin, {"reset": True})
+        self.assertEqual(self.safe.backend()["bucket"], "coder-user-storage")
+
+    def test_a_new_bucket_takes_volumes_over_once_unused(self):
+        calls = []
+        old = {"spec": {"csi": {"volumeHandle": "coder-user-storage/users/" + self.UID}}}
+
+        class Kube:
+            ok = True
+
+            def call(self, method, path, body=None, patch_type=None):
+                calls.append((method, path))
+                if method == "GET" and path.startswith("/api/v1/persistentvolumes/"):
+                    return (200, old) if not any(m == "DELETE" for m, _ in calls) else (404, {})
+                if method == "GET":
+                    return 404, {}
+                return 201, body or {}
+
+        self.safe.KUBE = Kube()
+        with open(self.safe.SETTINGS_FILE, "w") as f:
+            json.dump({"endpoint": "http://x:9000", "bucket": "team-drive", "accessKey": "a", "secretKey": "b"}, f)
+        name = "coder-safe-" + self.UID
+        self.assertFalse(self.safe.ensure_volume(self.UID, "alice", in_use={name}))   # its workspace runs: later
+        self.assertFalse(any(m == "DELETE" for m, _ in calls))
+        with mock.patch.object(self.safe.time, "sleep"):
+            self.assertTrue(self.safe.ensure_volume(self.UID, "alice", in_use=set()))
+        self.assertIn(("DELETE", "/api/v1/persistentvolumes/" + name), calls)
+        posted = [p for m, p in calls if m == "POST"]
+        self.assertEqual(posted, ["/api/v1/persistentvolumes", "/api/v1/namespaces/coder/persistentvolumeclaims"])
+
+
+if __name__ == "__main__":
+    unittest.main()

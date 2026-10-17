@@ -1,36 +1,51 @@
 #!/usr/bin/env bash
 # Moves the images in images.txt across the air gap with docker.
 #
-# The bundle carries every image as a docker-save archive (images/README.md lists them):
-#   images/custom/             the fork's Coder image - on no public registry: always keep
-#   images/public/chart/       the public images the chart runs
-#   images/public/prereqs/     CloudNativePG operator, Traefik (for prereqs/)
-#   images/public/platform/    Argo CD + Keycloak as the reference cluster runs them - reference only
-# For a smaller bundle delete images/public/ (or any folder in it): push then takes those images from the local
-# docker or pulls them, and `save` on a connected machine writes the archives again.
+# The bundle carries every image as a docker-save archive, one folder per part of the solution - the [sections] of
+# images.txt, each with its SHA256SUMS (images/README.md lists them):
+#   images/ui/             the user interface: Coder (the fork), the platform and announcement services, their databases
+#   images/workspaces/     the workspace templates' images
+#   images/cloud-drive/    the Cloud Drive's storage and CSI driver
+#   images/image-builder/  Templates > Images: BuildKit and the registry
+#   images/cluster/        metrics-server
+#   images/prereqs/        CloudNativePG operator, Traefik (for prereqs/)
+#   images/rollback/       plain upstream Coder
+#   images/reference/      Argo CD + Keycloak as the reference cluster runs them - reference only
+# Ours (ghcr.io/user187x/...) are on no public registry: always keep them. For a smaller bundle delete the archives of
+# public images (or a folder): push then takes those images from the local docker or pulls them, and `save` on a
+# connected machine writes the archives again.
 #
 #   ./mirror-images.sh push REGISTRY [GROUP...]
 #                                   tag and push each image as REGISTRY/<path>, e.g. ghcr.io/user187x/coder-platform:T
 #                                   -> REGISTRY/user187x/coder-platform:T (what the example values use). Source: its
 #                                   archive under images/, else the local docker, else docker pull (by digest).
-#                                   GROUP: custom chart prereqs platform all (default: custom chart prereqs).
-#                                   Public images already in REGISTRY?  push REGISTRY custom
+#                                   GROUP: a section of images.txt (ui workspaces cloud-drive image-builder cluster
+#                                   prereqs rollback reference), ours (alias custom: our images, whichever section),
+#                                   public (the others), all, or default: every section but reference (no GROUP).
+#                                   Public images already in REGISTRY?  push REGISTRY ours
 #   ./mirror-images.sh save [GROUP...]
 #                                   connected side: pull the public images by digest and (re)write their archives
-#                                   (default: chart prereqs platform)
+#                                   (default: all; ours are only built, never pulled)
 #   ./mirror-images.sh verify       check every archive present against its folder's SHA256SUMS
 #   ./mirror-images.sh list [REGISTRY]
 #                                   group, image, archive present or not (-> target); changes nothing
-#   ./mirror-images.sh chart REPO   package ./coder-airgapped and helm push it to oci://REPO (e.g. <registry>/charts),
-#                                   the repository argocd/coder-airgapped-application.yaml pulls from
+#   ./mirror-images.sh images [GROUP...]
+#                                   the images those groups select (as push takes them), one per line
+#   ./mirror-images.sh path IMAGE   the image's archive (relative to the bundle), whether there or not
+#   ./mirror-images.sh store IMAGE  build side: the image in this docker saved as its archive, in the folder of its
+#                                   repository's section (a new tag before images.txt names it), replacing the archive
+#                                   of another tag, and that folder's SHA256SUMS written again (development/tools/build-*.sh)
+#   ./mirror-images.sh chart REPO   helm push the chart to oci://REPO (e.g. <registry>/charts), the repository
+#                                   argocd/coder-airgapped-application.yaml pulls from: the bundle's package
+#                                   (charts/coder-airgapped-<version>.tgz), else ./coder-airgapped packaged now
 #                                   (helm registry login <registry> first; ECR=1 creates the ECR repository)
 #   ./mirror-images.sh charts REPO  the same, the decorator install's two charts (below) and the prerequisites' charts
 #                                   (prereqs/*.tgz: CloudNativePG, Traefik)
 #   ./mirror-images.sh charts-list  name and version of each of those charts
 #   ./mirror-images.sh decorator-charts [OUTDIR]
 #                                   the Argo CD decorator install's two charts (argocd/coder-decorated-application.yaml),
-#                                   packaged from ./coder-airgapped into OUTDIR (default argocd/charts/; the bundle
-#                                   ships them there): coder-airgapped-base-<version>.tgz, a plain Coder (its database,
+#                                   packaged from ./coder-airgapped into OUTDIR (default charts/; the bundle ships
+#                                   them there, with coder-airgapped-<version>.tgz): coder-airgapped-base-<version>.tgz, a plain Coder (its database,
 #                                   its first owner), and coder-airgapped-layer-<version>.tgz, the customization layer
 #                                   that decorates it (values.yaml > global.decorator)
 #
@@ -49,13 +64,19 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ALL_GROUPS=(custom chart prereqs platform)
 
-# images.txt -> parallel arrays (a "[group]" line starts a group)
-groups=() images=() digests=() g=""
-while read -r a b _; do
+# images.txt -> parallel arrays; a "[section] folder mode description" line starts a section: its folder under the
+# bundle, and push (pushed by default) or reference (only when asked).
+groups=() images=() digests=() ALL_GROUPS=() DEFAULT_PUSH=()
+declare -A FOLDER=()
+g=""
+while read -r a b c _; do
 	[[ -z "$a" || "$a" == \#* ]] && continue
-	if [[ "$a" == \[*\] ]]; then g="${a:1:-1}"; continue; fi
+	if [[ "$a" == \[*\] ]]; then
+		g="${a:1:-1}"; ALL_GROUPS+=("$g"); FOLDER[$g]="${b%/}"
+		[[ "$c" == reference ]] || DEFAULT_PUSH+=("$g")
+		continue
+	fi
 	groups+=("$g") images+=("$a") digests+=("$b")
 done <"${here}/images.txt"
 
@@ -64,19 +85,42 @@ target() { # strip the source registry host
 	if [[ "$first" == *.* || "$first" == *:* ]]; then ref="${ref#*/}"; fi
 	echo "$2/${ref}"
 }
-dir_of() { if [[ "$1" == custom ]]; then echo "${here}/images/custom"; else echo "${here}/images/public/$1"; fi; }
+# Ours: built here, on no public registry (never pulled).
+ours() { [[ "${images[$1]}" == ghcr.io/user187x/* ]]; }
+dir_of() { echo "${here}/${FOLDER[$1]}"; }
 archive() { echo "$(dir_of "${groups[$1]}")/$(echo "${images[$1]}" | tr '/:@' '___').tar.gz"; }
 rel() { echo "${1#"${here}"/}"; }
-pick() { # pick DEFAULT... -- ARGS...: indexes of the images in the requested groups
+pick() { # pick DEFAULT... -- ARGS...: indexes of the images in the requested groups (sections, ours/custom, public, all)
 	local -a want=() def=()
+	local all=0 our=0 pub=0 w i
 	while [[ "$1" != -- ]]; do def+=("$1"); shift; done; shift
 	for w in "$@"; do
-		[[ "$w" == all ]] && { want=("${ALL_GROUPS[@]}"); break; }
-		[[ " ${ALL_GROUPS[*]} " == *" $w "* ]] || { echo "ERROR: unknown group '$w' (${ALL_GROUPS[*]} all)" >&2; exit 2; }
-		want+=("$w")
+		case "$w" in
+		all) all=1 ;;
+		default) want+=("${DEFAULT_PUSH[@]}") ;;
+		ours | custom) our=1 ;;
+		public) pub=1 ;;
+		*)
+			[[ " ${ALL_GROUPS[*]} " == *" $w "* ]] ||
+				{ echo "ERROR: unknown group '$w' (${ALL_GROUPS[*]} ours public all)" >&2; exit 2; }
+			want+=("$w") ;;
+		esac
 	done
-	((${#want[@]})) || want=("${def[@]}")
-	for i in "${!images[@]}"; do [[ " ${want[*]} " != *" ${groups[$i]} "* ]] || echo "$i"; done
+	((${#want[@]} || all || our || pub)) || want=("${def[@]}")
+	for i in "${!images[@]}"; do
+		if ((all)) || [[ " ${want[*]} " == *" ${groups[$i]} "* ]] || { ((our)) && ours "$i"; } ||
+			{ ((pub)) && ! ours "$i"; }; then
+			echo "$i"
+		fi
+	done
+}
+index_of() { # IMAGE -> its index in images.txt
+	local i
+	for i in "${!images[@]}"; do [[ "${images[$i]}" != "$1" ]] || { echo "$i"; return; }; done
+	echo "ERROR: $1 is not in images.txt" >&2; exit 1
+}
+sums() { # DIR: its SHA256SUMS written again from the archives in it
+	(cd "$1" && sha256sum ./*.tar.gz 2>/dev/null | sed 's|  \./|  |' >SHA256SUMS)
 }
 check() { # archive against its folder's SHA256SUMS
 	local d n; d=$(dirname "$1"); n=$(basename "$1")
@@ -97,20 +141,21 @@ ensure() { # index: the image in the local docker - from its archive when the bu
 		check "$f"; echo "loading $img from $(rel "$f")"; docker load -q -i "$f" >/dev/null
 	elif docker image inspect "$img" >/dev/null 2>&1; then
 		echo "using $img from the local docker ($(rel "$f") is not in the bundle)"
-	elif [[ "${groups[$1]}" == custom ]]; then
+	elif ours "$1"; then
 		echo "ERROR: $img is on no public registry and $(rel "$f") is missing" >&2; exit 1
 	else
 		echo "pulling $img ($(rel "$f") is not in the bundle)"; pull "$1"
 	fi
 }
 
-# The decorator install's two charts, packaged from ./coder-airgapped into $1: the part (global.decorator.part), the
-# chart's name and description, and without the other part's subcharts. Prints the two packages' paths.
+# The decorator install's two charts, packaged from ./coder-airgapped (or CHART_DIR: a copy, build-bundle.sh
+# --no-lmstudio) into $1: the part (global.decorator.part), the chart's name and description, and without the other
+# part's subcharts. Prints the two packages' paths.
 decorator_charts() {
 	local out="$1" part d tmp; tmp=$(mktemp -d)
 	mkdir -p "$out"
 	for part in base layer; do
-		d="${tmp}/coder-airgapped-${part}"; cp -r "${here}/coder-airgapped" "$d"
+		d="${tmp}/coder-airgapped-${part}"; cp -r "${CHART_DIR:-${here}/coder-airgapped}" "$d"
 		find "$d" -name __pycache__ -type d -prune -exec rm -rf {} +
 		sed -i "s/^    part: all$/    part: ${part}/" "$d/values.yaml"
 		[[ "$part" == layer ]] || sed -i 's/^    layer: true$/    layer: false/' "$d/values.yaml"
@@ -168,19 +213,19 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
 save)
 	zip=$(command -v pigz || echo gzip)
-	mapfile -t idx < <(pick chart prereqs platform -- "$@")
+	mapfile -t idx < <(pick "${ALL_GROUPS[@]}" -- "$@")
 	for i in "${idx[@]}"; do
-		[[ "${groups[$i]}" != custom ]] || { echo "skipping ${images[$i]}: custom, only built (development/tools/build-airgap-image.sh)"; continue; }
+		! ours "$i" || { echo "skipping ${images[$i]}: ours, only built (development/tools/build-*.sh)"; continue; }
 		f=$(archive "$i"); mkdir -p "$(dirname "$f")"
 		pull "$i"
 		echo "saving ${images[$i]} -> $(rel "$f")"
 		docker save --platform linux/amd64 "${images[$i]}" | "$zip" -6 >"$f.part"; mv "$f.part" "$f"
-		(cd "$(dirname "$f")" && sha256sum ./*.tar.gz | sed 's|  \./|  |' >SHA256SUMS)
+		sums "$(dirname "$f")"
 	done
 	;;
 push)
 	reg="${1:?usage: push REGISTRY [GROUP...]}"; shift; reg="${reg%/}"
-	mapfile -t idx < <(pick custom chart prereqs -- "$@")
+	mapfile -t idx < <(pick "${DEFAULT_PUSH[@]}" -- "$@")
 	carried=""; [[ ! -f "${here}/LAYER.json" ]] || carried=$("${here}/layer-support" delivered)
 	for i in "${idx[@]}"; do
 		img=${images[$i]}
@@ -211,12 +256,17 @@ chart | charts)
 	repo="${1:?usage: $cmd REPO}"; repo="${repo#oci://}"; repo="${repo%/}"
 	command -v helm >/dev/null || { echo "ERROR: helm not found" >&2; exit 1; }
 	tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-	pkgs=("$(helm package "${here}/coder-airgapped" -d "$tmp" | sed -n 's/.*saved it to: //p')")
+	# the bundle's packages (charts/), else packaged now
+	version=$(sed -n 's/^version: *//p' "${here}/coder-airgapped/Chart.yaml")
+	if [[ -f "${here}/charts/coder-airgapped-${version}.tgz" ]]; then
+		pkgs=("${here}/charts/coder-airgapped-${version}.tgz")
+	else
+		pkgs=("$(helm package "${here}/coder-airgapped" -d "$tmp" | sed -n 's/.*saved it to: //p')")
+	fi
 	if [[ "$cmd" == charts ]]; then
-		# the decorator install's two charts: the bundle's (argocd/charts/), else packaged now
-		version=$(sed -n 's/^version: *//p' "${here}/coder-airgapped/Chart.yaml")
-		if [[ -f "${here}/argocd/charts/coder-airgapped-base-${version}.tgz" && -f "${here}/argocd/charts/coder-airgapped-layer-${version}.tgz" ]]; then
-			pkgs+=("${here}/argocd/charts/coder-airgapped-base-${version}.tgz" "${here}/argocd/charts/coder-airgapped-layer-${version}.tgz")
+		# the decorator install's two charts
+		if [[ -f "${here}/charts/coder-airgapped-base-${version}.tgz" && -f "${here}/charts/coder-airgapped-layer-${version}.tgz" ]]; then
+			pkgs+=("${here}/charts/coder-airgapped-base-${version}.tgz" "${here}/charts/coder-airgapped-layer-${version}.tgz")
 		else
 			mapfile -t -O "${#pkgs[@]}" pkgs < <(decorator_charts "$tmp/decorator")
 		fi
@@ -246,7 +296,7 @@ charts-list)
 	;;
 decorator-charts)
 	command -v helm >/dev/null || { echo "ERROR: helm not found" >&2; exit 1; }
-	decorator_charts "${1:-${here}/argocd/charts}"
+	decorator_charts "${1:-${here}/charts}"
 	;;
 seed-builder)
 	ns="${1:-coder}"
@@ -276,8 +326,27 @@ list)
 	reg="${1:-}"
 	for i in "${!images[@]}"; do
 		f=$(archive "$i"); have=absent; [[ -f "$f" ]] && have=bundled
-		printf '%-9s %-8s %-56s %s\n' "${groups[$i]}" "$have" "${images[$i]}" "${reg:+-> $(target "${images[$i]}" "$reg")}"
+		printf '%-13s %-8s %-56s %s\n' "${groups[$i]}" "$have" "${images[$i]}" "${reg:+-> $(target "${images[$i]}" "$reg")}"
 	done
+	;;
+images)
+	mapfile -t idx < <(pick "${DEFAULT_PUSH[@]}" -- "$@")
+	for i in "${idx[@]}"; do echo "${images[$i]}"; done
+	;;
+path)
+	rel "$(archive "$(index_of "${1:?usage: path IMAGE}")")"
+	;;
+store)
+	img="${1:?usage: store IMAGE}"; sec=""
+	for i in "${!images[@]}"; do [[ "${images[$i]%:*}" != "${img%:*}" ]] || { sec=${groups[$i]}; break; }; done
+	[[ -n "$sec" ]] || { echo "ERROR: no section of images.txt has ${img%:*}: add the image there first" >&2; exit 1; }
+	docker image inspect "$img" >/dev/null 2>&1 || { echo "ERROR: $img is not in this docker" >&2; exit 1; }
+	d=$(dir_of "$sec"); f="${d}/$(echo "$img" | tr '/:@' '___').tar.gz"; mkdir -p "$d"
+	repo_file=$(echo "${img%:*}" | tr '/:@' '___')
+	find "$d" -maxdepth 1 -name "${repo_file}_*.tar.gz" ! -name "$(basename "$f")" -print -delete | sed 's|.*/|removed the older |'
+	docker save --platform linux/amd64 "$img" | gzip -1 >"$f.part"; mv "$f.part" "$f"
+	sums "$d"
+	echo "saved $img -> $(rel "$f") ($(du -h "$f" | cut -f1))"
 	;;
 *) sed -n '2,/^set /p' "$0" | sed '$d'; exit 2 ;;
 esac

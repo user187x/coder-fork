@@ -56,15 +56,17 @@ variable "cluster_admin_roles" {
   default     = "owner"
 }
 
-# Which apps the workspace has: "developer" (ubuntu-vnc-desktop: code-server, marimo) or "dataflow" (ubuntu-dataflow:
-# Apache NiFi, Apache Airflow). Everything else is the same. The chart pushes this template twice (templates/job.yaml).
+# Which apps the workspace has: "developer" (ubuntu-vnc-desktop: code-server, marimo), "dataflow" (ubuntu-dataflow:
+# Apache NiFi, Apache Airflow), or one of the AI templates on the AI workspace image: "lmstudio" (ubuntu-lmstudio:
+# LM Studio on the desktop, code-server) and "opencode" (ubuntu-opencode: the OpenCode agent, code-server; LM Studio
+# serving its models). Everything else is the same. The chart pushes this template once per set (templates/job.yaml).
 variable "app_set" {
   type        = string
-  description = "developer (code-server, marimo) or dataflow (Apache NiFi, Apache Airflow)."
+  description = "developer (code-server, marimo), dataflow (Apache NiFi, Apache Airflow), lmstudio (LM Studio) or opencode (OpenCode on LM Studio)."
   default     = "developer"
   validation {
-    condition     = contains(["developer", "dataflow"], var.app_set)
-    error_message = "app_set must be developer or dataflow."
+    condition     = contains(["developer", "dataflow", "lmstudio", "opencode"], var.app_set)
+    error_message = "app_set must be developer, dataflow, lmstudio or opencode."
   }
 }
 
@@ -91,19 +93,19 @@ variable "coder_service_port" {
   default = 80
 }
 
-# The owner's safe (the chart's userStorage): their own S3 storage, the same in each of their workspaces. The platform
+# The owner's Cloud Drive (the chart's userStorage): their own S3 storage, the same in each of their workspaces. The platform
 # service makes each account's volume (PersistentVolumeClaim coder-safe-<owner id>); the pod waits for it if it is not
 # there yet.
 variable "user_storage" {
   type        = bool
-  description = "Mount the owner's safe (global user storage, S3) in the workspace."
+  description = "Mount the owner's Cloud Drive (their own storage, S3) in the workspace."
   default     = false
 }
 
 variable "user_storage_path" {
   type        = string
-  description = "Where the safe is mounted."
-  default     = "/home/coder/safe"
+  description = "Where the Cloud Drive is in the workspace (a link to its volume while the workspace is connected)."
+  default     = "/home/coder/cloud-drive"
 }
 
 # The workspace image; empty: the chart's (substituted for "codercom/enterprise-base:ubuntu" below). The dataflow
@@ -123,6 +125,8 @@ variable "images_registry" {
 
 locals {
   dataflow      = var.app_set == "dataflow"
+  # The AI templates: LM Studio (its app on the desktop and its server) in both, OpenCode's app in ubuntu-opencode.
+  ai            = contains(["lmstudio", "opencode"], var.app_set)
   default_image = var.workspace_image != "" ? var.workspace_image : "codercom/enterprise-base:ubuntu"
   # The Workspace image parameter's, where the template offers one.
   workspace_image = length(data.coder_parameter.workspace_image) > 0 ? data.coder_parameter.workspace_image[0].value : local.default_image
@@ -150,7 +154,8 @@ data "coder_parameter" "cpu" {
   name         = "cpu"
   display_name = "CPU"
   description  = "The number of CPU cores"
-  default      = "2"
+  # A language model on the CPU wants several.
+  default      = local.ai ? "4" : "2"
   icon         = "/icon/memory.svg"
   mutable      = true
   option {
@@ -169,14 +174,23 @@ data "coder_parameter" "cpu" {
     name  = "8 Cores"
     value = "8"
   }
+  option {
+    name  = "12 Cores"
+    value = "12"
+  }
+  option {
+    name  = "16 Cores"
+    value = "16"
+  }
 }
 
 data "coder_parameter" "memory" {
   name         = "memory"
   display_name = "Memory"
   description  = "The amount of memory in GB"
-  # NiFi (a 1 GB Java heap) and Airflow beside the desktop need more than the developer apps.
-  default      = local.dataflow ? "6" : "2"
+  # NiFi (a 1 GB Java heap) and Airflow beside the desktop need more than the developer apps; a language model needs
+  # its size and its context's (an 8B model at 4 bits: some 5 GB, and 1-4 GB more for a long context).
+  default      = local.ai ? "8" : local.dataflow ? "6" : "2"
   icon         = "/__icons/memory.svg" # files/icons/memory.svg (a memory module), served by templates/icons.yaml
   mutable      = true
   option {
@@ -194,6 +208,22 @@ data "coder_parameter" "memory" {
   option {
     name  = "8 GB"
     value = "8"
+  }
+  option {
+    name  = "12 GB"
+    value = "12"
+  }
+  option {
+    name  = "16 GB"
+    value = "16"
+  }
+  option {
+    name  = "24 GB"
+    value = "24"
+  }
+  option {
+    name  = "32 GB"
+    value = "32"
   }
 }
 
@@ -227,6 +257,68 @@ data "coder_parameter" "start_directory" {
   }
 }
 
+# The AI templates: how many tokens LM Studio gives a model it loads (its default context length; LM Studio's own,
+# 8192, is too little for OpenCode, whose instructions alone take some 10 000), and OpenCode's limit per model (or the
+# model's own maximum, if less). More context takes more memory.
+data "coder_parameter" "context_length" {
+  count        = local.ai ? 1 : 0
+  name         = "context_length"
+  display_name = "Context length"
+  description  = "Tokens a model gets when LM Studio loads it (its default context length; OpenCode needs at least 16K). More takes more memory."
+  default      = "32768"
+  icon         = "/__icons/lmstudio.svg"
+  mutable      = true
+  option {
+    name  = "8K tokens"
+    value = "8192"
+  }
+  option {
+    name  = "16K tokens"
+    value = "16384"
+  }
+  option {
+    name  = "32K tokens"
+    value = "32768"
+  }
+  option {
+    name  = "64K tokens"
+    value = "65536"
+  }
+}
+
+# The AI templates: NVIDIA GPUs for the workspace (nvidia.com/gpu, from the cluster's NVIDIA device plugin; LM Studio
+# runs its models on them with its CUDA engine). The workspace waits for a node that has them free; none: the CPU.
+data "coder_parameter" "gpus" {
+  count        = local.ai ? 1 : 0
+  name         = "gpus"
+  display_name = "GPUs"
+  description  = "NVIDIA GPUs for LM Studio (nodes with the NVIDIA device plugin). The workspace waits until a node has them free; 0: the CPU only."
+  default      = "0"
+  icon         = "/icon/memory.svg"
+  mutable      = true
+  option {
+    name  = "None (CPU)"
+    value = "0"
+  }
+  option {
+    name  = "1 GPU"
+    value = "1"
+  }
+  option {
+    name  = "2 GPUs"
+    value = "2"
+  }
+  option {
+    name  = "4 GPUs"
+    value = "4"
+  }
+}
+
+locals {
+  context_length = local.ai ? data.coder_parameter.context_length[0].value : ""
+  gpus           = local.ai ? tonumber(data.coder_parameter.gpus[0].value) : 0
+}
+
 provider "kubernetes" {
   config_path = var.use_kubeconfig == true ? "~/.kube/config" : null
 }
@@ -247,6 +339,9 @@ locals {
   # at start, and the host the workspace's agent reaches Coder on (Network keeps it).
   lockdown_sh = file("${path.module}/scripts/lockdown.sh")
   coder_host  = regex("^[a-z]+://([^/:]+)", data.coder_workspace.me.access_url)[0]
+  # The Cloud Drive's volume, out of the way: user_storage_path links to it while the owner keeps the workspace
+  # connected (coder_script.cloud_drive).
+  cloud_drive_mount = "/mnt/cloud-drive"
 }
 
 resource "coder_agent" "main" {
@@ -262,7 +357,12 @@ resource "coder_agent" "main" {
   }
 
   # Admins' terminals, k9s and apps find the cluster sign-in first, then their own ~/.kube/config.
-  env = local.cluster_admin ? { KUBECONFIG = "${local.cluster_kubeconfig}:/home/coder/.kube/config" } : {}
+  # The AI templates: OpenCode reads its settings for this workspace (LM Studio as the provider) from this file, which
+  # the startup script writes (coder-opencode-config, in the AI workspace image).
+  env = merge(
+    local.cluster_admin ? { KUBECONFIG = "${local.cluster_kubeconfig}:/home/coder/.kube/config" } : {},
+    local.ai ? { OPENCODE_CONFIG = "/home/coder/.config/opencode/coder-workspace.json" } : {},
+  )
 
   startup_script = templatefile("${path.module}/scripts/startup.sh", {
     owner_name             = data.coder_workspace_owner.me.name
@@ -275,6 +375,7 @@ resource "coder_agent" "main" {
     app_set                = var.app_set
     access_host            = replace(replace(data.coder_workspace.me.access_url, "https://", ""), "http://", "")
     start_directory        = data.coder_parameter.start_directory.value
+    context_length         = local.context_length
   })
 
   # The metrics, in the same order in both of the dashboard's groups (the keys order them): CPU, RAM, Disk and Ø Load
@@ -367,8 +468,23 @@ resource "coder_script" "lockdown" {
   })
 }
 
+# The Cloud Drive, at start and then live: user_storage_path links to its volume while the pod's annotation
+# platform.coder/cloud-drive says "on" (the owner connects and disconnects the workspace on the Workspaces page).
+resource "coder_script" "cloud_drive" {
+  count              = var.user_storage ? 1 : 0
+  agent_id           = coder_agent.main.id
+  display_name       = "Cloud Drive"
+  icon               = "/__icons/cloud-drive.svg" # files/icons/cloud-drive.svg, served by templates/icons.yaml
+  run_on_start       = true
+  start_blocks_login = true
+  script = templatefile("${path.module}/scripts/cloud-drive.sh", {
+    link  = var.user_storage_path
+    mount = local.cloud_drive_mount
+  })
+}
+
 resource "coder_app" "marimo" {
-  count        = local.dataflow ? 0 : 1
+  count        = var.app_set == "developer" ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "marimo"
   display_name = "marimo"
@@ -388,7 +504,7 @@ resource "coder_app" "marimo" {
 
 # The windows of marimo notebooks (tkinter), shown in their cells' output (coder_marimo_tk): not a button of its own.
 resource "coder_app" "marimo_windows" {
-  count        = local.dataflow ? 0 : 1
+  count        = var.app_set == "developer" ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "marimo-windows"
   display_name = "marimo windows"
@@ -399,11 +515,13 @@ resource "coder_app" "marimo_windows" {
   hidden       = true
 }
 
+# In ubuntu-lmstudio the desktop is LM Studio's window (the app starts there), so it is the LM Studio app.
 resource "coder_app" "novnc" {
   agent_id     = coder_agent.main.id
   slug         = "novnc"
-  display_name = "Desktop"
-  icon         = "/icon/desktop.svg" # Coder's own icon (served by the dashboard; the noVNC logo was on the internet)
+  display_name = var.app_set == "lmstudio" ? "LM Studio" : "Desktop"
+  # Coder's own icon (served by the dashboard; the noVNC logo was on the internet); LM Studio's (files/icons/lmstudio.svg)
+  icon         = var.app_set == "lmstudio" ? "/__icons/lmstudio.svg" : "/icon/desktop.svg"
   # Path-based (no wildcard DNS/route needed). noVNC opens its websocket relative to the host
   # root, so pass the prefixed path explicitly ("main" = agent name, as in filebrowser above).
   url          = "http://localhost:6901?autoconnect=true&resize=remote&compression=0&path=@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/novnc/websockify"
@@ -448,6 +566,18 @@ resource "coder_app" "code-server" {
     interval  = 3
     threshold = 10
   }
+}
+
+# ubuntu-opencode: OpenCode, the AI coding agent, in a terminal in the Start folder, on the workspace's LM Studio (its
+# settings: OPENCODE_CONFIG, above). Quitting it closes the terminal; it opens again from the button.
+resource "coder_app" "opencode" {
+  count        = var.app_set == "opencode" ? 1 : 0
+  agent_id     = coder_agent.main.id
+  slug         = "opencode"
+  display_name = "OpenCode"
+  icon         = "/__icons/opencode.svg" # files/icons/opencode.svg, served by templates/icons.yaml
+  command      = "cd ${jsonencode(data.coder_parameter.start_directory.value)} 2>/dev/null; exec opencode"
+  share        = "owner"
 }
 
 # The dataflow template's apps, in place of code-server and marimo: path-based like the others, so they open in the
@@ -637,6 +767,9 @@ resource "kubernetes_deployment_v1" "main" {
           "com.coder.user.id"          = data.coder_workspace_owner.me.id
           "com.coder.user.username"    = data.coder_workspace_owner.me.name
         }
+        # Connected to the owner's Cloud Drive from the start; the platform service sets "off" for a workspace the
+        # owner disconnected (and back), and the pod reads it at /etc/platform/cloud-drive.
+        annotations = var.user_storage ? { "platform.coder/cloud-drive" = "on" } : {}
       }
       spec {
         security_context {
@@ -723,10 +856,11 @@ resource "kubernetes_deployment_v1" "main" {
               "cpu"    = "250m"
               "memory" = "512Mi"
             }
-            limits = {
+            # The AI templates' GPUs (none: no such limit).
+            limits = merge({
               "cpu"    = "${data.coder_parameter.cpu.value}"
               "memory" = "${data.coder_parameter.memory.value}Gi"
-            }
+            }, local.gpus > 0 ? { "nvidia.com/gpu" = tostring(local.gpus) } : {})
           }
           volume_mount {
             mount_path = "/home/coder"
@@ -744,12 +878,22 @@ resource "kubernetes_deployment_v1" "main" {
             name       = "lockdown"
             read_only  = true
           }
-          # The owner's safe: the same files in every one of their workspaces (and on the Workspaces page).
+          # The owner's Cloud Drive: the same files in every one of their workspaces (and on the Workspaces page), at
+          # user_storage_path while the workspace is connected (a link to this mount; coder_script.cloud_drive).
           dynamic "volume_mount" {
             for_each = var.user_storage ? [1] : []
             content {
-              mount_path = var.user_storage_path
+              mount_path = local.cloud_drive_mount
               name       = "safe"
+            }
+          }
+          # Whether it is connected: the pod's annotation platform.coder/cloud-drive, kept current by the kubelet.
+          dynamic "volume_mount" {
+            for_each = var.user_storage ? [1] : []
+            content {
+              mount_path = "/etc/platform"
+              name       = "platform-info"
+              read_only  = true
             }
           }
           # The ISO library (Templates > Images), read-only: the same disk images in every workspace.
@@ -758,6 +902,16 @@ resource "kubernetes_deployment_v1" "main" {
             content {
               mount_path = "/home/coder/isos"
               name       = "isos"
+              read_only  = true
+            }
+          }
+          # The AI templates: the model library (Templates > Images), read-only: the same GGUF models in every AI
+          # workspace (LM Studio lists them).
+          dynamic "volume_mount" {
+            for_each = var.user_storage && local.ai ? [1] : []
+            content {
+              mount_path = "/home/coder/models"
+              name       = "models"
               read_only  = true
             }
           }
@@ -811,13 +965,27 @@ resource "kubernetes_deployment_v1" "main" {
           }
         }
 
-        # The owner's safe: their S3 prefix, through the cluster's CSI driver (ReadWriteMany: all their workspaces).
+        # The owner's Cloud Drive: their S3 prefix, through the cluster's CSI driver (ReadWriteMany: all their workspaces).
         dynamic "volume" {
           for_each = var.user_storage ? [1] : []
           content {
             name = "safe"
             persistent_volume_claim {
               claim_name = "coder-safe-${data.coder_workspace_owner.me.id}"
+            }
+          }
+        }
+        dynamic "volume" {
+          for_each = var.user_storage ? [1] : []
+          content {
+            name = "platform-info"
+            downward_api {
+              items {
+                path = "cloud-drive"
+                field_ref {
+                  field_path = "metadata.annotations['platform.coder/cloud-drive']"
+                }
+              }
             }
           }
         }
@@ -828,6 +996,18 @@ resource "kubernetes_deployment_v1" "main" {
             name = "isos"
             persistent_volume_claim {
               claim_name = "coder-isos"
+              read_only  = true
+            }
+          }
+        }
+
+        # The model library: one read-only volume for every AI workspace (the platform service makes it).
+        dynamic "volume" {
+          for_each = var.user_storage && local.ai ? [1] : []
+          content {
+            name = "models"
+            persistent_volume_claim {
+              claim_name = "coder-models"
               read_only  = true
             }
           }

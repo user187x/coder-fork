@@ -129,6 +129,13 @@ spec:
             {{- if $df.enabled }}
             {{- $templates = append $templates (dict "name" $df.name "displayName" ($df.displayName | default $df.name) "image" (tpl (index $.Values "coder-workspace" "dataflowImage") $)) }}
             {{- end }}
+            {{- $ai := index $.Values "coder-workspace" "aiTemplates" }}
+            {{- if $ai.enabled }}
+            {{- $aiImage := tpl (index $.Values "coder-workspace" "aiImage") $ }}
+            {{- range $t := list $ai.lmstudio $ai.opencode }}
+            {{- $templates = append $templates (dict "name" $t.name "displayName" ($t.displayName | default $t.name) "image" $aiImage) }}
+            {{- end }}
+            {{- end }}
             - {name: BUILDER_TEMPLATES, value: {{ toJson $templates | quote }}}
             - {name: BUILDER_SERVICE_URL, value: {{ printf "http://coder-ui-updates.%s.svc" $ns | quote }}}
             - {name: BUILDER_CPU, value: {{ .build.cpu | quote }}}
@@ -145,12 +152,12 @@ spec:
             - {name: CLUSTER_ACCESS_ROLES, value: {{ .adminRoles | quote }}}
             - {name: CLUSTER_ACCESS_ISSUER, value: {{ include "platform.oidcIssuer" $ | trim | quote }}}
             {{- end }}{{ end }}
-            {{- /* The safe (global.userStorage): its bucket, the keys, and where the nodes mount it from (safe.py). */}}
+            {{- /* The Cloud Drive (global.userStorage): its bucket, the keys, and where the nodes mount it from (safe.py). */}}
             {{- $us := .Values.userStorage }}
             {{- if eq (toString (.Values.global.userStorage | default dict).enabled) "true" }}
             - {name: SAFE_ENABLED, value: "true"}
             - {name: SAFE_BUCKET, value: {{ $us.bucket | quote }}}
-            - {name: SAFE_MOUNT_PATH, value: {{ .Values.global.userStorage.mountPath | default "/home/coder/safe" | quote }}}
+            - {name: SAFE_MOUNT_PATH, value: {{ .Values.global.userStorage.mountPath | default "/home/coder/cloud-drive" | quote }}}
             - {name: SAFE_QUOTA_GIB, value: {{ $us.quotaGiB | quote }}}
             - {name: SAFE_MAX_UPLOAD_GIB, value: {{ $us.maxUploadGiB | quote }}}
             - {name: SAFE_NAMESPACE, value: {{ $ns | quote }}}

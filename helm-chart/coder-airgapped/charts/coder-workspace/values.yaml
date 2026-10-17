@@ -46,6 +46,23 @@ dataflowTemplate:
   icon: "/icon/ubuntu.svg"
 # Its image: the workspace image + NiFi, a Java runtime and Airflow.
 dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.1.0"
+# The AI templates, on one image (development/workspace-image-ai: the workspace image + LM Studio + OpenCode), each
+# pushed by its own Job (<prefix>-push-template-lmstudio, -opencode): ubuntu-lmstudio (LM Studio: its window on the
+# desktop is the LM Studio app; its server and lms) and ubuntu-opencode (the OpenCode agent, on the workspace's own
+# LM Studio). Both list the model library's GGUF models (~/models) where the deployment has the Cloud Drive's storage,
+# and the owner's own (~/cloud-drive/models). LM Studio's terms allow personal and internal business use only: these
+# are for the organization's own clusters. Display names and icons as for template above.
+aiTemplates:
+  enabled: false
+  lmstudio:
+    name: "ubuntu-lmstudio"
+    displayName: "UBUNTU LM STUDIO"
+    icon: "/__icons/lmstudio.svg"
+  opencode:
+    name: "ubuntu-opencode"
+    displayName: "UBUNTU OPENCODE"
+    icon: "/__icons/opencode.svg"
+aiImage: "ghcr.io/user187x/coder-workspace-ai:1.0.0"
 # Its NiFi under Coder's app path: each dataflow workspace gets an HTTPRoute of its own (files/main.tf, nifi_route) on
 # the Gateway in icons.gateway, to Coder's Service, setting the proxy headers NiFi reads; Coder's service account may
 # manage HTTPRoutes in the namespace, and read the cluster's CRDs (templates/nifi-routes-rbac.yaml), to create and

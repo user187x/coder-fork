@@ -88,15 +88,15 @@ Takes every image the solution needs (from the bundle) and its Helm charts into 
    `./make --deploy` (EKS).
 
 Non-interactive: `HARBOR_USER=robot\$coder HARBOR_PASSWORD=... DOCKERHUB_LOGIN=n ./make --push-images
-harbor.example.com/coder --yes` (`PUSH_GROUPS="custom chart prereqs platform"` adds the reference Argo CD and
-Keycloak images). Any other registry works too: without Harbor's API, the project steps are skipped.
+harbor.example.com/coder --yes` (`PUSH_GROUPS=all` adds the reference Argo CD and Keycloak images, `PUSH_GROUPS=ours`
+pushes only ours). Any other registry works too: without Harbor's API, the project steps are skipped.
 
 ## Argo CD: Coder decorated by the customization layer
 
 The bundle also installs as **two charts in one Argo CD Application**, the customization layer decorating a plain
 Coder that it can be taken off again:
 
-| | Chart (`argocd/charts/`) | What it installs |
+| | Chart (`charts/`) | What it installs |
 |---|---|---|
 | 1 | `coder-airgapped-base-<version>.tgz` | The Coder installation: the upstream Coder chart running **upstream Coder** (at the fork's base, with a Terraform provider mirror), its CloudNativePG database and its first owner |
 | 2 | `coder-airgapped-layer-<version>.tgz` | The customization layer: the platform service, the announcement banner, the ubuntu-vnc-desktop template and its icons, the image builder, metrics-server, admins' kubectl |
@@ -171,7 +171,8 @@ helm logged in as for the install; `HELM_PUSH_ARGS="--ca-file ca.crt"` for a pri
 applies it and asks Argo CD to refresh; Coder restarts on the new image with no gap. The ubuntu-dataflow template
 (Apache NiFi and Airflow) runs on its own image, which the update does not carry: the helper turns that template off
 (`coder-workspace.dataflowTemplate.enabled: false`) unless you give it the image (`--dataflow keep` when it is in
-your registry, `--dataflow <image>` for another). Back: restore the `.bak` file and apply it. The full bundle carries
+your registry, `--dataflow <image>` for another). The AI templates (LM Studio, OpenCode) likewise: off unless you give
+it their image (`--ai keep` or `--ai <image>`). Back: restore the `.bak` file and apply it. The full bundle carries
 the same helper (`argocd/update-application.sh`).
 
 ---
@@ -217,10 +218,15 @@ cd coder-airgapped-1.39.1
 ./mirror-images.sh list
 ```
 
-Every image should say `bundled` – they are all inside `images/` (see `images/README.md`), so no internet is needed.
+Every image should say `bundled` – they are all inside `images/`, one folder per part of the solution (`ui/` for the
+user interface, `workspaces/`, `cloud-drive/`, ...: see `images/README.md`), so no internet is needed. The packaged
+charts are in `charts/`.
 
-Using the smaller **`-slim`** bundle (only the custom Coder image)? Then either run `./mirror-images.sh save` here on a
-machine with internet, or – if your registry already has the public images – go on and use `custom` in Step 3.
+Using the smaller **`-slim`** bundle (only our images)? Then either run `./mirror-images.sh save` here on a machine with
+internet, or – if your registry already has the public images – go on and use `ours` in Step 3.
+
+Downloaded the release **in parts** (`-charts.tar.gz` and the `-images-<part>.tar.gz` you need)? Unpack them all into
+one directory: they make the same `coder-airgapped-1.39.1` folder (`-ASSETS.txt` says which part holds what).
 
 ## Step 2 – Carry it across
 
@@ -238,7 +244,8 @@ docker login $REGISTRY                                     # ECR: aws ecr get-lo
 ECR=1 ./mirror-images.sh push $REGISTRY                    # drop ECR=1 if not using ECR
 ```
 
-Public images already in your registry? Push only the custom one: `./mirror-images.sh push $REGISTRY custom`.
+Public images already in your registry? Push only ours: `./mirror-images.sh push $REGISTRY ours`. One part only:
+`./mirror-images.sh push $REGISTRY ui` (a folder's section of `images.txt`).
 Harbor: `./make --push-images <harbor>/<project>` does this step and the next, logins included.
 
 ## Step 4 – Push the chart to your registry
@@ -418,9 +425,18 @@ opened or imported from there.
 it (the image's page has a button per template), or an existing one switched to it in its settings, from its next
 start. An image built on the workspace image has everything the templates run.
 
-**The ISO library** (with the safe's storage, `global.userStorage`): disk images for every workspace, read-only at
+**Pictures:** the pictures offered as backgrounds (Appearance > Background image) and in the logo and avatar
+editors are part of the Coder image (`site/static/pictures/`), whatever the install (`./make`, Argo CD, plain Helm); a
+background chosen from them is stored as its path and drawn from Coder. `helm-chart/defaults/gallery/` adds more for
+`install.sh` installs only.
+
+**The ISO library** (with the Cloud Drive's storage, `global.userStorage`): disk images for every workspace, read-only at
 `~/isos` in each. Admins and template admins upload ISOs (or `.img`) or have the platform service fetch one from an
-address the cluster reaches; up to 20 GB each (`SAFE_ISO_MAX_GIB`). Personal ones go in each user's safe.
+address the cluster reaches; up to 20 GB each (`SAFE_ISO_MAX_GIB`). Personal ones go in each user's Cloud Drive.
+
+**The model library** (the same storage): language models in GGUF format for the AI workspaces, read-only at
+`~/models` in each, where LM Studio lists them. Uploaded or fetched like ISOs; up to 100 GB each
+(`SAFE_MODEL_MAX_GIB`). The AI workspaces also list each user's own, in their Cloud Drive's `models` folder.
 
 Builds start from the workspace image in the builder's own registry in the cluster, so BuildKit needs no access
 to your registry. `./make --deploy` puts it there (on any cluster); after an Argo CD or plain Helm install, run
@@ -473,15 +489,70 @@ volume (`imageBuilder.enabled`) and the platform service's permission to manage 
 > desktop, Firefox, code-server, File Browser, marimo (with all its packages), tmux, k9s/kubectl and the JetBrains Mono
 > Nerd Font. Nothing is downloaded when a workspace starts (`coder-workspace:1.8.0` and later).
 
-## The safe (each account's own storage)
+## AI workspaces: LM Studio and OpenCode
 
-Every account has a **safe**: its own files on S3, opened on the Workspaces page (under **New workspace**) and mounted
-at `~/safe` in each of its workspaces, the same files everywhere. On by default (`global.userStorage.enabled`).
+Two more templates, on one image (`ghcr.io/user187x/coder-workspace-ai`: the workspace image + LM Studio 0.4.26 and
+OpenCode 1.18.34; `coder-workspace.aiTemplates`, on by default):
+
+* **UBUNTU LM STUDIO** (`ubuntu-lmstudio`): its **LM Studio** app is the workspace's desktop with LM Studio's window
+  on it - chat with a model, load and unload models, see its server. `lms` in the terminal; code-server.
+* **UBUNTU OPENCODE** (`ubuntu-opencode`): its **OpenCode** app opens the OpenCode agent in a terminal in the Start
+  folder, on the workspace's own LM Studio; code-server, and the desktop with LM Studio.
+
+Both run LM Studio's server on `127.0.0.1:1234` (OpenAI-compatible, the workspace's own; Open Ports forwards it). A
+model loads when it is first asked for, with the template's **Context length** (32K tokens by default; OpenCode needs
+at least 16K), and unloads after an hour unused. OpenCode's settings (`~/.config/opencode/coder-workspace.json`,
+written at every start) list every language model LM Studio has, the default the first trained for tool use;
+`coder-opencode-config` writes them again after models are added.
+
+* **Models:** nothing comes with the bundle and nothing is downloaded: put GGUF files in the model library
+  (Templates > Images > Model library; every AI workspace has them at `~/models`) or in your own Cloud Drive's
+  `models` folder (`~/cloud-drive/models`); each start links them into LM Studio. A coding agent wants a model
+  trained for tool use, 7B or more (e.g. Qwen2.5-Coder 7B Instruct, 4-bit: about 5 GB).
+* **Resources:** the templates default to 4 CPU cores and 8 GB of memory (up to 16 cores and 32 GB). **GPUs** (0 by
+  default) asks for `nvidia.com/gpu` (nodes with the NVIDIA device plugin); LM Studio's CUDA engine uses them, its
+  CPU engine needs AVX2.
+* **No internet at run time:** LM Studio's update check fails quietly; OpenCode's update check, model catalogue,
+  language-server downloads, sharing and default plugins are off. LM Studio's engines are the image's, linked into
+  each home (about 110 MB per workspace instead of 1.5 GB).
+* **Licences:** OpenCode is MIT. **LM Studio's terms allow personal and internal business use only**: the image and
+  the templates are for the organization's own clusters. A bundle that leaves the organization (a public release) is
+  built with `development/tools/build-bundle.sh --no-lmstudio`: no AI image, the AI templates off.
+* **Images:** `development/tools/build-ai-image.sh` builds the image (LM Studio's AppImage and OpenCode's release
+  pinned by SHA-256) and checks it offline; `TEST_MODEL=<file.gguf>` also chats through LM Studio and OpenCode.
+
+## The Cloud Drive (each account's own storage)
+
+Every account has a **Cloud Drive**: its own files on S3, the same ones everywhere. On the Workspaces page it is one
+button above the table, flush with its right edge, with a cable from its socket to a plug in each connected workspace
+row; it opens a window in the middle of the screen (folders, upload with progress or by dropping files, download,
+delete) with its **Workspaces** (which are connected, a switch each) and its **Settings**: where the files are kept
+and whether that storage answers (checked every half minute; the cables turn red and dashed when it does not). Every
+connected workspace of the account has it at `~/cloud-drive`; the workspace page shows a cloud right of the latency,
+with how full the drive is and its first files on hover. On by default (`global.userStorage.enabled`). Its API,
+claims and volumes keep the earlier name, `safe` (`/api/safe`, `coder-safe-<user id>`).
+
+* **Connecting and disconnecting a workspace:** every workspace is connected, a new one too. Its owner drags a plug
+  away from a row to disconnect that workspace (the cable hangs, then reels into the Cloud Drive) and drags a cable
+  out of the socket onto a row to connect it again - or uses the switches in the Cloud Drive's **Workspaces**. A
+  running workspace follows within a second, no restart: the template mounts the volume at `/mnt/cloud-drive`, and
+  a watcher in the workspace (the template's Cloud Drive script) links `~/cloud-drive` to it while the pod's
+  annotation `platform.coder/cloud-drive` says `on`, which it reads through the downward API
+  (`/etc/platform/cloud-drive`). The platform service keeps the disconnected workspaces in its volume
+  (`/data/cloud-drive-links.json`) and every running workspace pod's annotation so (a restarted one gets its
+  disconnection back within 5 seconds). A workspace on a template version from before this takes the change once it
+  is updated. It is a convenience, not a wall: the volume stays mounted in the pod.
 
 * **Where the files are:** one bucket (`userStorage.bucket`), a prefix `users/<user id>/` per account. By default on
   the chart's MinIO (one instance, a `userStorage.minio.size` volume; its keys in Secret `coder-user-storage-s3`,
   generated). For high availability or more room, use your own S3 instead: `userStorage.minio.enabled: false`,
   `userStorage.s3.endpoint`, `.region`, and `.existingSecret` (a Secret with `accessKeyID` and `secretAccessKey`).
+* **Another S3 service without a deploy:** admins set one in the Cloud Drive's **Settings** (endpoint, region, bucket,
+  keys; **Test connection** first). It is saved only once it answers, the bucket is made if missing, and it is kept in
+  the platform service's volume (`/data/cloud-drive.json`, mode 0600; the secret key is never shown again). **Use the
+  chart's storage again** goes back to the values above. Files are not copied: what is in the old storage stays there.
+  Each account's volume moves to the new storage when none of its workspaces runs (a running one keeps the old one
+  until it stops). The nodes mount it from the endpoint as written, outside the cluster's DNS.
 * **How workspaces get it:** the CSI driver `ru.yandex.s3.csi` (k8s-csi-s3 with GeeseFS; `userStorage.csi`) runs on
   every node as a **privileged DaemonSet**: it needs `/dev/fuse` and systemd on the nodes (EKS's Amazon Linux nodes
   have both). If your cluster already runs that driver, set `userStorage.csi.enabled: false`. Clusters that enforce
@@ -493,6 +564,12 @@ at `~/safe` in each of its workspaces, the same files everywhere. On by default 
   an account the new ones, delete its claim and volume `coder-safe-<user id>` while none of its workspaces runs; the
   files stay, and the platform service makes them again within a minute.
 * **Limits:** `userStorage.quotaGiB` (10) per account for uploads on the page, `userStorage.maxUploadGiB` (5) a file.
+  Admins change every account's capacity in the Cloud Drive's **Settings** (a slider, or a number of 1 to 10240 GiB;
+  kept in the platform service's volume, `/data/cloud-drive-quota.json`); **Use the chart's** goes back to
+  `quotaGiB`. Lowering it below what an account holds stops its uploads only.
+* **Transfers:** uploads and downloads in the window show a moving bar, how much has gone, how fast and how long is
+  left. A download is written to disk as it comes where the browser can (Chromium's save dialog); elsewhere it is held
+  in memory, and a file over 1 GiB goes to the browser's own download.
   Files written inside a workspace are not stopped at the quota (S3 has none per prefix); the page shows what is used.
 * **Images:** `ghcr.io/user187x/coder-minio` (Chainguard's MinIO build; the MinIO project publishes no images since
   2025: `development/tools/build-minio-image.sh`) and the driver's two images, all in `images.txt` and the bundle.
@@ -585,8 +662,8 @@ at a time, the primary last. Coder's database requests pause while the primary m
 | No workspace template in Coder | `kubectl -n coder logs job/coder-bootstrap-first-user` and `job/coder-workspace-push-template` |
 | "You have multiple replicas but …" in Coder | High availability needs a license with `high_availability`. Until one is added, set `coder.coder.replicaCount: 1` |
 | An upgrade hangs with a `coder` pod Pending | High availability: Coder's nodes have no room for the rollout's extra replica (`kubectl -n coder describe pod`) |
-| A new workspace waits in `ContainerCreating` | The safe: `kubectl -n coder get pvc coder-safe-<user id>` (made by the platform service), `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-csi` (FUSE and systemd on the node) |
-| The safe says its storage cannot be reached | `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-minio`, or your S3's endpoint and keys (`userStorage.s3`) |
+| A new workspace waits in `ContainerCreating` | The Cloud Drive: `kubectl -n coder get pvc coder-safe-<user id>` (made by the platform service), `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-csi` (FUSE and systemd on the node) |
+| The Cloud Drive says its storage cannot be reached (a red dot) | `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-minio`, or your S3's endpoint and keys (`userStorage.s3`, or the one in its Settings) |
 
 ---
 

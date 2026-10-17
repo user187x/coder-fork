@@ -45,7 +45,7 @@
   GET  /__coder-ui/api/gallery                the provided pictures to choose from as logo or avatar (signed in)
   GET  /__coder-ui/background/<login|dashboard>?v=<sha>   a background image (public: the sign-in page shows it)
   GET  /__coder-ui/api/backgrounds            admins: both background images, their opacity, fit and layer
-  POST /__coder-ui/api/backgrounds {slot, dataUrl? | html?, opacity?, fit?, layer?, params?}   POST /api/backgrounds/reset
+  POST /__coder-ui/api/backgrounds {slot, dataUrl? | html? | picture?, opacity?, fit?, layer?, params?}   POST /api/backgrounds/reset
        {slot}. html: an HTML / CSS background, served sandboxed (BG_HTML_CSP); params: its dials (speed, hue,
        saturation, brightness, blur) and, for a preset, the preset's settings
   GET  /__coder-ui/gallery/<file>?v=<sha>     one of them (public, like the default avatar)
@@ -64,6 +64,13 @@
   POST /__coder-ui/api/chat/availability {"enabled"}   admins: their chat on / off (off: developers can't write to them)
   GET  /__coder-ui/api/chat/file/<id>       a message's screenshot (the two people in the conversation only)
   POST /__coder-ui/api/chat/send also takes {"image": data URL, "page": path}: a screenshot (PNG / JPEG / WebP, 4 MB)
+  PUT  /__coder-ui/api/chat/upload?to=<user id>&name=&type=   a file to attach (the body; CHAT_MAX_FILE_MB): {upload}
+  POST /__coder-ui/api/chat/send also takes {"upload": id}: the file uploaded for it, attached
+  GET  /__coder-ui/api/chat/poll also takes tab=<tab id>&pv=<presence version>: who is online, idle or gone, pushed
+  POST /__coder-ui/api/chat/activity {"tab", "idle"}   a tab's user went idle (no input for CHAT_IDLE_SECONDS) or back
+  POST /__coder-ui/api/chat/leave {"tab"}   a tab closed (its user leaves the People lists with their last tab)
+  GET  /__coder-ui/api/presence             admins: everyone online now (active / idle, tabs, since) with their
+                                            running workspaces, and who Coder saw in the last 15 minutes
   User quota (Health > User Quota; admins, and Coder's own check before it creates a workspace)
   GET  /__coder-ui/api/quota               limits, every user's usage (built with / running / live) and the cluster
   POST /__coder-ui/api/quota               {"default": {workspaces, cpu, memory}, "users": {name: {...}}, "exemptAdmins"}
@@ -114,6 +121,7 @@ import json
 import os
 import random
 import re
+import shutil
 import sqlite3
 import ssl
 import sys
@@ -3112,6 +3120,37 @@ def serve_background_html(data):
     return (html[:i] + BG_HTML_CONTROLLER + html[i:] if i >= 0 else html + BG_HTML_CONTROLLER).encode("utf-8")
 
 
+# A picture baked into the dashboard (the Coder image's site/static/pictures/), chosen as a background: only its path
+# is stored, and pages draw it from Coder itself - nothing to upload or keep in the database, so it is there wherever
+# Coder is.
+BG_PICTURE_REF = "text/x-coder-picture"
+BG_PICTURE_RE = re.compile(r"^/pictures/[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(gif|png|jpe?g|webp|avif)$")
+BG_PICTURE_TYPES = {"gif": "image/gif", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "webp": "image/webp", "avif": "image/avif"}
+
+
+def parse_background_picture(path):
+    """A dashboard picture by its path: (BG_PICTURE_REF, b"<path>\n<bytes>"), once Coder serves it as an image."""
+    if not isinstance(path, str) or not BG_PICTURE_RE.match(path):
+        raise ValueError("Not one of the dashboard's pictures (/pictures/<name>).")
+    req = urllib.request.Request(CODER_URL + path, method="HEAD")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+            size = int(resp.headers.get("Content-Length") or 0)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError("Coder does not serve %s: %s" % (path, str(e)[:120])) from None
+    if not ctype.startswith("image/"):
+        raise ValueError("Coder does not serve %s as a picture (%s)." % (path, ctype or "no type"))
+    return BG_PICTURE_REF, ("%s\n%d" % (path, size)).encode()
+
+
+def background_picture(bg):
+    """(path, bytes) of a picture reference."""
+    path, _, size = bytes(bg["data"]).decode("utf-8", errors="replace").partition("\n")
+    return path, int(size or 0)
+
+
 def parse_background(data_url):
     m = re.match(r"^data:([a-z+/.-]+);base64,([A-Za-z0-9+/=\s]+)$", data_url or "")
     if not m or m.group(1) not in BG_TYPES:
@@ -3242,6 +3281,9 @@ def background_public(slot, bg):
     """What a page needs to draw it (boot.js, the settings page)."""
     if not bg:
         return None
+    if bg["type"] == BG_PICTURE_REF:  # one of the dashboard's own pictures: drawn from Coder itself
+        return {"url": background_picture(bg)[0], "opacity": bg["opacity"], "fit": bg["fit"], "layer": bg["layer"],
+                "kind": "image", "builtin": True, "params": {}}
     return {"url": "%s/background/%s?v=%s" % (BASE, slot, bg["sha"]), "opacity": bg["opacity"], "fit": bg["fit"],
             "layer": bg["layer"], "kind": "html" if bg["type"] == "text/html" else "image",
             "params": bg.get("params") or {}}
@@ -5249,6 +5291,24 @@ CHAT_MAX_IMAGE = (
 )  # a screenshot attached to a message (PNG / JPEG / WebP)
 
 
+CHAT_IDLE_SECONDS = 30  # a tab without input this long is idle: grey in the People lists (the tab says so itself)
+CHAT_MAX_FILE = int(float(os.environ.get("CHAT_MAX_FILE_MB", "25")) * 1024 * 1024)  # a file attached to a message
+CHAT_FILE_RESERVE = 200 * 1024 * 1024  # an upload must leave this much free on the service's volume
+CHAT_UPLOAD_TTL = 3600  # an uploaded file not sent within this is removed
+CHAT_TAB_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+CHAT_UPLOAD_RE = re.compile(r"^[0-9a-f]{32}$")
+# Attached files shown in the conversation as pictures (checked against their content); every other file is a
+# download, never shown in the browser.
+CHAT_INLINE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
+
+
+def chat_file_name(name):
+    """A file name to keep and offer for download: its last path part, no control characters, at most 200 chars."""
+    name = os.path.basename(str(name or "").replace("\\", "/")).strip()
+    name = "".join(c for c in name if ord(c) >= 32 and c not in '"<>|*?')[:200]
+    return name or "file"
+
+
 class ChatStore:
     """Direct messages: an admin starts a conversation from Admin > Users ("Chat"), or a user writes to an admin from the
     Chats panel (their line to support); both answer in the window that opens on every Coder page (the dashboard's chat).
@@ -5256,9 +5316,13 @@ class ChatStore:
     peer-to-peer chat on (settings "peers"), to the other developers in the People list. A message may carry a
     screenshot (chat_files, read only by the two people in the conversation). Messages are kept settings "keepDays" days
     (admins set it; CHAT_KEEP_DAYS by default) in the service's SQLite file (its PersistentVolumeClaim), and admins may
-    purge them all. Who is online (a tab's poll in the last CHAT_ONLINE_SECONDS) and typing signals live in memory
-    only; a user may be invisible (chat_presence): left out of everyone's People list but admins'. A tab keeps one long
-    poll open (/api/chat/poll), answered as soon as a message or a typing change concerns its user.
+    purge them all. Who is online (a tab's poll in the last CHAT_ONLINE_SECONDS), each tab's idle or active state (its
+    own report: no input for CHAT_IDLE_SECONDS) and typing signals live in memory only; a closed tab says goodbye, and
+    a sweep every few seconds drops tabs that went quiet: each change of who is online, idle or gone bumps a presence
+    version that wakes every poll, so People lists follow at once. A user may be invisible (chat_presence): left out
+    of everyone's People list but admins'. A message may also carry a file (any kind, CHAT_MAX_FILE), kept on the
+    volume beside the SQLite file (chat-files/<message id>) and pruned and purged with its message. A tab keeps one
+    long poll open (/api/chat/poll), answered as soon as a message, a typing change or a presence change concerns it.
     """
 
     def __init__(self, path):
@@ -5292,6 +5356,17 @@ class ChatStore:
         }
         self.invisible = set()
         self.seen = {}
+        # Each open tab, for presence: {user id: {tab id: {seen, idle, activeAt, since}}}, and a version bumped when
+        # anyone comes online, goes idle or active, or leaves.
+        self.tabs = {}
+        # Tabs that said goodbye: {tab id: when}. A request of theirs still under way (a poll sent as the page closed)
+        # must not bring them back.
+        self.left = {}
+        self.presence_ver = int(time.time() * 1000)
+        # Files attached to messages, on the volume beside the SQLite file; an upload waits (pending) until it is sent.
+        self.files_dir = os.path.join(os.path.dirname(os.path.abspath(path)), "chat-files")
+        os.makedirs(self.files_dir, exist_ok=True)
+        self.pending = {}
         self.last_prune = 0.0
         with self.connect() as db:
             db.executescript(
@@ -5314,6 +5389,9 @@ class ChatStore:
                 ("to_admin", "INTEGER NOT NULL DEFAULT 0"),
                 ("image_type", "TEXT NOT NULL DEFAULT ''"),
                 ("page", "TEXT NOT NULL DEFAULT ''"),
+                ("file_name", "TEXT NOT NULL DEFAULT ''"),
+                ("file_type", "TEXT NOT NULL DEFAULT ''"),
+                ("file_size", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if column not in columns:
                     db.execute(
@@ -5350,6 +5428,7 @@ class ChatStore:
             }
         self.prune()
         threading.Thread(target=self._prune_loop, name="chat-prune", daemon=True).start()
+        threading.Thread(target=self._presence_loop, name="chat-presence", daemon=True).start()
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -5374,6 +5453,11 @@ class ChatStore:
                 "%s/api/chat/file/%d" % (BASE, r["id"]) if r["image_type"] else None
             ),
             "page": r["page"] or None,
+            "file": (
+                {"url": "%s/api/chat/file/%d" % (BASE, r["id"]), "name": r["file_name"],
+                 "size": r["file_size"], "type": r["file_type"]}
+                if "file_name" in r.keys() and r["file_name"] else None
+            ),
         }
 
     def newest(self, user_id):
@@ -5423,12 +5507,21 @@ class ChatStore:
             timezone.utc,
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.lock, self.connect() as db:
+            with_files = [r[0] for r in db.execute(
+                "SELECT id FROM chat_messages WHERE sent_at < ? AND file_name != ''", (cutoff,))]
             n = db.execute(
                 "DELETE FROM chat_messages WHERE sent_at < ?", (cutoff,)
             ).rowcount
             db.execute(
                 "DELETE FROM chat_files WHERE message_id NOT IN (SELECT id FROM chat_messages)"
             )
+            kept = {str(r[0]) for r in db.execute("SELECT id FROM chat_messages WHERE file_name != ''")}
+        self._remove_files(with_files)
+        # files whose message is gone some other way
+        for name in os.listdir(self.files_dir):
+            if name.isdigit() and name not in kept:
+                self._remove_files([name])
+        self._expire_uploads()
         self.last_prune = time.time()
         return n
 
@@ -5448,6 +5541,9 @@ class ChatStore:
         with self.lock, self.connect() as db:
             n = db.execute("DELETE FROM chat_messages").rowcount
             db.execute("DELETE FROM chat_files")
+            for name in os.listdir(self.files_dir):
+                if name.isdigit():
+                    self._remove_files([name])
             db.execute("DELETE FROM chat_read")
             self.settings["purgeVersion"] = int(self.settings.get("purgeVersion") or 0) + 1
             db.execute(
@@ -5476,6 +5572,9 @@ class ChatStore:
             f = db.execute(
                 "SELECT count(*), coalesce(sum(length(data)), 0) FROM chat_files"
             ).fetchone()
+            a = db.execute(
+                "SELECT count(*), coalesce(sum(file_size), 0) FROM chat_messages WHERE file_name != ''"
+            ).fetchone()
         try:
             size = os.path.getsize(self.path)
         except OSError:
@@ -5485,7 +5584,9 @@ class ChatStore:
             "peerMessages": m[1],
             "oldest": m[2],
             "screenshots": f[0],
-            "bytes": m[3] + f[1],
+            "attachments": a[0],
+            "attachmentBytes": a[1],
+            "bytes": m[3] + f[1] + a[1],
             "fileBytes": size,
         }
 
@@ -5540,11 +5641,153 @@ class ChatStore:
             self.changed.notify_all()
 
     def touch(self, user_id):
-        """A tab of this user's is open (its state or poll request)."""
+        """A tab of this user's is open (its state or poll request, from a tab that has no id)."""
         self.seen[user_id] = time.time()
 
+    # ---- presence: each tab's own report
+
+    def _status(self, user_id, now_t=None):
+        """offline, idle or active: from the user's live tabs; a user whose tabs never gave an id, from their polls."""
+        now_t = now_t or time.time()
+        tabs = [t for t in self.tabs.get(user_id, {}).values() if now_t - t["seen"] < CHAT_ONLINE_SECONDS]
+        if not tabs:
+            if user_id in self.tabs or now_t - self.seen.get(user_id, 0) >= CHAT_ONLINE_SECONDS:
+                return "offline"
+            return "active"
+        return "idle" if all(t["idle"] for t in tabs) else "active"
+
+    def _presence_changed(self):
+        """(self.changed held) Wakes every poll: someone came online, went idle or active, or left."""
+        self.presence_ver += 1
+        self.changed.notify_all()
+
+    def tab(self, user_id, tab_id, idle=None, leave=False):
+        """A tab's poll (it is open), its user's input (idle or not), or its goodbye (leave)."""
+        now_t = time.time()
+        with self.changed:
+            before = self._status(user_id, now_t)
+            tabs = self.tabs.setdefault(user_id, {})
+            if leave:
+                tabs.pop(tab_id, None)
+                self.left[tab_id] = now_t
+            elif tab_id in self.left:
+                return  # the page is gone: this request left before its goodbye arrived
+            else:
+                t = tabs.get(tab_id)
+                if t is None:
+                    t = tabs[tab_id] = {"seen": now_t, "idle": False, "activeAt": now_t, "since": now_t}
+                t["seen"] = now_t
+                if idle is not None:
+                    if t["idle"] and not idle:
+                        t["activeAt"] = now_t
+                    t["idle"] = bool(idle)
+                    if not idle:
+                        t["activeAt"] = now_t
+            if self._status(user_id, now_t) != before:
+                self._presence_changed()
+
+    def presence(self, user_id):
+        """The user's presence now: {status: active | idle | offline, activeAt, since (online since), tabs}."""
+        now_t = time.time()
+        tabs = [t for t in self.tabs.get(user_id, {}).values() if now_t - t["seen"] < CHAT_ONLINE_SECONDS]
+        active = max([t["activeAt"] for t in tabs] or [0])
+        since = min([t["since"] for t in tabs] or [0])
+
+        def iso(t):
+            return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if t else None
+
+        return {"status": self._status(user_id, now_t), "activeAt": iso(active), "since": iso(since), "tabs": len(tabs)}
+
+    def _presence_loop(self):
+        """Every few seconds: tabs that stopped polling (closed without a goodbye, a lost connection) are dropped."""
+        while True:
+            time.sleep(5)
+            now_t = time.time()
+            with self.changed:
+                changed = False
+                for user_id, tabs in list(self.tabs.items()):
+                    dead = [k for k, t in tabs.items() if now_t - t["seen"] >= CHAT_ONLINE_SECONDS]
+                    if not dead:
+                        continue
+                    before = self._status(user_id, now_t - 1e-6)
+                    for k in dead:
+                        tabs.pop(k, None)
+                    changed = changed or self._status(user_id, now_t) != before
+                for k, at in list(self.left.items()):
+                    if now_t - at >= CHAT_ONLINE_SECONDS:
+                        del self.left[k]
+                if changed:
+                    self._presence_changed()
+
     def is_online(self, user_id):
-        return time.time() - self.seen.get(user_id, 0) < CHAT_ONLINE_SECONDS
+        return self._status(user_id) != "offline"
+
+    # ---- files attached to messages
+
+    def _file_path(self, message_id):
+        return os.path.join(self.files_dir, str(int(message_id)))
+
+    def _remove_files(self, message_ids):
+        for i in message_ids:
+            try:
+                os.remove(self._file_path(i))
+            except OSError:
+                pass
+
+    def put_upload(self, user_id, to_id, name, ctype, length, stream):
+        """A file to attach, read from the request (length bytes), kept until sent (CHAT_UPLOAD_TTL)."""
+        self._expire_uploads()
+        upload_id = uuid.uuid4().hex
+        path = os.path.join(self.files_dir, "pending-" + upload_id)
+        left = length
+        try:
+            with open(path, "wb") as f:
+                while left > 0:
+                    chunk = stream.read(min(1024 * 1024, left))
+                    if not chunk:
+                        raise ValueError("The upload stopped before the end of the file.")
+                    f.write(chunk)
+                    left -= len(chunk)
+        except BaseException:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            raise
+        with self.lock:
+            self.pending[upload_id] = {"user": user_id, "to": to_id, "name": name, "type": ctype, "size": length,
+                                       "path": path, "at": time.time()}
+        return {"upload": upload_id, "name": name, "size": length, "type": ctype}
+
+    def take_upload(self, user_id, upload_id, to_id):
+        """The upload of this user's for this recipient, taken out of pending (None if there is none)."""
+        with self.lock:
+            hit = self.pending.get(upload_id)
+            if not hit or hit["user"] != user_id or hit["to"] != to_id:
+                return None
+            return self.pending.pop(upload_id)
+
+    def _expire_uploads(self):
+        now_t = time.time()
+        with self.lock:
+            old = [k for k, v in self.pending.items() if now_t - v["at"] > CHAT_UPLOAD_TTL]
+            gone = [self.pending.pop(k) for k in old]
+        for v in gone:
+            try:
+                os.remove(v["path"])
+            except OSError:
+                pass
+
+    def attachment(self, user_id, message_id):
+        """(path, name, type, size) of a message's attached file, for the two people in that conversation only."""
+        with self.connect() as db:
+            r = db.execute(
+                """SELECT file_name, file_type, file_size FROM chat_messages
+                   WHERE id = ? AND file_name != '' AND (from_id = ? OR to_id = ?)""",
+                (message_id, user_id, user_id),
+            ).fetchone()
+        path = self._file_path(message_id)
+        return (path, r[0], r[1], r[2]) if r and os.path.exists(path) else None
 
     def has_history(self, user_id, peer_id, from_admin=False):
         """They exchanged messages (or the peer wrote to this user as an admin, with from_admin)."""
@@ -5620,16 +5863,17 @@ class ChatStore:
             hit = self.by_client.get((user_id, client_id))
             return hit[1] if hit and time.time() - hit[0] < 600 else None
 
-    def send(self, user, admin, peer, text, image=None, page="", client_id=""):
-        """image: (content type, bytes) or None; page: where it was taken (path on Coder's host). client_id: the
-        sender's id for this message; sending it again returns the first message."""
+    def send(self, user, admin, peer, text, image=None, page="", client_id="", attachment=None):
+        """image: (content type, bytes) or None; page: where it was taken (path on Coder's host). attachment: an upload
+        (take_upload). client_id: the sender's id for this message; sending it again returns the first message."""
         with self.lock, self.connect() as db:
             hit = self.by_client.get((user["id"], client_id)) if client_id else None
             if hit and time.time() - hit[0] < 600:
                 return hit[1]
             cur = db.execute(
                 """INSERT INTO chat_messages (from_id, from_name, from_display, to_id, to_name, to_display, text, sent_at,
-                                from_admin, to_admin, image_type, page) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                from_admin, to_admin, image_type, page, file_name, file_type, file_size)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     user["id"],
                     user["username"],
@@ -5643,8 +5887,13 @@ class ChatStore:
                     int(bool(peer.get("admin"))),
                     image[0] if image else "",
                     page if image else "",
+                    attachment["name"] if attachment else "",
+                    attachment["type"] if attachment else "",
+                    attachment["size"] if attachment else 0,
                 ),
             )
+            if attachment:
+                os.replace(attachment["path"], self._file_path(cur.lastrowid))
             if image:
                 db.execute(
                     "INSERT INTO chat_files (message_id, data) VALUES (?, ?)",
@@ -5745,6 +5994,10 @@ class ChatStore:
     def delete(self, user_id, peer_id):
         """Removes the whole conversation between the two, for both of them (either may do it). The number deleted."""
         with self.lock, self.connect() as db:
+            with_files = [r[0] for r in db.execute(
+                """SELECT id FROM chat_messages WHERE file_name != '' AND
+                          ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))""",
+                (user_id, peer_id, peer_id, user_id))]
             db.execute(
                 """DELETE FROM chat_files WHERE message_id IN (SELECT id FROM chat_messages
                           WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))""",
@@ -5767,6 +6020,7 @@ class ChatStore:
             self.typing.pop((user_id, peer_id), None)
             self.typing.pop((peer_id, user_id), None)
             self.changed.notify_all()
+        self._remove_files(with_files)
         return n
 
     def file(self, user_id, message_id):
@@ -5795,7 +6049,7 @@ class ChatStore:
                 (user_id, peer_id, last_id),
             )
 
-    def wait(self, user_id, after, typing_known, clear_known, avail_known=0):
+    def wait(self, user_id, after, typing_known, clear_known, avail_known=0, presence_known=None):
         """Until a message newer than `after` concerns this user, or who is typing to them differs from typing_known
         (a sorted list), or a conversation of theirs was deleted after clear_known, or CHAT_POLL_SECONDS pass. Typing
         signals expire without a notification: re-checked every second."""
@@ -5808,6 +6062,7 @@ class ChatStore:
                     or typing != typing_known
                     or self.last_clear(user_id) > clear_known
                     or self.avail_ver > avail_known
+                    or (presence_known is not None and self.presence_ver > presence_known)
                     or time.time() >= deadline
                 ):
                     return typing
@@ -7071,7 +7326,8 @@ def certificates_overview():
 
 def chat_availability():
     """Which admins take chats: {"available": [ids with chat on], "off": [ids with chat off], "availVersion"}; whether
-    peer-to-peer chat is on, and the purge version (a change: reload the conversations)."""
+    peer-to-peer chat is on, the purge version (a change: reload the conversations), the presence version (a change:
+    the People lists ask again) and the largest file a message may carry."""
     ids = [a["id"] for a in chat_admins()]
     return {
         "available": [i for i in ids if i not in CHAT.off],
@@ -7079,6 +7335,8 @@ def chat_availability():
         "availVersion": CHAT.avail_ver,
         "peers": bool(CHAT.settings.get("peers")),
         "purgeVersion": int(CHAT.settings.get("purgeVersion") or 0),
+        "presenceVersion": CHAT.presence_ver,
+        "maxFileMb": CHAT_MAX_FILE // 1048576,
     }
 
 
@@ -7115,8 +7373,8 @@ def chat_people():
 
 
 def chat_people_for(user, admin):
-    """The People list for this user: everyone online (a tab open) or seen by Coder today, but themselves; the
-    invisible only for admins (marked). Online first, then the most recently seen."""
+    """The People list for this user: everyone online (a tab open: active, or idle for CHAT_IDLE_SECONDS) or seen by
+    Coder today, but themselves; the invisible only for admins (marked). Online first, then the most recently seen."""
     now_t = time.time()
     out = []
     for p in chat_people().values():
@@ -7125,16 +7383,45 @@ def chat_people_for(user, admin):
         invisible = p["id"] in CHAT.invisible
         if invisible and not admin:
             continue
-        online = CHAT.is_online(p["id"])
+        presence = CHAT.presence(p["id"])
+        online = presence["status"] != "offline"
         seen = _ts(p.get("lastSeen"))
         if not online and (seen is None or now_t - seen > CHAT_ACTIVE_SECONDS):
             continue
-        item = {**p, "online": online, "chatOff": p["id"] in CHAT.off}
+        item = {**p, "online": online, "idle": presence["status"] == "idle", "activeAt": presence["activeAt"],
+                "chatOff": p["id"] in CHAT.off}
         if admin:
             item["invisible"] = invisible
         out.append(item)
     out.sort(key=lambda p: (not p["online"], -(_ts(p.get("lastSeen")) or 0)))
     return out[:500]
+
+
+def presence_report(token):
+    """Admin Controls > Online Users: everyone with a Coder tab open now - active, or idle (no input for
+    CHAT_IDLE_SECONDS) - with how many tabs, since when, their last input and their running workspaces; then who Coder
+    saw in the last 15 minutes without a tab open (the CLI, SSH, an app). The invisible are included (marked)."""
+    running = {}
+    status, data = _coder_get(token, "/api/v2/workspaces?" + urllib.parse.urlencode(
+        {"q": "status:running", "limit": 1000}))
+    if status == 200:
+        for w in (data or {}).get("workspaces") or []:
+            running.setdefault(w.get("owner_id"), []).append(
+                {"id": w.get("id"), "name": w.get("name"), "owner": w.get("owner_name")})
+    now_t = time.time()
+    online, recent = [], []
+    for p in chat_people().values():
+        presence = CHAT.presence(p["id"])
+        item = {**p, **presence, "invisible": p["id"] in CHAT.invisible, "workspaces": running.get(p["id"], [])}
+        if presence["status"] != "offline":
+            online.append(item)
+        else:
+            seen = _ts(p.get("lastSeen"))
+            if seen and now_t - seen < 900:
+                recent.append(item)
+    online.sort(key=lambda p: (p["status"] != "active", -(_ts(p.get("activeAt")) or 0)))
+    recent.sort(key=lambda p: -(_ts(p.get("lastSeen")) or 0))
+    return {"online": online, "recent": recent, "idleSeconds": CHAT_IDLE_SECONDS, "generatedAt": now()}
 
 
 def boot_js():
@@ -7342,7 +7629,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if lockdown.handle(self, "GET", path, url.query):
             return
-        if safe.handle(self, "GET", path, url.query) or safe.handle_isos(self, "GET", path, url.query):
+        if safe.handle(self, "GET", path, url.query) or safe.handle_libraries(self, "GET", path, url.query):
             return
         if path.startswith(TEMPLATE_ICONS_PATH):
             return self.template_icon(path[len(TEMPLATE_ICONS_PATH):])
@@ -7465,6 +7752,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(503, "Coder's database is not reachable: %s\n" % str(e)[:200])
             if not bg:
                 return self.send(404, "no background\n", headers={"Cache-Control": "no-cache"})
+            if bg["type"] == BG_PICTURE_REF:
+                self.send_response(302)
+                self.send_header("Location", background_picture(bg)[0])
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", "0")
+                return self.end_headers()
             if bg["type"] == "text/html":
                 return self.send(200, serve_background_html(bg["data"]), "text/html; charset=utf-8", {
                     "Content-Security-Policy": BG_HTML_CSP,
@@ -7486,6 +7779,11 @@ class Handler(BaseHTTPRequestHandler):
                 "dials": {k: {"min": v[0], "max": v[1], "default": v[2]} for k, v in BG_DIALS.items()}}}
             for slot in BG_SLOTS:
                 bg = found.get(slot)
+                if bg and bg["type"] == BG_PICTURE_REF:
+                    path, size = background_picture(bg)
+                    out[slot] = dict(background_public(slot, bg), bytes=size, updatedBy=bg["by"], updatedAt=bg["at"],
+                                     type=BG_PICTURE_TYPES.get(path.rsplit(".", 1)[-1].lower(), "image/gif"))
+                    continue
                 out[slot] = dict(background_public(slot, bg), type=bg["type"], bytes=len(bg["data"]),
                                  updatedBy=bg["by"], updatedAt=bg["at"]) if bg else None
             return self.send_json(200, out)
@@ -7583,6 +7881,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.chat_get(
                 path[len(BASE + "/api/chat/") :], urllib.parse.parse_qs(url.query)
             )
+        if path == BASE + "/api/presence":
+            user, err = self.user(admin=True)
+            if err:
+                return
+            try:
+                return self.send_json(200, presence_report(self.token()))
+            except Exception as e:  # noqa: BLE001
+                log(event="presence-report-failed", error=str(e)[:300])
+                return self.send_json(503, {"error": str(e)[:300]})
         if path == BASE + "/api/hud/history":
             user, err = self.user(admin=True)
             if err:
@@ -7854,8 +8161,10 @@ class Handler(BaseHTTPRequestHandler):
         if err:
             return
         admin = bool(set(user["roles"]) & ADMIN_ROLES)
+        tab = (q.get("tab") or [""])[0]
+        tab = tab if CHAT_TAB_RE.match(tab) else ""
         if what in ("state", "poll"):
-            CHAT.touch(user["id"])
+            CHAT.tab(user["id"], tab) if tab else CHAT.touch(user["id"])
         if what == "people":  # who is online or active today (peer-to-peer chat; admins always)
             if not admin and not CHAT.settings.get("peers"):
                 return self.send_json(200, {"enabled": False, "people": []})
@@ -7917,6 +8226,12 @@ class Handler(BaseHTTPRequestHandler):
             )
         if what.startswith("file/"):
             try:
+                attached = CHAT.attachment(user["id"], int(what[5:]))
+            except ValueError:
+                attached = None
+            if attached:
+                return self.chat_send_file(*attached)
+            try:
                 hit = CHAT.file(user["id"], int(what[5:]))
             except ValueError:
                 hit = None
@@ -7948,6 +8263,7 @@ class Handler(BaseHTTPRequestHandler):
                 after = int((q.get("after") or ["0"])[0] or 0)
                 cleared = int((q.get("cleared") or ["0"])[0] or 0)
                 avail = int((q.get("av") or ["0"])[0] or 0)
+                pv = int((q.get("pv") or ["0"])[0] or 0) if q.get("pv") else None
             except ValueError:
                 return self.send_json(
                     400, {"error": "after, cleared and av must be numbers."}
@@ -7955,8 +8271,8 @@ class Handler(BaseHTTPRequestHandler):
             known = sorted(
                 p for p in (q.get("typing") or [""])[0].split(",") if UUID_RE.match(p)
             )
-            typing = CHAT.wait(user["id"], after, known, cleared, avail)
-            CHAT.touch(user["id"])
+            typing = CHAT.wait(user["id"], after, known, cleared, avail, pv)
+            CHAT.tab(user["id"], tab) if tab else CHAT.touch(user["id"])
             return self.send_json(
                 200,
                 {
@@ -7992,6 +8308,72 @@ class Handler(BaseHTTPRequestHandler):
         CACHE.put(key, peer, 300)
         return peer
 
+    def chat_send_file(self, path, name, ctype, size):
+        """A file attached to a message: a picture (its content checked) shown in the conversation, anything else
+        only ever downloaded (never run or shown by the browser)."""
+        with open(path, "rb") as f:
+            head = f.read(64)
+        inline = ctype in CHAT_INLINE_TYPES and image_type(head) == ctype
+        quoted = urllib.parse.quote(name)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype if inline else "application/octet-stream")
+        self.send_header("Content-Length", str(os.path.getsize(path)))
+        self.send_header("Content-Disposition", "%s; filename*=UTF-8''%s" % ("inline" if inline else "attachment", quoted))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "sandbox; default-src 'none'")
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.end_headers()
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
+    def chat_upload(self, query):
+        """PUT /api/chat/upload?to=&name=&type=: a file to attach to the next message to that person."""
+        if self.headers.get(CSRF_HEADER[0]) != CSRF_HEADER[1]:
+            return self.send_json(403, {"error": "Request rejected (cross-site protection)."})
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlsplit(origin).netloc != self.headers.get("Host"):
+            return self.send_json(403, {"error": "Request rejected (cross-site protection)."})
+        user, err = self.user()
+        if err:
+            return
+        admin = bool(set(user["roles"]) & ADMIN_ROLES)
+        q = urllib.parse.parse_qs(query or "")
+        peer_id = (q.get("to") or [""])[0]
+        if not UUID_RE.match(peer_id):
+            return self.send_json(400, {"error": "Who is it for? (to=<user id>)"})
+        try:
+            length = int(self.headers.get("Content-Length") or -1)
+        except ValueError:
+            length = -1
+        if length <= 0:
+            return self.send_json(400, {"error": "The upload needs a Content-Length (an empty file can't be sent)."})
+        if length > CHAT_MAX_FILE:
+            return self.send_json(413, {"error": "A file can be at most %d MB." % (CHAT_MAX_FILE // 1048576)})
+        try:
+            free = shutil.disk_usage(CHAT.files_dir).free
+        except OSError:
+            free = None
+        if free is not None and free - length < CHAT_FILE_RESERVE:
+            return self.send_json(507, {"error": "The chat's storage is full; ask an admin to purge old chats."})
+        all_admins = [] if admin else chat_admins()
+        admins = [a for a in all_admins if a["id"] not in CHAT.off]
+        why = CHAT.may_write(user, admin, peer_id, {a["id"] for a in admins}, {a["id"] for a in all_admins})
+        if why:
+            return self.send_json(403, {"error": why})
+        name = chat_file_name((q.get("name") or [""])[0])
+        ctype = (q.get("type") or [""])[0].lower()
+        ctype = ctype if re.match(r"^[a-z0-9.+-]+/[a-z0-9.+-]+$", ctype) else "application/octet-stream"
+        try:
+            hit = CHAT.put_upload(user["id"], peer_id, name, ctype, length, self.rfile)
+        except ValueError as e:
+            return self.send_json(400, {"error": str(e)})
+        log(event="chat-upload", user=user["username"], to=peer_id, bytes=length)  # never the name or the content
+        return self.send_json(200, hit)
+
     def chat_post(self, what, payload):
         user, err = self.user()
         if err:
@@ -8008,6 +8390,18 @@ class Handler(BaseHTTPRequestHandler):
             CHAT.set_enabled(user["id"], on)
             log(event="chat-availability", user=user["username"], enabled=on)
             return self.send_json(200, {"enabled": on, **chat_availability()})
+        if what in ("activity", "leave"):  # a tab: its user went idle or came back, or it closed
+            tab = str(payload.get("tab") or "")
+            if not CHAT_TAB_RE.match(tab):
+                return self.send_json(400, {"error": "tab must be a tab id."})
+            if what == "leave":
+                CHAT.tab(user["id"], tab, leave=True)
+            else:
+                idle = payload.get("idle")
+                if not isinstance(idle, bool):
+                    return self.send_json(400, {"error": "idle must be true or false."})
+                CHAT.tab(user["id"], tab, idle=idle)
+            return self.send_json(200, {"ok": True, "presenceVersion": CHAT.presence_ver})
         if what == "presence":  # anyone: invisible to everyone but admins, or not
             invisible = payload.get("invisible")
             if not isinstance(invisible, bool):
@@ -8103,7 +8497,15 @@ class Handler(BaseHTTPRequestHandler):
         again = CHAT.sent_before(user["id"], client_id)
         if again:
             return self.send_json(200, {"message": again})
-        if not text and not image:
+        upload = str(payload.get("upload") or "")
+        attachment = None
+        if upload:
+            if not CHAT_UPLOAD_RE.match(upload):
+                return self.send_json(400, {"error": "upload must be an upload's id."})
+            attachment = CHAT.take_upload(user["id"], upload, peer_id)
+            if not attachment:
+                return self.send_json(400, {"error": "The attached file is gone (sent already, or kept too long): attach it again."})
+        if not text and not image and not attachment:
             return self.send_json(400, {"error": "The message is empty."})
         if len(text) > CHAT_MAX_TEXT:
             return self.send_json(
@@ -8133,13 +8535,14 @@ class Handler(BaseHTTPRequestHandler):
             )
         page = str(payload.get("page") or "")[:300] if image else ""
         page = page if page.startswith("/") else ""
-        message = CHAT.send(user, admin, peer, text, image, page, client_id)
+        message = CHAT.send(user, admin, peer, text, image, page, client_id, attachment)
         log(
             event="chat",
             sender=user["username"],
             to=peer["username"],
             id=message["id"],
             image=bool(image),
+            file=bool(attachment),
         )  # never the text
         self.send_json(200, {"message": message})
 
@@ -8164,12 +8567,14 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def do_PUT(self):
-        """Uploads to the Images view (files of an image being built)."""
+        """Uploads: the Images view's (files of an image being built), the Cloud Drive's and libraries', a chat's file."""
         self.close_connection = True
         url = urllib.parse.urlsplit(self.path)
         if url.path.startswith(BASE + "/internal/") and workspacevolumes.handle_internal(self, "PUT", url.path):
             return
-        if safe.handle(self, "PUT", url.path, url.query) or safe.handle_isos(self, "PUT", url.path, url.query):
+        if url.path == BASE + "/api/chat/upload":
+            return self.chat_upload(url.query)
+        if safe.handle(self, "PUT", url.path, url.query) or safe.handle_libraries(self, "PUT", url.path, url.query):
             return
         if not imagebuilder.handle(self, "PUT", url.path, url.query, ADMIN_ROLES):
             self.send(404, "not found\n")
@@ -8203,7 +8608,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if lockdown.handle(self, "POST", path, url.query):
             return
-        if safe.handle(self, "POST", path, url.query) or safe.handle_isos(self, "POST", path, url.query):
+        if safe.handle(self, "POST", path, url.query) or safe.handle_libraries(self, "POST", path, url.query):
             return
         routes = {
             BASE + "/api/view",
@@ -8349,8 +8754,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(200, {"ok": True, "set": False})
                 current = BACKGROUNDS.all(fresh=True).get(slot)
                 settings = clean_bg_settings(payload, current)
-                if payload.get("dataUrl") or payload.get("html"):
+                if payload.get("dataUrl") or payload.get("html") or payload.get("picture"):
                     ctype, data = (parse_background_html(payload["html"]) if payload.get("html")
+                                   else parse_background_picture(payload["picture"]) if payload.get("picture")
                                    else parse_background(payload["dataUrl"]))
                     if ctype != "text/html" and payload.get("params") is None:
                         settings["params"] = {}  # an image has no dials
@@ -8648,7 +9054,8 @@ def main():
     workspacevolumes.start()
     lockdown.setup(log, KUBE, workspace_info, ADMIN_ROLES, CODER_ACCESS_URL)
     lockdown.start()
-    safe.setup(log, KUBE, safe_accounts, lambda user: imagebuilder.can_edit(user, ADMIN_ROLES))
+    safe.setup(log, KUBE, safe_accounts, lambda user: imagebuilder.can_edit(user, ADMIN_ROLES),
+               lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), workspace_info)
     safe.start()
     if imagebuilder.ENABLED:
         # the apt indices for the package check, ready before anyone opens the builder

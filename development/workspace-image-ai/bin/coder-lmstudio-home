@@ -1,0 +1,49 @@
+#!/bin/sh
+# ~/.lmstudio for the LM Studio in /opt/lm-studio, at every start of an AI workspace (the template's startup script):
+# - its llama.cpp engines, frameworks, tools (node, deno, esbuild) and bundled embedding model are links into the
+#   app (read-only), not the 1.5 GB copy LM Studio unpacks into a home by itself; a copy an earlier start unpacked is
+#   replaced by the link, and links into an LM Studio version no longer in the image are removed;
+# - its settings: the default context length of the models it loads (CONTEXT, in tokens: the template's Context
+#   length; LM Studio's own default is 8192, too little for OpenCode), and no attempts to update or delete its
+#   engines (no internet; the engines are the image's).
+#   coder-lmstudio-home [CONTEXT]
+set -eu
+W=/opt/lm-studio/resources/app/.webpack
+L="$HOME/.lmstudio"
+CONTEXT="${1:-}"
+[ -d "$W" ] || { echo "LM Studio is not in this image (/opt/lm-studio)"; exit 0; }
+mkdir -p "$L/.internal/utils" "$L/extensions/backends" "$L/extensions/frameworks" "$L/models"
+
+link() { # TARGET LINK: a copy in the way goes
+	if [ -e "$2" ] && [ ! -L "$2" ]; then rm -rf "$2"; fi
+	ln -sfn "$1" "$2"
+}
+for d in "$W"/bin/extensions/backends/* "$W"/bin/extensions/frameworks/*; do
+	link "$d" "$L/extensions/$(basename "$(dirname "$d")")/$(basename "$d")"
+done
+for t in "$L"/extensions/backends/* "$L"/extensions/frameworks/*; do
+	if [ -L "$t" ] && [ ! -e "$t" ]; then rm -f "$t"; fi
+done
+for f in node deno esbuild; do
+	if [ -e "$W/bin/$f" ]; then link "$W/bin/$f" "$L/.internal/utils/$f"; fi
+done
+link "$W/bin/bundled-models" "$L/.internal/bundled-models"
+printf '%s' "$L" >"$HOME/.lmstudio-home-pointer"
+
+python3 - "$L/settings.json" "$CONTEXT" <<'PY'
+import json, os, sys
+path, context = sys.argv[1], sys.argv[2]
+try:
+    s = json.load(open(path))
+except Exception:
+    s = {}
+dev = s.setdefault("developer", {})
+dev["autoUpdateExtensionPacks"] = False
+dev["autoDeleteExtensionPacks"] = False
+if context.isdigit():
+    s["defaultContextLength"] = {"type": "custom", "value": int(context)}
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(s, f, indent=2)
+os.replace(tmp, path)
+PY

@@ -23,7 +23,8 @@ while (($#)); do
 	esac
 	shift
 done
-docker image inspect "$image" >/dev/null 2>&1 || docker load -q -i "${top}/helm-chart/images/custom/$(echo "$image" | tr '/:@' '___').tar.gz"
+docker image inspect "$image" >/dev/null 2>&1 ||
+	docker load -q -i "${top}/helm-chart/$("${top}/helm-chart/mirror-images.sh" path "$image")"
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/cache" "$work/data/trivy"

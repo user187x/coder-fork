@@ -31,7 +31,7 @@ fi
 
 fork=$(awk '!/^#/ && $1 ~ /\/coder-platform:.*-airgap$/ {print $1; exit}' "${bundle}/images.txt")
 [[ -n "$fork" ]] || { echo "ERROR: no coder-platform -airgap image in images.txt" >&2; exit 1; }
-archive="${bundle}/images/custom/$(echo "$fork" | sed 's|[/:@]|_|g').tar.gz"
+archive="${bundle}/$("${bundle}/mirror-images.sh" path "$fork")"
 [[ -f "$archive" ]] || { echo "ERROR: ${archive} is missing: run tools/build-airgap-image.sh" >&2; exit 1; }
 
 staging="${dist}/.decorator-${version}"; rm -rf "$staging"; out="${staging}/${name}"
@@ -56,11 +56,14 @@ if [[ -n "$since" ]] && git -C "$top" rev-parse -q --verify "v${since}" >/dev/nu
 	dataflow_then=$(git -C "$top" show "v${since}:helm-chart/coder-airgapped/values.yaml" |
 		sed -n 's/^  dataflowImage:.*"\([^"]*\)".*/\1/p' | head -n1)
 fi
+# The AI templates' image (coder-workspace.aiImage): not in the update either.
+ai=$(sed -n 's/^  aiImage:.*"\([^"]*\)".*/\1/p' "${chart}/values.yaml" | head -n1)
+[[ -n "$ai" ]] || { echo "ERROR: no coder-workspace.aiImage in ${chart}/values.yaml" >&2; exit 1; }
 dataflow_note=""
 if [[ -n "$dataflow_then" && "$dataflow_then" != "$dataflow" ]]; then
 	dataflow_note="
 ${since} had ${dataflow_then}: \"--dataflow keep\" needs this release's in your registry (in the full
-bundle's or the layer's images/custom/: docker load, tag, push), or \"--dataflow <registry>/${dataflow_then#*/}\"
+bundle's or the layer's images/workspaces/: docker load, tag, push), or \"--dataflow <registry>/${dataflow_then#*/}\"
 keeps the earlier one (the release notes say whether this release's template runs on it)."
 fi
 cat >"${out}/README.txt" <<EOF
@@ -83,6 +86,9 @@ ${changed:-    (none listed)}
 This update carries Coder's. The ubuntu-dataflow template (UBUNTU DATAFLOW: Apache NiFi and Apache Airflow in the
 workspace) runs on ${dataflow}, which is not in it: the helper turns that template off
 (coder-workspace.dataflowTemplate.enabled: false) unless you give it the image (--dataflow).${dataflow_note}
+The AI templates (UBUNTU LM STUDIO and UBUNTU OPENCODE: LM Studio and OpenCode) run on ${ai}, not in it either: the
+helper turns them off (coder-workspace.aiTemplates.enabled: false) unless you give it the image (--ai). LM Studio's
+terms allow internal business use only: that image comes from your own build, never from a public source.
 
 Install
 -------
@@ -98,10 +104,12 @@ in to your registry, as for the install - with its CA if it has a private one), 
   --push      docker load + push ${fork} to <registry>/user187x/coder-platform:${fork_tag}
               (registry = global.registry in your file, or --registry <harbor>/<project>), and helm push both
               charts to the Application's chart repository (its repoURL)
-  --apply     sets both sources' targetRevision to ${version} (and the dataflow template off), keeps your file as
+  --apply     sets both sources' targetRevision to ${version} (and the dataflow and AI templates off), keeps your file as
               <file>.<time>.bak, kubectl apply -f <file>, and asks Argo CD to refresh
   --dataflow keep | <image>   keep UBUNTU DATAFLOW on: its image is in your registry already
               (<registry>/${dataflow#*/}), or runs from <image>
+  --ai keep | <image>         keep the AI templates on: their image is in your registry already
+              (<registry>/${ai#*/}), or runs from <image>
 
 Argo CD then syncs: Coder restarts on ${fork_tag} (the new pod first, no gap), the layer's
 services update, and the template pushes run (new template versions; workspaces show "Update" once they are older).

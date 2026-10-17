@@ -25,7 +25,6 @@ argocd/coder-airgapped-application.yaml   Argo CD Application (+ OCI repository 
 argocd/coder-decorated-application.yaml   Argo CD decorator install: the Coder installation (coder-airgapped-base) and the
                                  customization layer (coder-airgapped-layer) in one Application; coder-plain-application.yaml
                                  is the same without the layer (application.py --plain derives it)
-argocd/charts/                   those two charts, packaged from coder-airgapped/ (mirror-images.sh decorator-charts)
 argocd-support                   the steps of `./make --argocd <harbor>[/<project>] [--plain]`: Harbor push, prerequisites,
                                  Secrets, Argo CD's repository and the Application (DEPLOY.md › Argo CD)
 layer-support                    the layer bundle (update a cluster from the previous release): build, check, restore
@@ -43,11 +42,20 @@ install.sh                       Secrets from files, default logo/avatar ConfigM
                                  (--prepare-only: just the Secrets and ConfigMaps, for Argo CD)
 mirror-images.sh                 push / save / verify / list the images in images.txt; `chart REPO` pushes the chart to OCI,
                                  `charts REPO` with the prerequisites' charts
-images.txt                       every image by group, with the digest saved and tested
-images/                          every image as a docker-save archive, linux/amd64 (images/README.md):
-  custom/                          the fork's Coder image, air-gap build (platform.5 + Terraform provider mirror) –
-                                   on no public registry, always keep
-  public/chart|prereqs|platform/   public images – delete for a smaller bundle (the -slim tarball has none)
+charts/                          every chart of ours, packaged: coder-airgapped-<version>.tgz, and the decorator install's
+                                 coder-airgapped-base-<version>.tgz and coder-airgapped-layer-<version>.tgz; index.yaml
+                                 (a Helm repository: serve the folder, or `mirror-images.sh charts` pushes them), SHA256SUMS
+images.txt                       every image by section (its folder below), with the digest saved and tested
+images/                          every image as a docker-save archive, linux/amd64, one folder per part (images/README.md):
+  ui/                              the user interface: Coder (the fork), the platform and announcement services, the
+                                   image they run on, their database
+  workspaces/                      the workspace templates' images
+  cloud-drive/ image-builder/      the Cloud Drive (MinIO, CSI driver); Templates > Images (BuildKit, registry)
+  cluster/ prereqs/                metrics-server; CloudNativePG operator and Traefik (for prereqs/)
+  rollback/                        plain upstream Coder (the decorator install's base, rollback)
+  reference/                       Argo CD + Keycloak as the reference cluster runs them (not pushed unless asked)
+                                 Ours (ghcr.io/user187x/...) are on no public registry: always keep them; public archives
+                                 can go for a smaller bundle (the -slim tarball has none)
 defaults/                        default logo + avatar (kept out of the chart: Helm's 1 MiB release record)
 prereqs/                         cloudnative-pg-0.29.0.tgz, traefik-41.4.0.tgz, Traefik values used on the reference cluster
 ```
@@ -95,9 +103,9 @@ Two ways: this chart as one Application (below), or Coder and the customization 
 Application, the layer decorating a plain Coder that it can be taken off again (`argocd/coder-decorated-application.yaml`,
 `./make --argocd`: DEPLOY.md › Argo CD). The settings below apply to both.
 
-1. Images: `./mirror-images.sh push <REGISTRY>` (from `images/`; `push <REGISTRY> custom` when the public ones are already there)
-2. Chart: `helm registry login <REGISTRY>`, then `./mirror-images.sh chart <REGISTRY>/charts` (`ECR=1` creates the
-   ECR repository, `PLAIN_HTTP=1` for a registry without TLS).
+1. Images: `./mirror-images.sh push <REGISTRY>` (from `images/`; `push <REGISTRY> ours` when the public ones are already there)
+2. Chart: `helm registry login <REGISTRY>`, then `./mirror-images.sh chart <REGISTRY>/charts` (charts/'s package;
+   `ECR=1` creates the ECR repository, `PLAIN_HTTP=1` for a registry without TLS).
 3. The Secrets and ConfigMaps the chart does not create:
    `./install.sh --prepare-only --ca ca.crt --oidc-ca keycloak-ca.crt --oidc-secret-file oidc-client-secret.txt
    --tls-crt wildcard.crt --tls-key wildcard.key`. Add `--secret-name tlsCa=<name>` etc. when you rename them in
@@ -123,7 +131,7 @@ so deleting the Application never deletes data. The Keycloak view reads the Appl
 Connected side (only for the `-slim` bundle; the full one already has every image in `images/`):
 
 ```bash
-./mirror-images.sh save               # pulls the public images by digest into images/public/
+./mirror-images.sh save               # pulls the public images by digest into their folders of images/
 ```
 
 Air-gapped side:

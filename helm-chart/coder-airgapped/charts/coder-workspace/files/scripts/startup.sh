@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The workspace's startup script (coder_agent.main in ../main.tf): the shell defaults, the cluster sign-in for admins,
-# the desktop and the apps (code-server, File Browser, marimo; or, in the ubuntu-dataflow template, Apache NiFi and
-# Apache Airflow in place of code-server and marimo). Runs at every start; each step is safe to repeat.
+# the desktop and the apps (code-server, File Browser, marimo; in the ubuntu-dataflow template, Apache NiFi and
+# Apache Airflow in place of code-server and marimo; in the AI templates, ubuntu-lmstudio and ubuntu-opencode, LM Studio
+# and its server in place of marimo). Runs at every start; each step is safe to repeat.
 # The .tf file renders this with templatefile(), so Terraform template syntax applies here: a shell variable in
 # braces is written with two dollar signs ($${HOME}), and a percent sign before a brace is doubled (%%{).
 set -e
@@ -14,7 +15,8 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
-APP_SET='${app_set}'           # developer (code-server, marimo) or dataflow (Apache NiFi, Apache Airflow)
+APP_SET='${app_set}'           # developer (code-server, marimo), dataflow (NiFi, Airflow), lmstudio or opencode (AI)
+AI_CONTEXT='${context_length}' # the AI templates' Context length parameter: LM Studio's default context, in tokens
 ACCESS_HOST='${access_host}'   # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
 START_DIR='${start_directory}' # the Start folder parameter: where the terminal and File Browser open
 # Path-based apps are proxied under this prefix ("main" = the agent's name).
@@ -200,8 +202,8 @@ if [ "$IMAGE_DESKTOP" != none ] && ! curl -s -o /dev/null http://127.0.0.1:6901/
  log "Desktop app (noVNC): started"
 fi
 
-# (Not in the dataflow template: it has no marimo.)
-if [ "$APP_SET" != dataflow ]; then
+# (Only in the developer template: the others have no marimo.)
+if [ "$APP_SET" = developer ]; then
  # Windows of marimo notebooks (tkinter): a second, private X display (:2: no desktop, no window manager, on its
  # own Unix socket), sized by the notebook to the window it shows. coder_marimo_tk (marimo, below) opens tkinter
  # windows there and shows each one live in its cell's output: the minimal noVNC page below, through the hidden
@@ -294,8 +296,8 @@ fi
 # (marimo and its extras - SQL, charts, formatting, language server, uv - and a data stack; tkinter). Each user's
 # notebooks run in ~/.marimo-venv, which sees all of /opt/marimo (a .pth file) and takes the packages they add
 # (pip or uv; with no network, only what is already there). It is (re)made when missing, when an older one installed
-# marimo itself from the internet, or when the image's Python changes.
-if [ "$APP_SET" != dataflow ]; then
+# marimo itself from the internet, or when the image's Python changes. (Only in the developer template.)
+if [ "$APP_SET" = developer ]; then
  MARIMO_VENV=/home/coder/.marimo-venv
  MARIMO_BASE="$APPS/marimo"
  if [ -x /opt/marimo/bin/marimo ]; then
@@ -551,6 +553,21 @@ AIRFLOWRC
   fi
  else
   log "Apache Airflow is not in this image (/opt/airflow): skipped"
+ fi
+fi
+
+# 6. LM Studio (the AI templates: ubuntu-lmstudio and ubuntu-opencode), on the AI workspace image, with no network:
+# its home linked to the image's app (its engines are not copied into every home), the GGUF models of the model
+# library (~/models) and of the owner's Cloud Drive (~/cloud-drive/models) linked in, its window on the desktop,
+# then its server on 127.0.0.1:1234 (models load when first asked for, with the Context length parameter's tokens)
+# and OpenCode's settings (OPENCODE_CONFIG: LM Studio's models). In the background, redirected: LM Studio takes up
+# to a minute to answer, and a background job holding the agent's output would keep this script from ending.
+if [ "$APP_SET" = lmstudio ] || [ "$APP_SET" = opencode ]; then
+ if command -v coder-lmstudio-start >/dev/null; then
+  DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority setsid coder-lmstudio-start "$AI_CONTEXT" </dev/null >/tmp/lm-studio-start.log 2>&1 &
+  log "LM Studio: starting on the desktop, then its server on 127.0.0.1:1234 (log: /tmp/lm-studio-start.log)"
+ else
+  log "LM Studio is not in this image (coder-lmstudio-start): skipped"
  fi
 fi
 

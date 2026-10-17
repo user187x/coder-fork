@@ -7,11 +7,13 @@
 #      (coder-airgapped-base and coder-airgapped-layer) to the Application's chart repository (docker and helm must be
 #      logged in to it, as for the install; a private CA as then);
 #   3. points the Application's two sources at this release's charts (targetRevision), and turns the ubuntu-dataflow
-#      template off unless its image is in the registry (--dataflow);
+#      template off unless its image is in the registry (--dataflow), and the AI templates (ubuntu-lmstudio,
+#      ubuntu-opencode) likewise (--ai);
 #   4. shows the change (the file is kept as FILE.<time>.bak);
 #   5. --apply: kubectl apply -f FILE, and asks Argo CD to refresh the Application.
 #
-#   ./update-application.sh --app FILE [--push] [--apply] [--registry R] [--dataflow off|keep|IMAGE] [--dry-run]
+#   ./update-application.sh --app FILE [--push] [--apply] [--registry R] [--dataflow off|keep|IMAGE]
+#                           [--ai off|keep|IMAGE] [--dry-run]
 #
 #   --app FILE         the Application file you applied (both documents, the repository Secret and the Application)
 #   --push             push the image and the charts first (the registry: --registry, else global.registry in FILE)
@@ -21,11 +23,13 @@
 #   --dataflow keep    it is on: the layer chart's image is in the registry already
 #                      (<registry>/user187x/coder-workspace-dataflow:<tag>; the helper says which)
 #   --dataflow IMAGE   it is on, on this image (a full reference)
+#   --ai off|keep|IMAGE  the same for the AI templates (LM Studio, OpenCode) and their image,
+#                      ghcr.io/user187x/coder-workspace-ai:<tag> (default off)
 #   --apply            apply FILE and refresh the Application in Argo CD (kubectl pointed at Argo CD's cluster)
 #   --dry-run          show what would change; push, write and apply nothing
 #
 # Where it looks for what it installs: next to it (charts/, images/: the decorator update), or the full bundle's
-# argocd/charts/ and images/custom/. Needs bash, python3 (no modules), sha256sum; docker and helm for --push; kubectl
+# charts/ and images/ui/. Needs bash, python3 (no modules), sha256sum; docker and helm for --push; kubectl
 # for --apply. HELM_PUSH_ARGS: more arguments for helm push (a private CA helm does not trust: "--ca-file ca.crt").
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,7 +37,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 die() { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 say() { printf '\033[1;34m==> %s\033[0m\n' "$*"; }
 
-app="" push=0 apply=0 registry="" dataflow=off dry=0
+app="" push=0 apply=0 registry="" dataflow=off ai=off dry=0
 while (($#)); do
 	case "$1" in
 	--app) app="${2:?--app FILE}"; shift ;;
@@ -41,6 +45,7 @@ while (($#)); do
 	--apply) apply=1 ;;
 	--registry) registry="${2:?--registry <harbor>/<project>}"; shift ;;
 	--dataflow) dataflow="${2:?--dataflow off|keep|IMAGE}"; shift ;;
+	--ai) ai="${2:?--ai off|keep|IMAGE}"; shift ;;
 	--dry-run) dry=1 ;;
 	-h | --help) sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
 	*) die "unknown option: $1 (--help)" ;;
@@ -55,7 +60,7 @@ command -v python3 >/dev/null || die "python3 is needed"
 if [[ -d "${here}/charts" && -d "${here}/images" ]]; then # the decorator update
 	charts="${here}/charts" images="${here}/images" sums="${here}/SHA256SUMS"
 else # the full bundle (argocd/ next to images/)
-	charts="${here}/charts" images="${here}/../images/custom" sums=""
+	charts="${here}/../charts" images="${here}/../images/ui" sums=""
 fi
 base_chart=$(find "$charts" -maxdepth 1 -name 'coder-airgapped-base-*.tgz' 2>/dev/null | sort -V | tail -n1)
 layer_chart=$(find "$charts" -maxdepth 1 -name 'coder-airgapped-layer-*.tgz' 2>/dev/null | sort -V | tail -n1)
@@ -71,6 +76,10 @@ say "This update: charts ${version}, Coder image ${fork_image}"
 dataflow_image=$( (tar -xzOf "$layer_chart" coder-airgapped-layer/values.yaml 2>/dev/null || true) |
 	sed -n 's/^  dataflowImage:.*"\([^"]*\)".*/\1/p' | head -n1)
 echo "    its ubuntu-dataflow template's image: ${dataflow_image:-?}"
+# The AI templates' image (coder-workspace.aiImage).
+ai_image=$( (tar -xzOf "$layer_chart" coder-airgapped-layer/values.yaml 2>/dev/null || true) |
+	sed -n 's/^  aiImage:.*"\([^"]*\)".*/\1/p' | head -n1)
+echo "    its AI templates' image: ${ai_image:-?}"
 
 if [[ -n "$sums" && -f "$sums" ]]; then
 	(cd "$here" && sha256sum --quiet -c SHA256SUMS) || die "a file of this update is damaged (SHA256SUMS)"
@@ -115,6 +124,14 @@ keep)
 	;;
 *) [[ "$dataflow" == */* || "$dataflow" == *:* ]] || die "--dataflow: off, keep or an image reference" ;;
 esac
+case "$ai" in
+off) ;;
+keep)
+	[[ -n "$ai_image" ]] || die "--ai keep: no coder-workspace.aiImage in $(basename "$layer_chart"); give the image"
+	ai=$(in_registry "$ai_image")
+	;;
+*) [[ "$ai" == */* || "$ai" == *:* ]] || die "--ai: off, keep or an image reference" ;;
+esac
 
 # ---- 2. push
 if ((push)); then
@@ -135,17 +152,20 @@ if ((push)); then
 	fi
 fi
 
-# ---- 3. the Application: both sources at this version; the dataflow template
+# ---- 3. the Application: both sources at this version; the dataflow and AI templates
 stamp=$(date +%Y%m%d-%H%M%S)
 updated=$(mktemp); trap 'rm -f "$updated"' EXIT
-python3 - "$app" "$updated" "$version" "$dataflow" <<'PY'
+python3 - "$app" "$updated" "$version" "$dataflow" "$ai" <<'PY'
 import re, sys
 
-path, out, version, dataflow = sys.argv[1:5]
+path, out, version, dataflow, ai = sys.argv[1:6]
 raw = open(path, newline="").read()
 nl = "\r\n" if "\r\n" in raw else "\n"
 lines = raw.replace("\r\n", "\n").split("\n")
-NOTE = "  # ubuntu-dataflow (NiFi, Airflow): its image is not in the registry"
+# The optional templates: their switch, their image key, the choice (off, or the image), and the note on "off".
+OPTIONAL = [("dataflowTemplate", "dataflowImage", dataflow,
+             "  # ubuntu-dataflow (NiFi, Airflow): its image is not in the registry"),
+            ("aiTemplates", "aiImage", ai, "  # the AI templates (LM Studio, OpenCode): their image is not in the registry")]
 try:  # where PyYAML is installed, the file is parsed before (and after) the change
     import yaml
 except ImportError:
@@ -220,7 +240,7 @@ for chart in ("coder-airgapped-base", "coder-airgapped-layer"):
     changes.append("%s %s -> %s" % (chart, old or "?", version))
     if chart != "coder-airgapped-layer":
         continue
-    # The layer's values: coder-workspace.dataflowTemplate.enabled (and dataflowImage).
+    # The layer's values: coder-workspace.dataflowTemplate.enabled and aiTemplates.enabled (and their images).
     v = find_key("valuesObject", start, end, at + 2) or find_key("valuesObject", start, end, at + 4)
     if v is None:
         sys.exit("no helm.valuesObject in the coder-airgapped-layer source")
@@ -239,30 +259,31 @@ for chart in ("coder-airgapped-base", "coder-airgapped-layer"):
         lines[at_end:at_end] = [" " * vi + "coder-workspace:"]
         cw = at_end
     cwi = child_indent(cw, vi + step)
-    dt = find_key("dataflowTemplate", cw + 1, block_end(cw), cwi)
-    if dt is None:
-        lines[cw + 1:cw + 1] = [" " * cwi + "dataflowTemplate:"]
-        dt = cw + 1
-    eni = child_indent(dt, cwi + step)
-    en = find_key("enabled", dt + 1, block_end(dt), eni)
-    on = "false" if dataflow == "off" else "true"
-    note = NOTE if dataflow == "off" else ""
-    if en is None:
-        lines[dt + 1:dt + 1] = [" " * eni + "enabled: " + on + note]
-    else:
-        set_value(en, on)
-        # This helper's own note goes with "off" only.
-        bare = lines[en].replace(NOTE, "").rstrip()
-        lines[en] = bare + (note if "#" not in bare else "")
-    changes.append("coder-workspace.dataflowTemplate.enabled: " + on)
-    if dataflow != "off":
-        di = find_key("dataflowImage", cw + 1, block_end(cw), cwi)
-        if di is None:
-            e = block_end(cw)
-            lines[e:e] = [" " * cwi + "dataflowImage: " + dataflow]
+    for switch, image_key, choice, NOTE in OPTIONAL:
+        dt = find_key(switch, cw + 1, block_end(cw), cwi)
+        if dt is None:
+            lines[cw + 1:cw + 1] = [" " * cwi + switch + ":"]
+            dt = cw + 1
+        eni = child_indent(dt, cwi + step)
+        en = find_key("enabled", dt + 1, block_end(dt), eni)
+        on = "false" if choice == "off" else "true"
+        note = NOTE if choice == "off" else ""
+        if en is None:
+            lines[dt + 1:dt + 1] = [" " * eni + "enabled: " + on + note]
         else:
-            set_value(di, dataflow)
-        changes.append("coder-workspace.dataflowImage: " + dataflow)
+            set_value(en, on)
+            # This helper's own note goes with "off" only.
+            bare = lines[en].replace(NOTE, "").rstrip()
+            lines[en] = bare + (note if "#" not in bare else "")
+        changes.append("coder-workspace.%s.enabled: %s" % (switch, on))
+        if choice != "off":
+            di = find_key(image_key, cw + 1, block_end(cw), cwi)
+            if di is None:
+                e = block_end(cw)
+                lines[e:e] = [" " * cwi + image_key + ": " + choice]
+            else:
+                set_value(di, choice)
+            changes.append("coder-workspace.%s: %s" % (image_key, choice))
 
 open(out, "w", newline="").write(nl.join(lines))
 for c in changes:
@@ -281,6 +302,7 @@ try:
         str(by_chart["coder-airgapped-base"]["targetRevision"]) == version
         and str(by_chart["coder-airgapped-layer"]["targetRevision"]) == version
         and layer_values["coder-workspace"]["dataflowTemplate"]["enabled"] is (dataflow != "off")
+        and layer_values["coder-workspace"]["aiTemplates"]["enabled"] is (ai != "off")
         and "global" in layer_values
     )
 except (yaml.YAMLError, KeyError, StopIteration, TypeError) as e:

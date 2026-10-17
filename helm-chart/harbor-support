@@ -18,9 +18,17 @@
 # A target given as http://host:port/project: plain HTTP (a lab registry; docker must list it in insecure-registries,
 # except on 127.0.0.1).
 
-PUSH_GROUP_CHOICES=("custom chart prereqs|The images the chart and its prerequisites run (the default)"
-	"custom chart prereqs platform|...and the reference Argo CD + Keycloak images (images.txt [platform])"
-	"custom|Only the custom images (the public ones are in this registry already)")
+PUSH_GROUP_CHOICES=("default|Ours, and the public images the chart and its prerequisites run (the default)"
+	"all|...and the reference Argo CD + Keycloak images (images.txt [reference])"
+	"ours|Only ours (the public ones are in this registry already)")
+# Answers remembered before images.txt had a section per part (custom, chart, prereqs, platform)
+push_groups_now() {
+	case "${PUSH_GROUPS:-}" in
+	"custom chart prereqs platform") PUSH_GROUPS=all ;;
+	"custom chart prereqs" | "") PUSH_GROUPS=default ;;
+	custom) PUSH_GROUPS=ours ;;
+	esac
+}
 
 harbor_split() { # TARGET -> HARBOR_HOST HARBOR_PROJECT PLAIN
 	local t="$1"
@@ -156,7 +164,8 @@ harbor_logins() {
 
 	# Docker Hub: the public images the bundle does not carry are pulled, and anonymous pulls are rate-limited.
 	local hub
-	hub=$("${here}/mirror-images.sh" list | awk -v g=" ${PUSH_GROUPS} " 'index(g, " " $1 " ") && $2 == "absent" && $3 ~ /^docker\.io\// {print $3}')
+	# shellcheck disable=SC2086
+	hub=$(grep -xFf <("${here}/mirror-images.sh" images $PUSH_GROUPS) <("${here}/mirror-images.sh" list | awk '$2 == "absent" && $3 ~ /^docker\.io\// {print $3}') || true)
 	if [[ -n "$hub" ]]; then
 		say "Not in this bundle, so pulled from Docker Hub:"; printf '      %s\n' $hub
 	fi
@@ -222,7 +231,8 @@ harbor_push() {
 	while read -r line; do
 		dst=${line##* }
 		if docker manifest inspect "${margs[@]}" "$dst" >/dev/null 2>&1; then n=$((n + 1)); else bad=$((bad + 1)); warn "missing: $dst"; fi
-	done < <("${here}/mirror-images.sh" list "$reg" | awk -v g=" ${PUSH_GROUPS} " 'index(g, " " $1 " ") {print $3, $5}')
+	done < <("${here}/mirror-images.sh" list "$reg" | awk 'NR == FNR {want[$1] = 1; next} ($3 in want) {print $3, $5}' \
+		<("${here}/mirror-images.sh" images $PUSH_GROUPS) -)
 	say "images: ${n} in ${reg}$( ((bad)) && echo ", ${bad} missing")"
 	((bad == 0)) || die "some images are not in ${reg} (see above)"
 	local c v
@@ -250,7 +260,8 @@ push_images() {
 	step "Harbor"
 	ask HARBOR_PROJECT "Harbor project for the images and charts" "${HARBOR_PROJECT:-coder-airgapped}" valid_project
 	harbor_trust
-	choose PUSH_GROUPS "Which images" "${PUSH_GROUPS:-custom chart prereqs}" "${PUSH_GROUP_CHOICES[@]}"
+	push_groups_now
+	choose PUSH_GROUPS "Which images" "$PUSH_GROUPS" "${PUSH_GROUP_CHOICES[@]}"
 	harbor_logins
 	harbor_project
 	save_answers

@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.51 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.58 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.51-airgap
+      tag: 2.0.0-platform.58-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -97,11 +97,11 @@ global:
     oidcCa: keycloaking-coder-ca       # ca.crt: CA of the OIDC provider
     oidcClient: keycloaking-coder-oidc # client-secret
     wildcardTls: tls-wild-cert         # kubernetes.io/tls, mounted into Coder
-  # The safe: each account's own files on S3, mounted at mountPath in all of its workspaces and opened from the
-  # Workspaces page (userStorage below has the storage itself). Here for both charts: the workspace template mounts it.
+  # The Cloud Drive: each account's own files on S3, mounted at mountPath in all of its workspaces and opened from
+  # the Workspaces page (userStorage below has the storage itself; admins can point it elsewhere in the dashboard). Here for both charts: the workspace template mounts it.
   userStorage:
     enabled: true
-    mountPath: /home/coder/safe
+    mountPath: /home/coder/cloud-drive
 
 # ---------------------------------------------------------------------------------------------------------------
 # Coder server: the upstream coder chart 2.37.3 (+ platform patch) running the fork's image. (Argo CD app argocd/coder)
@@ -349,9 +349,9 @@ imageBuilder:
     Components: main universe restricted multiverse
 
 # ---------------------------------------------------------------------------------------------------------------
-# The safe (global.userStorage.enabled): each account's own storage, a prefix users/<user id>/ in one S3 bucket. The
+# The Cloud Drive (global.userStorage.enabled): each account's own storage, a prefix users/<user id>/ in one S3 bucket. The
 # platform service makes every account's volume (a PersistentVolume of the CSI driver below, its claim coder-safe-<id>)
-# and serves the Workspaces page's safe; every workspace of the account mounts it (ReadWriteMany). The files are on the
+# and serves the Workspaces page's Cloud Drive; every workspace of the account mounts it (ReadWriteMany). The files are on the
 # chart's MinIO (minio.enabled), or on an S3 service of yours (s3). templates/user-storage.yaml.
 # ---------------------------------------------------------------------------------------------------------------
 userStorage:
@@ -379,7 +379,7 @@ userStorage:
     endpoint: ""            # e.g. https://s3.us-east-1.amazonaws.com
     region: ""
     existingSecret: ""
-  # The CSI driver that mounts the safes on the nodes (k8s-csi-s3 with GeeseFS, Apache-2.0): a privileged DaemonSet
+  # The CSI driver that mounts the Cloud Drives on the nodes (k8s-csi-s3 with GeeseFS, Apache-2.0): a privileged DaemonSet
   # (FUSE), running GeeseFS as a systemd unit of the node so mounts outlive the driver's restarts. Off when the cluster
   # has the driver (ru.yandex.s3.csi) already.
   csi:
@@ -387,7 +387,7 @@ userStorage:
     image: '{{ include "platform.image" (list . "cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-s3-driver:0.43.7") }}'
     registrarImage: '{{ include "platform.image" (list . "cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-node-driver-registrar:v2.16.0") }}'
     kubeletPath: /var/lib/kubelet
-    # GeeseFS per mounted safe: its memory (MB, on the node), the files as the workspace user (coder, 1000), and how long
+    # GeeseFS per mounted Cloud Drive: its memory (MB, on the node), the files as the workspace user (coder, 1000), and how long
     # it trusts its listing (files uploaded on the Workspaces page show in workspaces within that).
     mountOptions: "--memory-limit 256 --dir-mode 0750 --file-mode 0640 --uid 1000 --gid 1000 --stat-cache-ttl 10s"
     tolerations: []
@@ -512,6 +512,19 @@ coder-workspace:
     displayName: UBUNTU DATAFLOW
     icon: /icon/ubuntu.svg
   dataflowImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-dataflow:1.1.0") }}'
+  # The AI templates: LM Studio (its window on the desktop, its server) and OpenCode on it, on the AI workspace image
+  # (internal use only: LM Studio's terms).
+  aiTemplates:
+    enabled: true
+    lmstudio:
+      name: ubuntu-lmstudio
+      displayName: UBUNTU LM STUDIO
+      icon: /__icons/lmstudio.svg
+    opencode:
+      name: ubuntu-opencode
+      displayName: UBUNTU OPENCODE
+      icon: /__icons/opencode.svg
+  aiImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-ai:1.0.0") }}'
 
   icons:
     host: ""

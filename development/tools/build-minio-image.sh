@@ -15,7 +15,6 @@ release=$(docker run --rm --platform linux/amd64 "${source_repo}@${digest}" --ve
 [[ "$release" =~ ^RELEASE\.[0-9T:-]+Z$ ]] || { echo "unexpected MinIO version: ${release}" >&2; exit 1; }
 img="ghcr.io/user187x/coder-minio:${release}"
 docker tag "${source_repo}@${digest}" "$img"
-out="${top}/helm-chart/images/custom"; mkdir -p "$out"; rm -f "$out"/ghcr.io_user187x_coder-minio_*.tar.gz
-docker save --platform linux/amd64 "$img" | gzip -1 >"${out}/$(echo "$img" | tr '/:@' '___').tar.gz"
-(cd "$out" && sha256sum ./*.tar.gz | sed 's|  \./|  |' >SHA256SUMS)
-echo "built ${img} = ${source_repo}@${digest} ($(docker image inspect "$img" --format '{{.Id}}')); saved to ${out}"
+# its archive in the bundle, in its section's folder of images.txt (replacing the previous tag's)
+"${top}/helm-chart/mirror-images.sh" store "$img"
+echo "built ${img} = ${source_repo}@${digest} ($(docker image inspect "$img" --format '{{.Id}}'))"

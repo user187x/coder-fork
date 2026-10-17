@@ -140,6 +140,46 @@ def safe_checks(chart, default_render):
           err.strip()[-200:] or keys)
 
 
+def ai_checks(B, chart, default_render):
+    """The AI templates (aiTemplates): on, two push Jobs on the AI image (app_set lmstudio and opencode), the Images
+    view lists them, the template knows both sets and mounts the model library; off, no Job; the image is pinned."""
+    import yaml
+    docs = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d}
+    jobs = {k[1]: "\n".join(c["args"][0] for c in d["spec"]["template"]["spec"]["containers"])
+            for k, d in docs.items() if k[0] == "Job" and "push-template" in k[1]}
+    ai_image = re.search(r'^  aiImage:.*"([^"\n]+)"', open(os.path.join(chart, "values.yaml")).read(), re.M).group(1)
+    lms = next((a for n, a in jobs.items() if n.endswith("-lmstudio")), "")
+    oc = next((a for n, a in jobs.items() if n.endswith("-opencode")), "")
+    check("AI templates: ubuntu-lmstudio and ubuntu-opencode pushed on %s" % ai_image,
+          'app_set="lmstudio"' in lms and 'app_set="opencode"' in oc
+          and all('workspace_image="%s"' % ai_image in a for a in (lms, oc)), sorted(jobs))
+    ui_env = {e["name"]: e.get("value") for c in docs[("Deployment", "coder-ui-updates")]["spec"]["template"]["spec"]["containers"]
+              for e in c.get("env", [])}
+    names = [t["name"] for t in json.loads(ui_env.get("BUILDER_TEMPLATES") or "[]")]
+    check("AI templates: in the Images view's In use list", {"ubuntu-lmstudio", "ubuntu-opencode"} <= set(names), names)
+    rc, off, err = run(["helm", "template", "coder", chart, "--namespace", "coder",
+                        "--set", "coder-workspace.aiTemplates.enabled=false"])
+    check("AI templates: off - no push Job", rc == 0 and "push-template-lmstudio" not in off
+          and "push-template-opencode" not in off, err.strip()[-200:])
+    tf = open(os.path.join(chart, "charts", "coder-workspace", "files", "main.tf")).read()
+    startup = open(os.path.join(chart, "charts", "coder-workspace", "files", "scripts", "startup.sh")).read()
+    check("AI templates: main.tf knows lmstudio and opencode, mounts the model library, OpenCode's app and settings",
+          '"lmstudio", "opencode"' in tf and 'claim_name = "coder-models"' in tf and 'slug         = "opencode"' in tf
+          and "OPENCODE_CONFIG" in tf and "coder-lmstudio-start" in startup, "")
+    icons = os.path.join(chart, "charts", "coder-workspace", "files", "icons")
+    check("AI templates: their icons (lmstudio.svg, opencode.svg)",
+          all(os.path.isfile(os.path.join(icons, f)) for f in ("lmstudio.svg", "opencode.svg")), "")
+    build = os.path.join(B, "..", "development", "tools", "build-ai-image.sh")
+    if os.path.isfile(build):
+        b = open(build).read()
+        check("AI image: LM Studio and OpenCode downloads pinned by SHA-256",
+              re.search(r"^LMSTUDIO_SHA256=[0-9a-f]{64}", b, re.M) and re.search(r"^OPENCODE_SHA256=[0-9a-f]{64}", b, re.M),
+              "")
+    images_txt = open(os.path.join(B, "images.txt")).read()
+    check("AI image: listed in images.txt (%s)" % ai_image, re.search(r"^%s\s+sha256:[0-9a-f]{64}" % re.escape(ai_image),
+                                                                   images_txt, re.M) is not None, "")
+
+
 def decorator_checks(B, chart, full_render):
     """The Argo CD decorator install: the two charts packaged from coder-airgapped, and its two Applications."""
     import shutil, tempfile
@@ -241,23 +281,27 @@ def main():
     rc, out, err = run(["helm", "lint", chart])
     check("helm lint", rc == 0, (out + err).strip().splitlines()[-1] if rc else "")
 
-    images = {}  # ref -> (group, digest)
-    group = None
+    images = {}  # ref -> (folder, digest)
+    folder, modes = None, {}
     for line in open(os.path.join(B, "images.txt")):
         f = line.split()
         if not f or f[0].startswith("#"):
             continue
         if f[0].startswith("["):
-            group = f[0][1:-1]; continue
-        images[f[0]] = (group, f[1] if len(f) > 1 else "")
+            folder = f[1].rstrip("/") if len(f) > 1 else ""
+            modes[f[0][1:-1]] = (folder, f[2] if len(f) > 2 else "")
+            continue
+        images[f[0]] = (folder, f[1] if len(f) > 1 else "")
+    check("images.txt: every section names its folder under images/ and push or reference",
+          all(d.startswith("images/") and "/" not in d[len("images/"):] and m in ("push", "reference")
+              for d, m in modes.values()), modes)
     check("images.txt: every image pinned by digest", all(d.startswith("sha256:") for _, d in images.values()),
           [r for r, (_, d) in images.items() if not d.startswith("sha256:")])
     floating = [r for r in images if r.endswith(":latest") or ":" not in r.rsplit("/", 1)[-1]]
     check("images.txt: no floating tags (:latest or none)", not floating, floating)
 
-    def archive(ref, grp):
-        d = os.path.join(B, "images", "custom" if grp == "custom" else os.path.join("public", grp))
-        return os.path.join(d, re.sub(r"[/:@]", "_", ref) + ".tar.gz")
+    def archive(ref, folder):
+        return os.path.join(B, folder, re.sub(r"[/:@]", "_", ref) + ".tar.gz")
     missing = [r for r, (g, _) in images.items() if not os.path.isfile(archive(r, g))]
     check("bundle: an archive for every image in images.txt", not missing, missing or "%d archives" % len(images))
     sums_ok = True
@@ -308,6 +352,7 @@ def main():
     decorator_checks(B, chart, r)
     ha_checks(B, renders["high availability (values-ha.example.yaml)"], r)
     safe_checks(chart, r)
+    ai_checks(B, chart, r)
     check("Coder starts without Keycloak's Secrets (optional)",
           re.search(r"name: keycloaking-coder-oidc\s*\n\s*optional: true", r) and
           re.search(r"secretName: keycloaking-coder-ca\s*\n\s*optional: true|optional: true\s*\n\s*secretName: keycloaking-coder-ca", r),
@@ -411,6 +456,16 @@ def main():
             ("/" + dataflow_image.split("/", 1)[1]) in out and "dataflowImage: " in out
         check("argocd/update-application.sh: --dataflow keep runs the layer chart's image (%s)" % dataflow_image, ok,
               (err or out).strip()[-300:] if not ok else "")
+        ai_image = re.search(r'^  aiImage:.*"([^"\n]+)"', open(os.path.join(chart, "values.yaml")).read(),
+                             re.M).group(1)
+        rc, out, err = run(["bash", os.path.join(tmp, "update-application.sh"), "--app", app, "--dry-run"])
+        ok = rc == 0 and "aiTemplates.enabled: false" in out
+        rc2, out2, err2 = run(["bash", os.path.join(tmp, "update-application.sh"), "--app", app, "--dry-run",
+                               "--ai", "keep"])
+        ok = ok and rc2 == 0 and "aiTemplates.enabled: true" in out2 and \
+            ("/" + ai_image.split("/", 1)[1]) in out2 and "aiImage: " in out2
+        check("argocd/update-application.sh: the AI templates off by default, --ai keep runs %s" % ai_image, ok,
+              (err2 or out2 or err or out).strip()[-300:] if not ok else "")
     # the layer bundle's helper (Python): compiles, and answers --help
     rc, out, err = run([sys.executable, os.path.join(B, "layer-support"), "--help"])
     check("layer-support: runs (--help)", rc == 0 and "layer-support build" in out, (err or "").strip()[-200:])

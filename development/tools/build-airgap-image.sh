@@ -17,8 +17,7 @@ rm -rf "${ctx}/template"; mkdir -p "${ctx}/template"
 cp "${top}"/helm-chart/coder-airgapped/charts/coder-workspace/files/*.tf "${ctx}/template/"
 tf=$(docker run --rm --entrypoint terraform "$base" version | sed -n 's/^Terraform v//p' | head -n1)
 docker build --build-arg BASE="$base" --build-arg TERRAFORM_VERSION="$tf" -t "$img" "$ctx"
-out="${top}/helm-chart/images/custom"; mkdir -p "$out"; rm -f "$out"/ghcr.io_user187x_${repo}_*.tar.gz
-docker save --platform linux/amd64 "$img" | gzip -1 >"${out}/$(echo "$img" | tr '/:@' '___').tar.gz"
-(cd "$out" && sha256sum ./*.tar.gz | sed 's|  \./|  |' >SHA256SUMS)
-echo "built $img (terraform $tf); saved to ${out}"
+# its archive in the bundle, in its section's folder of images.txt (replacing the previous tag's)
+"${top}/helm-chart/mirror-images.sh" store "$img"
+echo "built $img (terraform $tf)"
 docker run --rm --entrypoint sh "$img" -c 'find /opt/terraform/plugins -maxdepth 4 -mindepth 3 -type d | sed "s|/opt/terraform/plugins/||"'

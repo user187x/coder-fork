@@ -64,7 +64,6 @@ docker run --rm --network none -v "${m}/smoke_test.py:/tmp/smoke_test.py:ro" --e
 	for i in $(seq 1 40); do curl -fs http://127.0.0.1:2718/health >/dev/null && break; sleep 0.5; done
 	curl -fs http://127.0.0.1:2718/health >/dev/null || { cat m.log; exit 1; }
 	echo "marimo offline checks passed"'
-out="${top}/helm-chart/images/custom"; mkdir -p "$out"; rm -f "$out"/ghcr.io_user187x_coder-workspace_*.tar.gz
-docker save --platform linux/amd64 "$img" | gzip -1 >"${out}/$(echo "$img" | tr '/:@' '___').tar.gz"
-(cd "$out" && sha256sum ./*.tar.gz | sed 's|  \./|  |' >SHA256SUMS)
-echo "built $img; saved to ${out}; image ID $(docker image inspect --format '{{.Id}}' "$img")"
+# its archive in the bundle, in its section's folder of images.txt (replacing the previous tag's)
+"${top}/helm-chart/mirror-images.sh" store "$img"
+echo "built $img; image ID $(docker image inspect --format '{{.Id}}' "$img")"

@@ -1,0 +1,39 @@
+#!/bin/sh
+# OpenCode's settings for an AI workspace (the file OPENCODE_CONFIG names; a project's opencode.json still overrides
+# them): the workspace's LM Studio as its provider with every language model LM Studio lists, each up to CONTEXT
+# tokens (the template's Context length, or the model's own maximum if less); the default the first model trained for
+# tool use (else the first). Written at every start, once LM Studio answers; run it again after adding models.
+#   coder-opencode-config [CONTEXT]
+set -eu
+OUT="${OPENCODE_CONFIG:-$HOME/.config/opencode/coder-workspace.json}"
+CONTEXT="${1:-32768}"
+mkdir -p "$(dirname "$OUT")"
+lms ls --json 2>/dev/null | python3 -c '
+import json, os, sys
+out, context = sys.argv[1], int(sys.argv[2])
+try:
+    listed = json.load(sys.stdin)
+except Exception:
+    listed = []
+llms = [m for m in listed if isinstance(m, dict) and m.get("type") == "llm" and m.get("modelKey")]
+models = {}
+for m in llms:
+    limit = min(context, m.get("maxContextLength") or context)
+    models[m["modelKey"]] = {"name": m.get("displayName") or m["modelKey"],
+                             "limit": {"context": limit, "output": min(4096, max(512, limit // 4))}}
+config = {
+    "$schema": "https://opencode.ai/config.json",
+    "autoupdate": False,
+    "share": "disabled",
+    "provider": {"lmstudio": {"npm": "@ai-sdk/openai-compatible", "name": "LM Studio (this workspace)",
+                              "options": {"baseURL": "http://127.0.0.1:1234/v1"}, "models": models}},
+}
+tools = [m for m in llms if m.get("trainedForToolUse")]
+if llms:
+    config["model"] = "lmstudio/" + (tools or llms)[0]["modelKey"]
+tmp = out + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(config, f, indent=2)
+os.replace(tmp, out)
+print("OpenCode: %d model(s) of LM Studio%s" % (len(models), ", the default " + config["model"] if llms else ""))
+' "$OUT" "$CONTEXT"

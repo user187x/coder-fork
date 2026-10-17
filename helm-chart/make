@@ -32,7 +32,7 @@
 #   TARGET=minikube|eks DOMAIN=example.com CERTS=new|existing TLS_CRT=… TLS_KEY=… CA_BUNDLE=…
 #   PROFILE=coder KEYCLOAK=dev|existing OIDC_ISSUER=… OIDC_CA=… OIDC_SECRET_FILE=…
 #   REGISTRY=… PUSH_IMAGES=y|n STORAGE_CLASS=… METHOD=helm|argocd SUDO_STEPS=y|n
-#   --push-images: HARBOR_PROJECT=… HARBOR_USER=… HARBOR_CA=… PUSH_GROUPS="custom chart prereqs" DOCKERHUB_LOGIN=y|n
+#   --push-images: HARBOR_PROJECT=… HARBOR_USER=… HARBOR_CA=… PUSH_GROUPS=default|all|ours DOCKERHUB_LOGIN=y|n
 #   DOCKERHUB_USER=…, and for --yes the secrets HARBOR_PASSWORD=… DOCKERHUB_TOKEN=… (never remembered)
 #   --argocd: ARGOCD_USER=… ARGOCD_APPLY=y|n METRICS_INSECURE_TLS=y|n PULL_USER=… ARGOCD_REPO=…, and for --yes the secrets
 #   ARGOCD_PASSWORD=… PULL_PASSWORD=… (never remembered)

@@ -1,13 +1,21 @@
 {{- include "coder-workspace.platform.values" . -}}
 {{- $url := .Values.coder.internalUrl | default (required "CODER_URL must be provided!" .Values.coder.url) }}
-{{- /* The templates this chart pushes, each by its own Job: ubuntu-vnc-desktop, and (dataflowTemplate) the same with
-Apache NiFi and Apache Airflow in place of code-server and marimo, on its own image. Each push's message is its own:
+{{- /* The templates this chart pushes, each by its own Job: ubuntu-vnc-desktop, (dataflowTemplate) the same with
+Apache NiFi and Apache Airflow in place of code-server and marimo, on its own image, and (aiTemplates) ubuntu-lmstudio
+and ubuntu-opencode on the AI workspace image. Each push's message is its own:
 the login step finds a template renamed in the dashboard by it. */}}
 {{- $jobs := list (dict "suffix" "" "template" .Values.template "appSet" "developer" "image" ""
     "message" (printf "Deployed via Helm release %s" .Release.Name)) }}
 {{- if .Values.dataflowTemplate.enabled }}
 {{- $jobs = append $jobs (dict "suffix" "-dataflow" "template" .Values.dataflowTemplate "appSet" "dataflow"
     "image" .Values.dataflowImage "message" (printf "Deployed via Helm release %s (dataflow)" .Release.Name)) }}
+{{- end }}
+{{- /* The AI templates (aiTemplates): LM Studio, and OpenCode on LM Studio, both on the AI workspace image. */}}
+{{- if .Values.aiTemplates.enabled }}
+{{- $jobs = append $jobs (dict "suffix" "-lmstudio" "template" .Values.aiTemplates.lmstudio "appSet" "lmstudio"
+    "image" .Values.aiImage "message" (printf "Deployed via Helm release %s (lmstudio)" .Release.Name)) }}
+{{- $jobs = append $jobs (dict "suffix" "-opencode" "template" .Values.aiTemplates.opencode "appSet" "opencode"
+    "image" .Values.aiImage "message" (printf "Deployed via Helm release %s (opencode)" .Release.Name)) }}
 {{- end }}
 {{- range $n, $j := $jobs }}
 {{- if $n }}
@@ -173,7 +181,7 @@ spec:
                      coder-safe-<owner id>, which the platform service makes for every account. */}}
                 {{- with ($.Values.global.userStorage | default dict) }}{{ if eq (toString .enabled) "true" }}
                 --variable user_storage=true \
-                --variable user_storage_path="{{ .mountPath | default "/home/coder/safe" }}" \
+                --variable user_storage_path="{{ .mountPath | default "/home/coder/cloud-drive" }}" \
                 {{- end }}{{ end }}
                 {{- with $.Values.global.clusterAccess }}{{ if .enabled }}
                 --variable cluster_oidc_issuer="{{ $.Values.global.oidc.issuerUrl | default (printf "https://keycloak.%s/realms/master" $.Values.global.domain) }}" \

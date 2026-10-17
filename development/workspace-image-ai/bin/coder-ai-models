@@ -1,0 +1,29 @@
+#!/bin/sh
+# GGUF models for LM Studio, at every start of an AI workspace: those in the shared model library (~/models,
+# read-only: Templates > Images > Model library) and the owner's own in their Cloud Drive (~/cloud-drive/models) are
+# linked into ~/.lmstudio/models, under the publishers "models-library" and "cloud-drive", one folder per model (the
+# parts of a split model together). Only links are removed there: a model put into ~/.lmstudio/models any other way
+# is left alone.
+#   coder-ai-models
+set -eu
+M="$HOME/.lmstudio/models"
+mkdir -p "$M"
+for pub in models-library cloud-drive; do
+	if [ -d "$M/$pub" ]; then
+		find "$M/$pub" -type l -delete
+		find "$M/$pub" -mindepth 1 -type d -empty -delete
+	fi
+done
+
+add() { # SOURCE PUBLISHER
+	[ -d "$1" ] || return 0
+	find -L "$1" -maxdepth 3 -type f -iname '*.gguf' 2>/dev/null | sort | while IFS= read -r f; do
+		b=$(basename "$f")
+		model=$(printf '%s' "$b" | sed -E 's/\.gguf$//I; s/-[0-9]{5}-of-[0-9]{5}$//')
+		mkdir -p "$M/$2/$model"
+		ln -sfn "$f" "$M/$2/$model/$b"
+	done
+}
+add "$HOME/models" models-library
+add "$HOME/cloud-drive/models" cloud-drive
+echo "LM Studio models: $(find "$M/models-library" "$M/cloud-drive" -type l 2>/dev/null | wc -l) file(s) linked from the model library and the Cloud Drive"

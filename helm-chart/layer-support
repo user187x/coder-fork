@@ -5,7 +5,7 @@ images that changed since the base; the third-party pieces (Traefik, CloudNative
 the public images) must already be in the cluster at the versions this release uses, and are checked first.
 
 A changed image of ours is carried thin when the base had the same repository: only the layers the base image does
-not have (images/custom/<image>.thin.tar.gz); the rest comes from the base image, which is in the cluster already (a
+not have (images/<section>/<image>.thin.tar.gz); the rest comes from the base image, which is in the cluster already (a
 Minikube node, the registry) or in the installing machine's docker, and every layer taken from it is checked by its
 digest. LAYER.json at the bundle's top describes the layer; its presence makes ./make --deploy a layer install.
 
@@ -60,16 +60,17 @@ def run(cmd, check=True, **kw):
 
 # --------------------------------------------------------------------------------------------- images.txt
 def parse_images(text):
-    """[(group, image, digest)] from an images.txt."""
-    out, group = [], ""
+    """[(group, image, digest, folder)] from an images.txt: a "[group] folder ..." line starts a section, its folder in
+    the bundle (also in an earlier release's images.txt, whose sections were custom, chart, prereqs, platform)."""
+    out, group, folder = [], "", ""
     for line in text.splitlines():
         parts = line.split()
         if not parts or parts[0].startswith("#"):
             continue
         if parts[0].startswith("[") and parts[0].endswith("]"):
-            group = parts[0][1:-1]
+            group, folder = parts[0][1:-1], parts[1].rstrip("/") if len(parts) > 1 else ""
             continue
-        out.append((group, parts[0], parts[1] if len(parts) > 1 else ""))
+        out.append((group, parts[0], parts[1] if len(parts) > 1 else "", folder))
     return out
 
 
@@ -77,8 +78,9 @@ def archive_name(image):
     return re.sub(r"[/:@]", "_", image)
 
 
-def archive_dir(group):
-    return "images/custom" if group == "custom" else f"images/public/{group}"
+def ours(image):
+    """Built here, on no public registry."""
+    return image.startswith("ghcr.io/user187x/")
 
 
 def repository(image):
@@ -186,7 +188,7 @@ def base_layers_for(image, profile):
 
 
 def make_thin(image, base, base_ids, out, tmp):
-    """images/custom/<image>.thin.tar.gz: config, manifest, the layers BASE does not have (uncompressed tars,
+    """images/<section>/<image>.thin.tar.gz: config, manifest, the layers BASE does not have (uncompressed tars,
     checked), and coder-thin.json naming the rest. Returns (bytes, layers carried, layers from the base)."""
     saved, err = spool_save(["docker", "save", "--platform", "linux/amd64", image], tmp)
     if saved is None:
@@ -243,40 +245,45 @@ def cmd_build(base_version, staging):
     if base_text is None:
         die(f"no release v{base_version} in git (git tag -l 'v*')")
     current, base = parse_images(cur_text), parse_images(base_text)
-    base_refs = {img for _, img, _ in base}
-    base_by_repo = {repository(img): img for g, img, _ in base if g == "custom"}
+    base_refs = {img for _, img, _, _ in base}
+    base_by_repo = {repository(img): img for _, img, _, _ in base if ours(img)}
     version = re.search(r"^version: *(\S+)", open(os.path.join(HERE, "coder-airgapped/Chart.yaml")).read(), re.M)[1]
     profile = os.environ.get("LAYER_PROFILE", "coder")
+    # Images left out altogether (build-bundle.sh --no-lmstudio: the AI image), by a regular expression.
+    skip = re.compile(os.environ["LAYER_SKIP_IMAGES"]) if os.environ.get("LAYER_SKIP_IMAGES") else None
     entries, sums = [], {}
-    for group, image, digest in current:
+    for group, image, digest, folder in current:
+        if skip and skip.search(image):
+            print(f"left out {image}")
+            continue
         entry = {"group": group, "image": image, "digest": digest}
-        src = os.path.join(HERE, archive_dir(group), archive_name(image) + ".tar.gz")
+        src = os.path.join(HERE, folder, archive_name(image) + ".tar.gz")
         if image in base_refs:
             entry["carried"] = "no"  # the cluster has it from the base
-        elif group == "custom" and repository(image) in base_by_repo and \
+        elif ours(image) and repository(image) in base_by_repo and \
                 (ids := base_layers_for(base_by_repo[repository(image)], profile)):
             entry["carried"], entry["base"] = "thin", base_by_repo[repository(image)]
             name = archive_name(image) + ".thin.tar.gz"
-            out_dir = os.path.join(staging, archive_dir(group))
+            out_dir = os.path.join(staging, folder)
             os.makedirs(out_dir, exist_ok=True)
             size, carried, from_base = make_thin(image, entry["base"], ids, os.path.join(out_dir, name),
                                                  os.path.join(staging, ".tmp"))
-            entry["archive"] = f"{archive_dir(group)}/{name}"
+            entry["archive"] = f"{folder}/{name}"
             sums.setdefault(out_dir, []).append(name)
             print(f"thin     {image}: {size / 1e6:.0f} MB, {len(carried)} new layers, "
                   f"{len(from_base)} from {entry['base']}")
         else:
             if not os.path.isfile(src):
                 die(f"{image}: changed since {base_version} but its archive is missing ({os.path.relpath(src, HERE)})")
-            out_dir = os.path.join(staging, archive_dir(group))
+            out_dir = os.path.join(staging, folder)
             os.makedirs(out_dir, exist_ok=True)
             try:
                 os.link(src, os.path.join(out_dir, os.path.basename(src)))
             except OSError:
                 shutil.copy2(src, os.path.join(out_dir, os.path.basename(src)))
-            entry["carried"], entry["archive"] = "full", f"{archive_dir(group)}/{os.path.basename(src)}"
+            entry["carried"], entry["archive"] = "full", f"{folder}/{os.path.basename(src)}"
             sums.setdefault(out_dir, []).append(os.path.basename(src))
-            why = "new since the base" if group != "custom" or repository(image) not in base_by_repo else \
+            why = "new since the base" if not ours(image) or repository(image) not in base_by_repo else \
                 f"its base {base_by_repo[repository(image)]} is not in this docker or Minikube"
             print(f"full     {image}: {os.path.getsize(src) / 1e6:.0f} MB ({why})")
         if entry["carried"] == "no":
@@ -293,7 +300,7 @@ def cmd_build(base_version, staging):
     carried_prereqs = [f for f in prereqs if f not in base_prereqs]
     gateway = next((re.search(r"v[\d.]+", f)[0] for f in prereqs if f.startswith("gateway-api-")), "")
     chart_version = lambda prefix: next((f[len(prefix):-4] for f in prereqs if f.startswith(prefix) and f.endswith(".tgz")), "")
-    keycloak = next((img.rsplit(":", 1)[1] for _, img, _ in current if img.startswith("quay.io/keycloak/keycloak:")), "")
+    keycloak = next((img.rsplit(":", 1)[1] for _, img, _, _ in current if img.startswith("quay.io/keycloak/keycloak:")), "")
     layer = {"version": version, "base": base_version, "images": entries,
              "charts": {"traefik": chart_version("traefik-"), "cloudnative-pg": chart_version("cloudnative-pg-"),
                         "gateway-api": gateway},
@@ -319,11 +326,11 @@ def cmd_info():
     for e in L["images"]:
         how = {"no": "needed in the cluster", "full": "carried", "thin": f"carried thin (rest from {e.get('base')})"}
         note = ""
-        if e["carried"] == "no" and e["group"] == "platform":
+        if e["carried"] == "no" and e["group"] == "reference":
             note = " (if you run it: Argo CD, Keycloak)"
         elif e["carried"] == "no" and e["group"] == "prereqs":
             note = " (if installed from this bundle)"
-        print(f"  {e['group']:<9} {e['image']:<60} {how[e['carried']]}{note}")
+        print(f"  {e['group']:<13} {e['image']:<60} {how[e['carried']]}{note}")
     c = L["charts"]
     print(f"  needs Traefik chart {c['traefik']}, CloudNativePG chart {c['cloudnative-pg']}, Gateway API "
           f"{c['gateway-api']}, Keycloak {L['keycloak']} (Minikube's development Keycloak), coder-airgapped installed")
@@ -397,13 +404,13 @@ def check_cluster(context, minikube, problems, notes):
 
 def needed_images(minikube):
     """The images that must already be where the cluster pulls from: those the layer does not carry. On Minikube only
-    Keycloak of the platform group runs (as minikube-support loads them); elsewhere the prerequisites' images
+    Keycloak of the reference images runs (as minikube-support loads them); elsewhere the prerequisites' images
     (Traefik, CloudNativePG) are not asked for: those run already when their charts are there (checked above), and
     may come from anywhere."""
     L = layer()
     out = []
     for e in L["images"]:
-        if e["group"] == "platform" and (not minikube or not e["image"].startswith("quay.io/keycloak/keycloak:")):
+        if e["group"] == "reference" and (not minikube or not e["image"].startswith("quay.io/keycloak/keycloak:")):
             continue
         if e["group"] == "prereqs" and not minikube:
             continue
@@ -460,11 +467,10 @@ def cmd_check(kind, where, context=None):
             problems.append(f"cannot list the images of Minikube profile {where}'s nodes")
         # With internet the nodes pull the public images themselves (the full bundle loads them only without);
         # ours are on no public registry: those must be on every node.
-        groups = {e["image"]: e["group"] for e in layer()["images"]}
         pulls = online()
         if pulls:
             notes.append("internet: the nodes pull the public images themselves (only ours are checked on them)")
-        need = [img for img in need if not pulls or groups.get(img) == "custom"]
+        need = [img for img in need if not pulls or ours(img)]
         for img in need:
             missing = [n for n, s in have.items() if short_ref(img) not in s]
             if missing:

@@ -12,7 +12,7 @@ your network.
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.8.5` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
 | Image tools | `ghcr.io/user187x/coder-image-tools:1.0.0` (the platform service, BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
-| Bundle | 17 images pinned by digest, ~4 GB (`-slim`: the 4 custom images only, ~2.6 GB); `-layer`: the update for a cluster at the previous release, only what changed (often a few MB); `-decorator-update`: an Argo CD decorator install's update, the Coder image and both charts (~300 MB) |
+| Bundle | 22 images pinned by digest, in one folder per part (`images/ui/`: the user interface - Coder, the platform service, their databases; `workspaces/`, `cloud-drive/`, ...), and every chart packaged (`charts/`, a Helm repository); `-slim`: only our images; the same release in parts: `-charts` (no images) and `-images-<part>` per folder, together the bundle; `-layer`: the update for a cluster at the previous release, only what changed (often a few MB); `-decorator-update`: an Argo CD decorator install's update, the Coder image and both charts (~300 MB) |
 
 **Contents:** [Quick start](#quick-start) · [Architecture](#architecture) · [Features](#features) ·
 [Security](#security) · [Testing and verification](#testing-and-verification) · [Build a release](#build-a-release) ·
@@ -33,6 +33,11 @@ sha256sum -c coder-airgapped-1.39.1.tar.gz.sha256          # the bundle: OK
 tar -xzf coder-airgapped-1.39.1.tar.gz && cd coder-airgapped-1.39.1
 ./make --deploy
 ```
+
+Or take only what you need: from the next release on the bundle also comes in parts by content -
+`coder-airgapped-<version>-charts.tar.gz` (installers, chart, every chart packaged; no images) and one
+`-images-<part>.tar.gz` per image folder (`-images-ui`: the user interface; `-images-workspaces`, ...; `-ASSETS.txt`
+says which holds what). Unpacked into one directory they are the bundle, file for file.
 
 `./make --deploy` asks only what it cannot work out: Minikube or EKS (or any cluster `kubectl` reaches), your
 domain, certificates (new self-signed ones or your own), and on EKS the registry to push the images to, the storage
@@ -71,7 +76,7 @@ tar -xzf coder-airgapped-1.39.1-decorator-update.tar.gz && cd coder-airgapped-1.
 ```
 
 The ubuntu-dataflow template's image (Apache NiFi and Airflow) is not in it: the helper keeps that template off
-unless you give it the image (`--dataflow`). See [DEPLOY.md](helm-chart/DEPLOY.md#updating-an-argo-cd-install-the-decorator-update).
+unless you give it the image (`--dataflow`); the AI templates likewise (`--ai`). See [DEPLOY.md](helm-chart/DEPLOY.md#updating-an-argo-cd-install-the-decorator-update).
 
 **Argo CD, with the customization layer as a decorator.** The bundle also installs as two charts in one Argo CD
 Application (`argocd/`):
@@ -156,7 +161,7 @@ The full feature list, with where each piece lives and how it is tested, is
   login), with the cluster-admin group kept equal to Coder's owners.
 - A sign-in page with the deployment's name as a traced outline, background images and animated backgrounds; its
   title, text effect (traced outline, neon or plain), colour, speed and messages (one for signing in, one for right
-  after signing out) are set in Customize. The Keycloak button is Keycloak's logo (no text, no footer).
+  after signing out) are set in Appearance (General > Appearance). The Keycloak button is Keycloak's logo (no text, no footer).
 - **Settings › SSH keys:** Regenerate Key as RSA (4096-bit) or ED25519, or use the `.p12`'s key (P12).
 - **Home disk:** Expand disk from the workspace's ⋮ menu or under Home disk size in its parameters (volume expansion
   where the storage class allows it, else a copy onto a bigger volume); backups to a download or S3.
@@ -178,6 +183,9 @@ The full feature list, with where each piece lives and how it is tested, is
 - **Terminal:** tmux with btop, a pop-out window, text size, a custom command, JetBrains Mono Nerd Font.
 - **Per-user quotas** and a **global workspace scheduler** (required start/stop schedules, enforced).
 - **Home volumes:** backups (S3 or download) and disk growth (in place, or a copy to a bigger volume).
+- **Cloud Drive:** each account's own files on S3, at `~/cloud-drive` in each of its connected workspaces; on the
+  Workspaces page, a cable from it to each connected workspace: drag a plug away to disconnect one, a cable onto
+  another to connect it, live (no restart).
 - **Lock Down:** admins jail any workspace, for instance one where an agent runs away. There are four modes:
   - **Network:** only Coder stays reachable;
   - **Sudo Command:** nobody in it can use sudo;
@@ -186,7 +194,8 @@ The full feature list, with where each piece lives and how it is tested, is
 
   It works live on a running workspace: with the first three, its processes keep running, and its terminal and apps
   still open, so admins can inspect what the agent is doing. On a stopped workspace it applies from the next start.
-  Every mode comes back with each restart until an admin lifts it.
+  Every mode comes back with each restart until an admin lifts it. Its badge (with the menu) sits in the Workspaces
+  list between Name and Template, and on the workspace page right of Open Ports.
 - Admins' **post-it notes** on workspace pages; workspace icons; an agent Update pill.
 
 ### The workspace template and image
@@ -226,8 +235,11 @@ The full feature list, with where each piece lives and how it is tested, is
   failures) and the Coder server's **System Uptime**; its totals on one line. The Settings menu shows the cluster's
   CPU, memory and network traffic (last 15 minutes) at a glance.
 - **Workspace settings** on one page of cards (General, Parameters, Schedule, Sharing).
-- **Two workspace templates:** UBUNTU (code-server, marimo) and UBUNTU DATAFLOW (Apache NiFi, Apache Airflow), the
-  same workspace otherwise; everything offline.
+- **Four workspace templates:** UBUNTU (code-server, marimo), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow), and the
+  AI workspaces UBUNTU LM STUDIO (LM Studio on the desktop, its local server) and UBUNTU OPENCODE (the OpenCode agent
+  on the workspace's own LM Studio), with a shared **model library** (GGUF) in Templates > Images; the same workspace
+  otherwise; everything offline. LM Studio is for internal use only (its terms): `build-bundle.sh --no-lmstudio`
+  leaves it out of a bundle that leaves the organization.
 - **Health, monitoring and security posture** views; network and persistence maps.
 - **Banners:** classification banners (e.g. UNCLASSIFIED), and an announcement banner with:
   - its message on an LCD screen set into the banner, over a background image (uploaded or a preset; animated GIFs
@@ -240,9 +252,11 @@ The full feature list, with where each piece lives and how it is tested, is
   - a "Viewed" receipt with the user's certificate fingerprint;
   - a terminal-style full view (with an easter egg or two).
 - **Inbox:** Clear all (asks twice) beside Mark all as read.
-- **Chat** between users and admins (with screenshots), and the admins' chat console; **peer-to-peer chat** between
-  developers when admins turn it on (a People list of who is online or active today; anyone can be invisible but to
-  admins); chats kept 30 days by default (admins set it, and can purge them); admins see who talks to whom.
+- **Chat** between users and admins (with screenshots and files of any kind, sent with a progress bar), and the admins'
+  chat console; **peer-to-peer chat** between developers when admins turn it on (a People list of who is online or
+  active today, grey after 30 seconds without input; anyone can be invisible but to admins); chats kept 30 days by
+  default (admins set it, and can purge them); admins see who talks to whom, and **Online Users**: everyone online
+  now, live (active or idle, tabs, last input, running workspaces).
 - The **Settings** menu (Admin Controls and quick links), an arrangeable top bar, logo and avatars (uploaded, gallery,
   defaults).
 - **Agent Activity** (optional): every command run in a workspace, for review.
@@ -425,14 +439,16 @@ cd development/tools/verify
 ```bash
 development/tools/build-workspace-image.sh             # the workspace image (offline checks, saved into the bundle)
 development/tools/build-airgap-image.sh 2.0.0-platform.31   # the fork's Coder image + Terraform provider mirror
-development/tools/build-bundle.sh                      # -> dist/coder-airgapped-<version>.tar.gz and -slim.tar.gz
+development/tools/build-bundle.sh                      # -> dist/coder-airgapped-<version>.tar.gz, -slim, the parts
+                                                       #    (-charts, -images-<part>, -ASSETS.txt) and -layer
 development/tools/build-decorator-update.sh            # -> dist/coder-airgapped-<version>-decorator-update.tar.gz
 ```
 
 Image archives are not in git: `images.txt` pins every image by digest, and `build-bundle.sh` fetches the missing
 public ones (`mirror-images.sh save`). The Coder server is built from the fork (`scripts/build_platform_image.sh`
 there; see [`development/coder-fork/FORK.md`](development/coder-fork/FORK.md)). Releases are published on GitHub in
-parts of under 2 GiB, each with SHA-256 files. `main` is always release-ready in both repositories.
+pieces of under 2 GiB, each with SHA-256 files: an asset over that (the bundle, `-images-workspaces`) is split with
+`split -b 1900M -d <asset> <asset>.part-` and listed in `<asset-name>.parts.sha256`. `main` is always release-ready in both repositories.
 
 ## Following upstream and rolling back
 

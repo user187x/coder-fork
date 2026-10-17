@@ -46,7 +46,6 @@ docker run --rm --network none --entrypoint sh "$img" -c '
 	printf "echo \$foo\n" > /tmp/u.sh; ! shellcheck -s bash -f json /tmp/u.sh >/tmp/l.json; grep -q "\"code\":2086" /tmp/l.json
 	trivy --version | grep -q "Vulnerability DB"
 	echo "image-tools checks passed"'
-out="${top}/helm-chart/images/custom"; mkdir -p "$out"; rm -f "$out"/ghcr.io_user187x_coder-image-tools_*.tar.gz
-docker save --platform linux/amd64 "$img" | gzip -1 >"${out}/$(echo "$img" | tr '/:@' '___').tar.gz"
-(cd "$out" && sha256sum ./*.tar.gz | sed 's|  \./|  |' >SHA256SUMS)
-echo "built $img; saved to ${out}; image ID $(docker image inspect --format '{{.Id}}' "$img")"
+# its archive in the bundle, in its section's folder of images.txt (replacing the previous tag's)
+"${top}/helm-chart/mirror-images.sh" store "$img"
+echo "built $img; image ID $(docker image inspect --format '{{.Id}}' "$img")"
