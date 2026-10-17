@@ -96,6 +96,8 @@
   GET  /__coder-ui/api/lockdown[/<id>]      admins (an owner: their workspace): Lock Down; POST /<id> {mode}: see lockdown.py
   GET  /__coder-ui/api/hud                 admins: the HUD's metrics (totals, leaders, health) and Coder's uptime, cached 5 seconds
   GET  /__coder-ui/api/hud/history?range=  admins: the HUD graphs (CPU, memory, latency), sampled every 15 s, kept 7 days
+  GET  /__coder-ui/api/workspaces/<id>/network   a workspace's network traffic, the last 5 minutes per agent (who
+                                           may see the workspace)
   /__coder-ui/api/workspace-icons, /__coder-ui/api/workspace-volumes/<id>   workspace icons, home backups and disk
                                            growth (owners and admins): see workspacevolumes.py
   GET  /__coder-ui/api/monitoring/logs?workspace=<id>&after=<seq>   new log lines (starts / keeps the follower)
@@ -7083,6 +7085,94 @@ HUD_HISTORY_DAYS = int(os.environ.get("HUD_HISTORY_DAYS", "7"))
 HUD_RANGES = {"15m": 900, "1h": 3600, "6h": 6 * 3600, "24h": 86400, "7d": 7 * 86400}
 
 
+NET_HISTORY_SECONDS = 300  # the workspace page's network pill: the last 5 minutes
+NET_HISTORY_EVERY = 2  # seconds between looks at the agents' latest network readings
+NET_READING_RE = re.compile(r"^\s*(\d+)\s+(\d+)\s*$")
+
+
+class AgentNetHistory(threading.Thread):
+    """The workspaces' network traffic, the last NET_HISTORY_SECONDS of it for each agent, whether or not anyone
+    looks: every NET_HISTORY_EVERY seconds each agent's latest network reading (the template's "*net_io" metadata:
+    the bytes received and sent so far, as `metadata.sh net` reports them) from Coder's database; a new reading is a
+    sample of bytes a second since the one before. The workspace page's network pill and lights start from it, so a
+    page opened (or reloaded) shows the last minutes, not only what comes in after. Kept in memory: a restart of this
+    service starts it afresh."""
+
+    def __init__(self):
+        super().__init__(daemon=True, name="net-history")
+        self.lock = threading.Lock()
+        self.last = {}  # agent id -> (t ms, rx, tx): its latest reading
+        self.samples = {}  # agent id -> deque of {"from", "t", "rx", "tx"} (ms, bytes a second)
+
+    def add(self, rows, now_ms=None):
+        """Readings [(agent id, value, collected_at ms)] in; a sample for each reading newer than the agent's last."""
+        now_ms = now_ms or time.time() * 1000
+        with self.lock:
+            for agent, value, t in rows:
+                m = NET_READING_RE.match(value or "")
+                if not m or t is None:
+                    continue
+                t, rx, tx = int(float(t)), int(m[1]), int(m[2])
+                prev = self.last.get(agent)
+                if prev and t <= prev[0]:
+                    continue
+                self.last[agent] = (t, rx, tx)
+                seconds = (t - prev[0]) / 1000 if prev else 0
+                # a long gap (the workspace was stopped, this service just started): no rate across it
+                if 0 < seconds <= 120:
+                    self.samples.setdefault(agent, collections.deque()).append({
+                        "from": prev[0], "t": t,
+                        # the counters restart with the workspace: a drop is no traffic
+                        "rx": round((rx - prev[1]) / seconds, 1) if rx >= prev[1] else 0,
+                        "tx": round((tx - prev[2]) / seconds, 1) if tx >= prev[2] else 0,
+                    })
+            cutoff = now_ms - NET_HISTORY_SECONDS * 1000
+            for agent in list(self.samples):
+                q = self.samples[agent]
+                while q and q[0]["t"] < cutoff:
+                    q.popleft()
+                if not q:
+                    del self.samples[agent]
+            for agent in [a for a, last in self.last.items() if last[0] < cutoff]:
+                del self.last[agent]
+
+    def recent(self, agent_ids):
+        """{agent id: {"samples": [...], "last": {"at", "rx", "tx"} or None}} for those agents."""
+        with self.lock:
+            out = {}
+            for agent in agent_ids:
+                last = self.last.get(agent)
+                out[agent] = {"samples": list(self.samples.get(agent, ())),
+                              "last": {"at": last[0], "rx": last[1], "tx": last[2]} if last else None}
+            return out
+
+    def poll(self):
+        pool = LOGOS.pool if LOGOS else None
+        if not pool:
+            return
+        rows = pool.query(
+            """SELECT workspace_agent_id::text, value, (extract(epoch FROM collected_at) * 1000)::bigint
+               FROM workspace_agent_metadata
+               WHERE key ~ '(^|_)net_io$' AND collected_at > now() - interval '120 seconds'"""
+        )
+        self.add(rows)
+
+    def run(self):
+        last_error = None
+        while True:
+            try:
+                self.poll()
+                last_error = None
+            except Exception as e:  # noqa: BLE001 - reported once, tried again next round
+                if str(e) != last_error:
+                    log(event="net-history-failed", error=str(e)[:300])
+                last_error = str(e)
+            time.sleep(NET_HISTORY_EVERY)
+
+
+NET_HISTORY = None
+
+
 class HudHistory(threading.Thread):
     """The HUD's graphs: every HUD_SAMPLE_EVERY seconds, whether or not anyone looks, the cluster's CPU and memory in
     use (live, from metrics-server; what workspaces use of it too) and the latency of users' connections to their
@@ -7881,6 +7971,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.chat_get(
                 path[len(BASE + "/api/chat/") :], urllib.parse.parse_qs(url.query)
             )
+        if path.startswith(BASE + "/api/workspaces/") and path.endswith("/network"):
+            # the workspace page's network pill and lights: the last minutes of each of its agents' traffic
+            user, err = self.user()
+            if err:
+                return
+            ws = workspace_info(self.token(), path[len(BASE + "/api/workspaces/"):-len("/network")])
+            if not ws:
+                return self.send_json(404, {"error": "There is no such workspace (or it is not yours to see)."})
+            agents = [a.get("id") for r in (ws.get("latest_build") or {}).get("resources") or []
+                      for a in r.get("agents") or []]
+            return self.send_json(200, {"windowSeconds": NET_HISTORY_SECONDS,
+                                        "agents": NET_HISTORY.recent(agents) if NET_HISTORY else {}})
         if path == BASE + "/api/presence":
             user, err = self.user(admin=True)
             if err:
@@ -9033,6 +9135,7 @@ def safe_accounts():
 
 def main():
     global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY, BACKGROUNDS, BANNER_PICTURES, HUD_HISTORY
+    global NET_HISTORY
     STORE = Store(DB_PATH)
     CHAT = ChatStore(DB_PATH)
     DEFAULTS = Defaults(
@@ -9047,6 +9150,8 @@ def main():
     MONITOR = Monitor()
     HUD_HISTORY = HudHistory(os.path.join(os.path.dirname(DB_PATH) or "/data", "hud.sqlite"))
     HUD_HISTORY.start()
+    NET_HISTORY = AgentNetHistory()
+    NET_HISTORY.start()
     imagebuilder.setup(log, http_json, KUBE)
     imagebuilder.start()
     workspacevolumes.setup(log, http_json, KUBE)

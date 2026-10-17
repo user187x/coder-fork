@@ -652,6 +652,37 @@ class PeerChatTest(unittest.TestCase):
         self.assertEqual(self.chat.settings["purgeVersion"], version + 1)
 
 
+class AgentNetHistoryTest(unittest.TestCase):
+    """The workspace page's network pill: the last 5 minutes of each agent's traffic, kept whether or not anyone looks."""
+
+    def test_a_reading_after_another_is_a_rate(self):
+        h = ui.AgentNetHistory()
+        t0 = 1_000_000_000_000
+        h.add([("a1", "1000 500", t0)], now_ms=t0)
+        h.add([("a1", "1000 500", t0)], now_ms=t0 + 1000)       # the same reading again: nothing new
+        h.add([("a1", "5000 2500", t0 + 2000)], now_ms=t0 + 2000)
+        h.add([("a1", "100 50", t0 + 4000)], now_ms=t0 + 4000)  # counters restarted: no traffic, not negative
+        r = h.recent(["a1", "a2"])
+        self.assertEqual(r["a1"]["samples"], [
+            {"from": t0, "t": t0 + 2000, "rx": 2000.0, "tx": 1000.0},
+            {"from": t0 + 2000, "t": t0 + 4000, "rx": 0, "tx": 0},
+        ])
+        self.assertEqual(r["a1"]["last"], {"at": t0 + 4000, "rx": 100, "tx": 50})
+        self.assertEqual(r["a2"], {"samples": [], "last": None})
+
+    def test_keeps_five_minutes_and_no_rate_across_a_long_gap(self):
+        h = ui.AgentNetHistory()
+        t0 = 1_000_000_000_000
+        for i in range(200):                                     # every 2 s for 400 s
+            h.add([("a1", "%d 0" % (i * 1000), t0 + i * 2000)], now_ms=t0 + i * 2000)
+        samples = h.recent(["a1"])["a1"]["samples"]
+        self.assertTrue(all(s["t"] >= t0 + 398_000 - 300_000 for s in samples))
+        self.assertEqual(len(samples), 151)                  # 98 s to 398 s, both ends kept
+        h.add([("a1", "999999 0", t0 + 398_000 + 600_000)], now_ms=t0 + 398_000 + 600_000)  # 10 minutes later
+        self.assertEqual(h.recent(["a1"])["a1"]["samples"], [])
+        h.add([("a1", "bad", t0)], now_ms=t0)                    # not a reading: ignored
+
+
 class ChatPresenceAndFilesTest(unittest.TestCase):
     """Who is online, idle or gone (each tab's own report, pushed to every poll), and files attached to messages."""
 

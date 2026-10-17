@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.58 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.60 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.58-airgap
+      tag: 2.0.0-platform.60-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
