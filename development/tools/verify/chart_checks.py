@@ -5,7 +5,7 @@ internet.
   python3 chart_checks.py [--bundle helm-chart] [--jsonl out.jsonl]
 
 Each check is a JSON line ({suite: "static", name, ok, detail}) as in live.py."""
-import argparse, glob, json, os, re, subprocess, sys
+import argparse, glob, hashlib, json, os, re, subprocess, sys
 
 RESULTS, OUT = [], None
 
@@ -375,6 +375,17 @@ def main():
     check("template: every script the .tf files read is in files/scripts/ and in the push's ConfigMap",
           refs and all(os.path.isfile(os.path.join(tf_dir, "scripts", s)) and s in shipped for s in refs),
           "read: %s; shipped: %s" % (refs, shipped))
+    # templatefile() reads ${...} in a script as its own: each must be a variable main.tf passes to that script (a
+    # shell expansion is written $${...}), else the template fails to plan.
+    bad = []
+    for name, body in tf.items():
+        for m in re.finditer(r'templatefile\("\$\{path\.module\}/scripts/([\w.-]+)",\s*\{(.*?)\n\s*\}\)', body, re.S):
+            keys = set(re.findall(r"^\s*(\w+)\s*=", m.group(2), re.M))
+            text = open(os.path.join(tf_dir, "scripts", m.group(1))).read()
+            for ref in re.findall(r"(?<!\$)\$\{([^}]*)\}", text):
+                if ref.strip() not in keys:
+                    bad.append("%s: ${%s}" % (m.group(1), ref))
+    check("template scripts: every ${...} is a variable main.tf passes (shell's written $${...})", not bad, bad[:5])
     check("template: no script left inline in the .tf files (heredocs)", not any("<<" in t for t in tf.values()),
           [n for n, t in tf.items() if "<<" in t])
     if subprocess.run(["sh", "-c", "command -v shfmt"], capture_output=True).returncode == 0:
@@ -382,15 +393,28 @@ def main():
         check("template scripts: formatted (shfmt -i 1)", rc == 0, (out + err).strip()[:300] or "%d scripts" % len(scripts))
     else:
         check("template scripts: formatted (shfmt -i 1; shfmt not installed: skipped)", True, "skipped")
-    # Every module the platform service imports from its own folder (and the Lock Down script) is in the chart's list
-    # of the service's files: one left out crash-loops the service (1.32.0's first deploy did, with lockdown.py).
+    # The platform service's code is in its image (development/tools/build-ui-image.sh), tagged with the code's hash:
+    # values.yaml must name the build of the code as it is now (code changed without a new build would deploy the old
+    # code), and the chart must not carry the code (Helm keeps each release in a Secret of at most 1 MiB).
     ui_dir = os.path.join(chart, "files/ui-updates")
-    tpl_ui = open(os.path.join(chart, "templates/ui-updates.yaml")).read()
-    listed = set(re.findall(r'"([\w.-]+)"', (re.search(r"\$code := list ([^}]+)\}", tpl_ui) or [None, ""])[1]))
-    imported = {m + ".py" for m in re.findall(r"^import (\w+)", open(os.path.join(ui_dir, "ui-service.py")).read(), re.M)
-                if os.path.isfile(os.path.join(ui_dir, m + ".py"))} | {"lockdown.sh"}
-    check("platform service: every module it imports is shipped (templates/ui-updates.yaml's file list)",
-          imported <= listed, sorted(imported - listed) or "%d modules" % len(imported))
+    names = sorted(n for n in os.listdir(ui_dir) if os.path.isfile(os.path.join(ui_dir, n)) and not n.endswith(".pyc"))
+    lines = "".join("%s  %s\n" % (hashlib.sha256(open(os.path.join(ui_dir, n), "rb").read()).hexdigest(), n)
+                    for n in names)
+    want = "coder-ui-updates:code-" + hashlib.sha256(lines.encode()).hexdigest()[:12]
+    values_txt = open(os.path.join(chart, "values.yaml")).read()
+    pinned = re.search(r"ghcr\.io/user187x/(coder-ui-updates:code-[0-9a-f]+)", values_txt)
+    check("platform service: values.yaml pins the image of the code as it is (development/tools/build-ui-image.sh)",
+          pinned and pinned.group(1) == want, "pinned %s, code is %s" % (pinned and pinned.group(1), want))
+    images_txt = open(os.path.join(chart, "..", "images.txt")).read()
+    check("platform service: images.txt lists that image", bool(pinned) and pinned.group(1) in images_txt,
+          pinned and pinned.group(1))
+    ignore = open(os.path.join(chart, ".helmignore")).read()
+    check("platform service: its code stays out of the chart (.helmignore files/ui-updates/*)",
+          re.search(r"^files/ui-updates/\*$", ignore, re.M) is not None, "")
+    # The Jobs it starts run its own image (the code in /app): no ConfigMap of the code exists any more.
+    mounts = [n for n in names if n.endswith(".py") and re.search(r'"configMap": \{"name": "coder-ui-updates"',
+                                                                open(os.path.join(ui_dir, n)).read())]
+    check("platform service: its Jobs take the code from its image, not a ConfigMap", not mounts, mounts or "")
     banner_checks(chart)
     ui_lock = os.path.join(chart, "files/ui-updates/lockdown.sh")
     tpl_lock = os.path.join(tf_dir, "scripts", "lockdown.sh")

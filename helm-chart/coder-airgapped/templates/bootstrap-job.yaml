@@ -14,7 +14,7 @@ metadata:
     {{- include "ca.labels" . | nindent 4 }}
 data:
   bootstrap.py: {{ .Files.Get "files/bootstrap/bootstrap.py" | toJson }}
-  pgwire.py: {{ .Files.Get "files/ui-updates/pgwire.py" | toJson }}
+  pgwire.py: {{ .Files.Get "files/bootstrap/pgwire.py" | toJson }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -80,7 +80,7 @@ spec:
       labels:
         app.kubernetes.io/name: coder-bootstrap
       annotations:
-        checksum/script: {{ printf "%s%s" (.Files.Get "files/bootstrap/bootstrap.py") (.Files.Get "files/ui-updates/pgwire.py") | sha256sum | trunc 16 | quote }}
+        checksum/script: {{ printf "%s%s" (.Files.Get "files/bootstrap/bootstrap.py") (.Files.Get "files/bootstrap/pgwire.py") | sha256sum | trunc 16 | quote }}
     spec:
       restartPolicy: Never
       serviceAccountName: coder-bootstrap

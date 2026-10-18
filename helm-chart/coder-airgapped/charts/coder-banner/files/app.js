@@ -20,8 +20,10 @@
   var TEXT_FIELDS = ['message', 'title', 'linkText', 'linkUrl', 'picture'];
   var BOOL_FIELDS = ['dismissible', 'showOnLoginPage', 'repeat', 'outline'];
   var SELECT_FIELDS = ['effect', 'speed', 'pictureFit'];
-  // The effects whose pace the speed sets: the crawl and the scanner.
-  var PACED_EFFECTS = ['starwars', 'kitt'];
+  // The crawl's pace (pixels a second) and convergence (percent): sliders, whole numbers.
+  var RANGE_FIELDS = ['crawlSpeed', 'crawlTilt'];
+  // The crawl's pace before it had a slider, by speed.
+  var LEGACY_CRAWL_SPEED = { slow: 9, normal: 15, fast: 26 };
   var PLAY_DELAY_MS = 600; // let typing settle before (re)playing the effect in the preview
 
   var $ = function (id) { return document.getElementById(id); };
@@ -70,6 +72,7 @@
     TEXT_FIELDS.forEach(function (k) { out[k] = $(k).value.trim(); });
     BOOL_FIELDS.forEach(function (k) { out[k] = $(k).checked; });
     SELECT_FIELDS.forEach(function (k) { out[k] = $(k).value; });
+    RANGE_FIELDS.forEach(function (k) { out[k] = parseInt($(k).value, 10); });
     if ($('customColors').checked) out.title = '{{colors bg=' + $('colorBg').value + ' fg=' + $('colorFg').value + '}}';
     var level = document.querySelector('input[name=level]:checked');
     out.level = level ? level.value : 'info';
@@ -78,10 +81,18 @@
   }
 
   // A banner saved before a field existed does not have it: that means its default, not "changed".
-  var FIELD_DEFAULTS = { effect: 'none', repeat: false, speed: 'normal', picture: '', pictureFit: 'span', outline: false };
+  var FIELD_DEFAULTS = { effect: 'none', repeat: false, speed: 'normal', crawlSpeed: 15, crawlTilt: 100, picture: '',
+    pictureFit: 'span', outline: false };
 
   function value(b, k) {
+    if (k === 'crawlSpeed' && b[k] === undefined) return LEGACY_CRAWL_SPEED[b.speed] || FIELD_DEFAULTS[k];
     return b[k] === undefined && k in FIELD_DEFAULTS ? FIELD_DEFAULTS[k] : b[k];
+  }
+
+  // The sliders' readings beside them.
+  function renderRanges() {
+    $('crawlSpeed-out').textContent = $('crawlSpeed').value + ' px/s';
+    $('crawlTilt-out').textContent = $('crawlTilt').value + '%';
   }
 
   function writeForm(b) {
@@ -91,6 +102,8 @@
       $(k).value = value(b, k);
       if (!$(k).value) $(k).value = FIELD_DEFAULTS[k]; // a value this page does not know about
     });
+    RANGE_FIELDS.forEach(function (k) { $(k).value = value(b, k); });
+    renderRanges();
     var colors = colorsOf(b.title);
     $('customColors').checked = !!colors;
     if (colors) {
@@ -105,7 +118,7 @@
 
   function sameAsServer(form) {
     var s = server.banner;
-    return TEXT_FIELDS.concat(BOOL_FIELDS, SELECT_FIELDS, ['level', 'refreshSeconds']).every(function (k) {
+    return TEXT_FIELDS.concat(BOOL_FIELDS, SELECT_FIELDS, RANGE_FIELDS, ['level', 'refreshSeconds']).every(function (k) {
       return k === 'title' ? leadIn(form.title) === leadIn(s.title) : form[k] === value(s, k);
     });
   }
@@ -129,7 +142,8 @@
     $('effect-hint').textContent = hint;
     $('repeat').disabled = $('effect').value === 'none';
     $('replay').disabled = $('effect').value === 'none' || !previewEl;
-    $('speed-field').hidden = PACED_EFFECTS.indexOf($('effect').value) < 0;
+    $('speed-field').hidden = $('effect').value !== 'kitt';
+    $('crawl-fields').hidden = $('effect').value !== 'starwars';
     var custom = $('customColors').checked;
     $('title').disabled = custom;
     $('emoji-btn').disabled = custom;
@@ -281,6 +295,7 @@
     ['input', 'change'].forEach(function (evt) {
       document.querySelector('main').addEventListener(evt, function (e) {
         if (e.target.closest('#preview') || !server) return;
+        renderRanges();
         renderState();
       });
     });

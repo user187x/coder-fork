@@ -3,6 +3,7 @@
 Imported by ui-service.py (the API below), and run on its own by the build and scan Jobs:
     python3 imagebuilder.py fetch-context URL DIR     the build Job's first step: the build context into DIR
     python3 imagebuilder.py scan REF REPORT_URL       the scan Job: trivy + image checks + FIPS checks, posted back
+    python3 imagebuilder.py scan-rootfs REF REPORT_URL DIR   the same on an image's files copied out of a node's copy
 
 An image is a definition (spec, below) that admins (and template admins) edit in a builder; a build turns it into
 <registry>/coder-images/<name>:<version> with BuildKit rootless in a Job, then a scan Job reports on its security.
@@ -33,6 +34,10 @@ before building on it, or using it in an enclave.
     POST /__coder-ui/api/images/import {name, description, ref, username?, password?}   an image copied from a registry
     PUT  /__coder-ui/api/images/import-upload?name=&description=&file=   an image from a `docker save` / OCI archive
     GET  /__coder-ui/api/images/in-use                  the images workspaces run now, and the templates' own
+    GET  /__coder-ui/api/images/on-nodes                every image the cluster's nodes hold (preloaded or pulled)
+    POST /__coder-ui/api/images/scan {image}            scan any image: in the cluster's registry, or on a node that
+                                                        holds it (no registry needed: air-gapped clusters, preloaded
+                                                        images); listed as a read-only entry with its report
     GET  /__coder-ui/internal/builds/<token>/context.tar    (build Job)   POST .../report (scan Job)
 """
 
@@ -87,6 +92,8 @@ except ValueError:
     PULL_SECRETS = []
 BASE = "/__coder-ui"
 REPO = "coder-images"
+# A scan on a node (an image no registry here holds): room for the image's files, copied out of it.
+NODE_SCAN_DISK = os.environ.get("BUILDER_NODE_SCAN_DISK", "40Gi")
 EDIT_EXTRA_ROLES = {"template-admin"}  # besides ADMIN_ROLES: who may create, edit, build and delete images
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
@@ -190,6 +197,10 @@ class DB:
         tracked = spec.get("tracked")
         out["tracked"] = tracked or None
         out["imported"] = spec.get("imported") or None
+        out["scanned"] = spec.get("scanned") or None
+        if out["scanned"]:
+            # a scanned image is the image itself, wherever it is
+            out["pullRef"] = out["scanned"].get("image")
         if tracked:
             # what workspace templates name: the image itself, not the builder's copy that is scanned
             out["pullRef"] = tracked.get("image") if r["ref"] else None
@@ -1065,7 +1076,7 @@ def job_name(kind, image_id, build_id):
 
 
 # What Jobs that run this file need of the service's code (imagebuilder imports securitydata, which reads the rules).
-CODE_ITEMS = [{"key": k, "path": k} for k in ("imagebuilder.py", "securitydata.py", "fips-rules.json")]
+# The Jobs run TOOLS_IMAGE, the service's own image: its code is in /app there (development/tools/build-ui-image.sh).
 
 
 def pod_spec(containers, init=None, unconfined=False):
@@ -1074,7 +1085,7 @@ def pod_spec(containers, init=None, unconfined=False):
         "securityContext": {"runAsNonRoot": True, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000,
                             "seccompProfile": {"type": "Unconfined" if unconfined else "RuntimeDefault"}},
         "containers": containers,
-        "volumes": [{"name": "code", "configMap": {"name": "coder-ui-updates", "items": CODE_ITEMS}}],
+        "volumes": [],
     }
     if unconfined:
         spec["securityContext"]["appArmorProfile"] = {"type": "Unconfined"}
@@ -1092,7 +1103,7 @@ def build_job(image_id, build_id, version, token):
     tools = {"name": "context", "image": TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent",
              "command": ["python3", "/app/imagebuilder.py", "fetch-context", url, "/ctx"],
              "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
-             "volumeMounts": [{"name": "ctx", "mountPath": "/ctx"}, {"name": "code", "mountPath": "/app"}]}
+             "volumeMounts": [{"name": "ctx", "mountPath": "/ctx"}]}
     build = {"name": "build", "image": BUILDKIT_IMAGE, "imagePullPolicy": "IfNotPresent",
              "command": ["buildctl-daemonless.sh"],
              "args": ["build", "--frontend", "dockerfile.v0", "--local", "context=/ctx", "--local", "dockerfile=/ctx",
@@ -1114,17 +1125,21 @@ def build_job(image_id, build_id, version, token):
     return name, job_body(name, image_id, build_id, "build", spec)
 
 
-def scan_job(image_id, build_id, version, token, ref=None):
+def scan_job(image_id, build_id, version, token, ref=None, node=None):
+    """The scan Job: trivy on the image in the cluster's registry; or, given the node that holds it (an image no
+    registry here holds), on its files copied out of the node's copy (node_scan_spec)."""
     name = job_name("scan", image_id, build_id)
     ref = ref or "%s/%s/%s:%d" % (REGISTRY, REPO, image_id, version)
     url = "%s%s/internal/builds/%s/report" % (SERVICE_URL, BASE, token)
+    command = (["python3", "/app/imagebuilder.py", "scan-rootfs", ref, url, "/rootfs"] if node
+               else ["python3", "/app/imagebuilder.py", "scan", ref, url])
     c = {"name": "scan", "image": TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent",
-         "command": ["python3", "/app/imagebuilder.py", "scan", ref, url],
+         "command": command,
          "env": [{"name": "TRIVY_INSECURE", "value": "true"}, {"name": "HOME", "value": "/tmp"},
                  {"name": "BUILDER_REGISTRY", "value": REGISTRY}],
          "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "2", "memory": "4Gi"}},
          "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
-         "volumeMounts": [{"name": "code", "mountPath": "/app"}, {"name": "tmp", "mountPath": "/tmp"}]}
+         "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}]}
     init = None
     if securitydata.active_bundle():
         # the uploaded security data (vulnerability and Java databases, FIPS rules), fetched from the service
@@ -1133,14 +1148,69 @@ def scan_job(image_id, build_id, version, token, ref=None):
                  "command": ["python3", "/app/securitydata.py", "fetch", url, "/sec"],
                  "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
                  "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"memory": "1Gi"}},
-                 "volumeMounts": [{"name": "sec", "mountPath": "/sec"}, {"name": "code", "mountPath": "/app"}]}]
+                 "volumeMounts": [{"name": "sec", "mountPath": "/sec"}]}]
         c["env"].append({"name": "SECURITY_DIR", "value": "/sec"})
         c["volumeMounts"].append({"name": "sec", "mountPath": "/sec", "readOnly": True})
-    spec = pod_spec([c], init=init)
+    if node:
+        spec = node_scan_spec(c, init or [], ref, node)
+    else:
+        spec = pod_spec([c], init=init)
     spec["volumes"].append({"name": "tmp", "emptyDir": {"sizeLimit": "8Gi"}})
     if init:
         spec["volumes"].append({"name": "sec", "emptyDir": {"sizeLimit": "8Gi"}})
     return name, job_body(name, image_id, build_id, "scan", spec)
+
+
+# The tools a node scan runs inside the image being scanned, whatever it has (no shell, another libc): the tools
+# image's busybox with the musl loader it needs, started through the loader.
+NODE_TOOLS = "/scan-tools"
+NODE_BUSYBOX = [NODE_TOOLS + "/ld-musl-x86_64.so.1", NODE_TOOLS + "/busybox"]
+# What is not the image's own files: the container's runtime mounts and the scan's own volumes (tar -X patterns).
+NODE_SCAN_EXCLUDE = ("./proc", "./sys", "./dev", "./run", "./scan-out", "." + NODE_TOOLS)
+
+
+def node_scan_spec(scan, init, ref, node):
+    """A scan on the node that holds the image: the image runs (from the node's copy, never pulled) only the tools
+    image's busybox, once as its default user (who it runs as) and once as root to copy its files into the scan's
+    volume, which the scan reads (as root, able to read every file, nothing else). No privileges, no registry."""
+    bb = " ".join(NODE_BUSYBOX)
+    tools = {"name": "scan-tools", "image": TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent",
+             "command": ["sh", "-c", "cp /bin/busybox /lib/ld-musl-x86_64.so.1 %s/ && printf '%%s\\n' %s > %s/exclude"
+                         % (NODE_TOOLS, " ".join(NODE_SCAN_EXCLUDE), NODE_TOOLS)],
+             "securityContext": {"runAsUser": 1000, "runAsGroup": 1000, "allowPrivilegeEscalation": False,
+                                 "capabilities": {"drop": ["ALL"]}},
+             "volumeMounts": [{"name": "scan-tools", "mountPath": NODE_TOOLS}]}
+    user = {"name": "image-user", "image": ref, "imagePullPolicy": "Never",
+            "command": NODE_BUSYBOX + ["sh", "-c", "%s id -u > /scan-out/uid; %s id -g > /scan-out/gid" % (bb, bb)],
+            "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+            "volumeMounts": [{"name": "scan-tools", "mountPath": NODE_TOOLS, "readOnly": True},
+                             {"name": "rootfs", "mountPath": "/scan-out"}]}
+    copy = {"name": "image-files", "image": ref, "imagePullPolicy": "Never",
+            "command": NODE_BUSYBOX + ["sh", "-c",
+                                       "%s mkdir -p /scan-out/rootfs && cd / && %s tar -cf - -X %s/exclude . 2>/scan-out/tar.err"
+                                       " | %s tar -xof - -C /scan-out/rootfs" % (bb, bb, NODE_TOOLS, bb)],
+            "securityContext": {"runAsUser": 0, "runAsGroup": 0, "runAsNonRoot": False,
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"], "add": ["DAC_READ_SEARCH"]}},
+            "resources": {"requests": {"cpu": "250m", "memory": "256Mi"}, "limits": {"cpu": "2", "memory": "1Gi"}},
+            "volumeMounts": [{"name": "scan-tools", "mountPath": NODE_TOOLS, "readOnly": True},
+                             {"name": "rootfs", "mountPath": "/scan-out"}]}
+    scan = dict(scan, securityContext={"runAsUser": 0, "runAsGroup": 0, "runAsNonRoot": False,
+                                       "allowPrivilegeEscalation": False,
+                                       "capabilities": {"drop": ["ALL"], "add": ["DAC_READ_SEARCH"]}})
+    scan["volumeMounts"] = scan["volumeMounts"] + [{"name": "rootfs", "mountPath": "/rootfs", "readOnly": True}]
+    spec = {
+        "restartPolicy": "Never",
+        "nodeName": node,
+        "securityContext": {"fsGroup": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
+        "initContainers": [tools, user, copy] + init,
+        "containers": [scan],
+        "volumes": [{"name": "scan-tools", "emptyDir": {"sizeLimit": "64Mi"}},
+                    {"name": "rootfs", "emptyDir": {"sizeLimit": NODE_SCAN_DISK}}],
+    }
+    if PULL_SECRETS:
+        spec["imagePullSecrets"] = PULL_SECRETS
+    return spec
 
 
 def job_body(name, image_id, build_id, kind, spec):
@@ -1373,7 +1443,8 @@ class Build(threading.Thread):
         """The scan Job (trivy and the image checks, with the security data in force): the report, or None."""
         self.advance("scan")
         STORE.update_build(self.build_id, status="scanning")
-        name, body = scan_job(self.image_id, self.build_id, self.version, self.token, getattr(self, "scan_ref", None))
+        name, body = scan_job(self.image_id, self.build_id, self.version, self.token, getattr(self, "scan_ref", None),
+                              getattr(self, "scan_node", None))
         self._job(body)
         deadline = time.time() + 1800
         while time.time() < deadline and not self.cancelled:
@@ -1463,14 +1534,103 @@ class Rescan(Build):
                 grade=(report_summary(report) or {}).get("grade"), data=data)
 
 
+def node_image_groups():
+    """Every image the cluster's nodes hold (preloaded, loaded or pulled), each once with all its names there (a tag,
+    its digest) and the nodes that hold it: [{"names", "sizeBytes", "nodes"}]."""
+    status, nodes = kube_call("GET", "/api/v1/nodes")
+    groups = {}
+    for node in (nodes.get("items") or []) if status == 200 and isinstance(nodes, dict) else []:
+        name = node["metadata"]["name"]
+        for img in (node.get("status") or {}).get("images") or []:
+            names = tuple(sorted(img.get("names") or []))
+            if not names:
+                continue
+            g = groups.setdefault(names, {"names": list(names), "sizeBytes": img.get("sizeBytes") or 0, "nodes": []})
+            if name not in g["nodes"]:
+                g["nodes"].append(name)
+    return list(groups.values())
+
+
+def node_images():
+    """{name: {"sizeBytes", "nodes"}} for every name an image has on the nodes."""
+    out = {}
+    for g in node_image_groups():
+        for ref in g["names"]:
+            out[ref] = {"sizeBytes": g["sizeBytes"], "nodes": g["nodes"]}
+    return out
+
+
+def in_builder_registry(ref):
+    """The builder's registry's name for ref when it is one of its images (as workspaces pull them), else None."""
+    if ref.startswith(REGISTRY + "/"):
+        return ref
+    if ref.startswith(PULL_PREFIX + "/"):
+        return REGISTRY + ref[len(PULL_PREFIX):]
+    return None
+
+
+def scan_target(ref):
+    """(what to scan, node or None): an image of the builder's registry is read from it; any other from a node that
+    holds it (air-gapped clusters and preloaded images need no registry); one no node holds, from its registry."""
+    own = in_builder_registry(ref)
+    if own:
+        return own, None
+    holders = (node_images().get(ref) or {}).get("nodes") or []
+    if holders:
+        return ref, sorted(holders)[0]
+    return ref, None
+
+
+def scanned_id(ref):
+    """The entry of a scanned image: scan-<its name>-<a hash of the reference>."""
+    name = re.sub(r"[^a-z0-9]+", "-", ref.rsplit("/", 1)[-1].split("@")[0].lower()).strip("-")[:40] or "image"
+    return "scan-%s-%s" % (name, hashlib.sha256(ref.encode()).hexdigest()[:6])
+
+
+def start_ref_scan(ref, user):
+    """Any image, by reference: its entry (made the first time, read-only) scanned now. (entry id, build id)."""
+    ref = (ref or "").strip()
+    if not ref or len(ref) > 500 or re.search(r"\s", ref):
+        raise ValueError("An image reference, such as ghcr.io/org/image:1.0.")
+    known = {e["image"] for e in images_in_use()} | set(node_images())
+    if ref not in known and not in_builder_registry(ref):
+        raise ValueError("No workspace runs %s and no node holds it: import it first (Import), or run it once." % ref)
+    image_id = scanned_id(ref)
+    img = STORE.image(image_id)
+    if img and not img.get("scanned"):
+        raise ValueError("An image called %s exists already." % image_id)
+    if not img:
+        STORE.create(image_id, "Scanned as it is: %s. Read-only here; scan it again to update its report." % ref,
+                     dict(empty_spec(), scanned={"image": ref}), user)
+        STORE.set(image_id, status="ready", ref=ref, builtAt=now(), builtBy=user)
+    return image_id, start_rescan(image_id, user)
+
+
 def start_rescan(image_id, user):
     img = STORE.image(image_id)
-    if not img or not img.get("ref"):
+    if not img:
+        raise ValueError("No such image.")
+    target, node = None, None
+    if img.get("scanned"):
+        target, node = scan_target(img["scanned"]["image"])
+    elif img.get("ref"):
+        target = img["ref"]
+    elif (img.get("tracked") or {}).get("image"):
+        # the workspace image before the builder's registry has its copy (an install that did not seed it): read
+        # from a node that holds it
+        target, node = scan_target(img["tracked"]["image"])
+        if not node and not in_builder_registry(target):
+            raise ValueError("The builder's registry has no copy of %s yet and no node holds it." % target)
+    else:
         raise ValueError("Only a built image can be rescanned.")
     if STORE.active_build(image_id):
         raise ValueError("This image is being built or scanned already.")
     build_id, token = STORE.new_build(image_id, img["version"], img["spec"], user)
     b = Rescan(image_id, build_id, img["version"], token, img["spec"], user)
+    b.scan_ref, b.scan_node = target, node
+    if node:
+        STORE.append_log(build_id, "[scan] %s is read from node %s (its copy there; no registry needed).\n" % (
+            target, node))
     STORE.update_build(build_id, steps=b.steps(), status="scanning")
     BUILDS[build_id] = b
     b.start()
@@ -1706,9 +1866,36 @@ def images_in_use():
             entries[img["pullRef"]] = img["id"]
         if (img.get("tracked") or {}).get("image"):
             entries[img["tracked"]["image"]] = img["id"]
+        if (img.get("scanned") or {}).get("image"):
+            entries[img["scanned"]["image"]] = img["id"]
     return sorted(({"image": k, "workspaces": sorted(v["workspaces"]), "templates": sorted(v["templates"]),
                     "entry": entries.get(k)} for k, v in found.items()),
                   key=lambda x: (-len(x["workspaces"]), x["image"]))
+
+
+def images_on_nodes():
+    """Every image the nodes hold, each once (its names there together), with the nodes, its size, whether a
+    workspace runs it, and its entry here when it has one (a scan, an import, a build, the workspace image)."""
+    entries = {}
+    for img in STORE.images():
+        for key in ("pullRef", "ref"):
+            if img.get(key):
+                entries.setdefault(img[key], img["id"])
+        for kind in ("tracked", "scanned"):
+            if (img.get(kind) or {}).get("image"):
+                entries[img[kind]["image"]] = img["id"]
+    running = {e["image"] for e in images_in_use() if e["workspaces"]}
+    out = []
+    for g in node_image_groups():
+        # its readable name (a tag) first; digests as the other names
+        refs = sorted(g["names"], key=lambda r: ("@" in r, r))
+        main = refs[0]
+        entry = next((entries[r] for r in refs if r in entries), None) or entries.get(
+            in_builder_registry(main) or "", None)
+        out.append({"image": main, "names": refs[1:], "sizeBytes": g["sizeBytes"], "nodes": sorted(g["nodes"]),
+                    "running": any(r in running for r in refs), "entry": entry})
+    out.sort(key=lambda x: (not x["running"], x["entry"] is None, x["image"]))
+    return out
 
 
 RESCAN_ALL = {"running": False, "queued": [], "done": [], "failed": [], "startedAt": None}
@@ -1832,6 +2019,13 @@ def report_summary(report):
 
 
 # --------------------------------------------------------------------------- the scan (runs in the scan Job)
+# The few files the checks read.
+WALK_WANTED = re.compile(r"^(etc/(sudoers(\.d/.*)?|ssh/(ssh|sshd)_config(\.d/.*)?|ssh/ssh_host_.*_key|passwd|shadow|group|"
+                         r"ssl/openssl\.cnf|ssl/fipsmodule\.cnf|coder-image/.*|os-release)|usr/lib/os-release|var/lib/dpkg/status|"
+                         r"usr/share/coder-workspace/addons\.json|"
+                         r"(root|home/[^/]+)/\.(bash_history|ssh/id_[a-z0-9]+))$")
+
+
 def walk_image(ref):
     """The image's files (layers applied in order, whiteouts honoured): {path: (mode, size, type)} and the contents of
     the few files the checks read."""
@@ -1842,10 +2036,6 @@ def walk_image(ref):
     m, _ = manifest(repo, tag)
     with registry("GET", "%s/blobs/%s" % (repo, m["config"]["digest"]), accept="*/*") as r:
         config = json.loads(r.read())
-    wanted = re.compile(r"^(etc/(sudoers(\.d/.*)?|ssh/(ssh|sshd)_config(\.d/.*)?|ssh/ssh_host_.*_key|passwd|shadow|group|"
-                        r"ssl/openssl\.cnf|ssl/fipsmodule\.cnf|coder-image/.*|os-release)|usr/lib/os-release|var/lib/dpkg/status|"
-                        r"usr/share/coder-workspace/addons\.json|"
-                        r"(root|home/[^/]+)/\.(bash_history|ssh/id_[a-z0-9]+))$")
     files, contents = {}, {}
     for layer in m["layers"]:
         with registry("GET", "%s/blobs/%s" % (repo, layer["digest"]), accept="*/*", timeout=1800) as r:
@@ -1867,7 +2057,7 @@ def walk_image(ref):
                         continue
                     t = "d" if ti.isdir() else "l" if ti.issym() or ti.islnk() else "f"
                     files[path] = (ti.mode, ti.size, t)
-                    if t == "f" and wanted.match(path) and ti.size < 8 * 1024 * 1024:
+                    if t == "f" and WALK_WANTED.match(path) and ti.size < 8 * 1024 * 1024:
                         f = tf.extractfile(ti)
                         contents[path] = f.read().decode("utf-8", "replace") if f else ""
                     else:
@@ -1974,31 +2164,39 @@ def fips_checks(files, contents, pkgs, rules=None):
                     "nodes, and applications that use them. This checks the image's part."}
 
 
-def scan(ref, report_url):
-    """The scan Job: trivy (vulnerabilities, secrets) on the image in the registry, then the image's files."""
+def _post_to(report_url):
     def post(body):
         req = urllib.request.Request(report_url, data=json.dumps(body).encode(), method="POST",
                                      headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=60).read()
+    return post
 
-    post({"progress": "scan"})
-    report = {"ref": ref, "scannedAt": now()}
-    # the security data in force: fetched by the init container (an uploaded set), else the bundled
-    data = securitydata.job_stamp(os.environ.get("SECURITY_DIR"))
-    report["data"] = data["stamp"]
-    cmd = ["trivy", "image", "--insecure", "--cache-backend", "memory", "--cache-dir", data["cacheDir"],
+
+def _trivy(target, data, rootfs=False):
+    """trivy's findings on an image (in a registry) or on a directory of its files: (parsed JSON, error or None)."""
+    cmd = ["trivy", "rootfs" if rootfs else "image", "--cache-backend", "memory", "--cache-dir", data["cacheDir"],
            "--skip-db-update", "--skip-java-db-update", "--scanners", "vuln,secret",
            "--format", "json", "--quiet", "--timeout", "25m"]
+    if not rootfs:
+        cmd.insert(2, "--insecure")
     if not data["java"]:
         # Java archives need trivy's Java database: without one (the bundled data), they are not analysed
         cmd += ["--skip-files", "**/*.jar", "--skip-files", "**/*.war", "--skip-files", "**/*.ear"]
-    p = subprocess.run(cmd + [ref], capture_output=True, timeout=1800)
+    p = subprocess.run(cmd + [target], capture_output=True, timeout=1800)
     try:
         t = json.loads(p.stdout or b"{}")
     except ValueError:
         t = {}
     if p.returncode != 0 and not t:
-        report["error"] = "trivy: " + p.stderr.decode()[-600:]
+        return t, "trivy: " + p.stderr.decode()[-600:]
+    return t, None
+
+
+def _report(ref, t, error, data, config, files, contents, source):
+    """The report from trivy's findings and the image's files (the same whichever way they were read)."""
+    report = {"ref": ref, "scannedAt": now(), "data": data["stamp"], "source": source}
+    if error:
+        report["error"] = error
     vulns, secrets_, na = [], [], {}
     for res in t.get("Results") or []:
         for v in res.get("Vulnerabilities") or []:
@@ -2010,11 +2208,11 @@ def scan(ref, report_url):
                 na.setdefault(rule, []).append(item)
             else:
                 vulns.append(item)
-        for s in res.get("Secrets") or []:
-            secrets_.append({"rule": s.get("RuleID"), "title": s.get("Title"), "severity": s.get("Severity"),
-                             "target": res.get("Target"), "line": s.get("StartLine")})
-    counts = {s: sum(1 for v in vulns if v["severity"] == s) for s in SEVERITIES}
-    order = {s: i for i, s in enumerate(SEVERITIES)}
+        for s_ in res.get("Secrets") or []:
+            secrets_.append({"rule": s_.get("RuleID"), "title": s_.get("Title"), "severity": s_.get("Severity"),
+                             "target": res.get("Target"), "line": s_.get("StartLine")})
+    counts = {s_: sum(1 for v in vulns if v["severity"] == s_) for s_ in SEVERITIES}
+    order = {s_: i for i, s_ in enumerate(SEVERITIES)}
     vulns.sort(key=lambda v: (order.get(v["severity"], 9), v["fixed"] == "", v["pkg"] or ""))
     report["vulnerabilities"] = {"counts": counts, "total": len(vulns), "fixable": sum(1 for v in vulns if v["fixed"]),
                                  "top": vulns[:200], "scanned": not report.get("error"),
@@ -2025,14 +2223,12 @@ def scan(ref, report_url):
                                  # set apart, each rule with its reason, how many, and the findings (the first 100)
                                  "notApplicable": [
                                      {"rule": rule, "reason": NA_REASONS[rule], "total": len(items),
-                                      "counts": {s: sum(1 for x in items if x["severity"] == s) for s in SEVERITIES},
+                                      "counts": {s_: sum(1 for x in items if x["severity"] == s_) for s_ in SEVERITIES},
                                       "packages": sorted({x["pkg"] for x in items}),
                                       "items": sorted(items, key=lambda x: order.get(x["severity"], 9))[:100]}
                                      for rule, items in sorted(na.items())]}
     report["secrets"] = secrets_[:50]
     report["dbUpdatedAt"] = data["stamp"]["vulnerabilityDbUpdatedAt"]
-    post({"progress": "checks"})
-    config, files, contents = walk_image(ref)
     checks, pkgs = image_checks(config, files, contents)
     report["checks"] = checks
     report["fips"] = fips_checks(files, contents, pkgs, data["rules"] or None)
@@ -2040,7 +2236,62 @@ def scan(ref, report_url):
     report["os"] = (re.search(r'^PRETTY_NAME="?([^"\n]+)', release, re.M) or [None, None])[1]
     report["addons"] = addons_of(contents.get(ADDONS_PATH))
     report["grade"] = grade(report)
-    post({"report": report})
+    return report
+
+
+def scan(ref, report_url):
+    """The scan Job: trivy (vulnerabilities, secrets) on the image in the registry, then the image's files."""
+    post = _post_to(report_url)
+    post({"progress": "scan"})
+    # the security data in force: fetched by the init container (an uploaded set), else the bundled
+    data = securitydata.job_stamp(os.environ.get("SECURITY_DIR"))
+    t, error = _trivy(ref, data)
+    post({"progress": "checks"})
+    config, files, contents = walk_image(ref)
+    post({"report": _report(ref, t, error, data, config, files, contents, "registry")})
+
+
+def walk_rootfs(root):
+    """walk_image's answer for a directory of the image's files: {path: (mode, size, type)} and the checks' files."""
+    files, contents = {}, {}
+    for d, dirs, names in os.walk(root):
+        for name in dirs + names:
+            full = os.path.join(d, name)
+            path = os.path.relpath(full, root)
+            try:
+                st = os.lstat(full)
+            except OSError:
+                continue
+            t = "d" if os.path.isdir(full) and not os.path.islink(full) else "l" if os.path.islink(full) else "f"
+            files[path] = (st.st_mode, st.st_size, t)
+            if t == "f" and WALK_WANTED.match(path) and st.st_size < 8 * 1024 * 1024:
+                try:
+                    with open(full, "rb") as f:
+                        contents[path] = f.read().decode("utf-8", "replace")
+                except OSError:
+                    pass
+    return files, contents
+
+
+def scan_rootfs(ref, report_url, out):
+    """The node scan Job: trivy on the image's files copied out of a node's copy (out/rootfs), then the same checks
+    (its default user as the image ran it: out/uid)."""
+    post = _post_to(report_url)
+    post({"progress": "scan"})
+    data = securitydata.job_stamp(os.environ.get("SECURITY_DIR"))
+    root = os.path.join(out, "rootfs")
+    t, error = _trivy(root, data, rootfs=True)
+    if error is None and not os.listdir(root):
+        error = "The image's files could not be copied out of the node's copy of it."
+    post({"progress": "checks"})
+    try:
+        with open(os.path.join(out, "uid")) as f:
+            uid = f.read().strip()
+    except OSError:
+        uid = ""
+    config = {"config": {"User": "" if uid in ("", "0") else uid}}
+    files, contents = walk_rootfs(root)
+    post({"report": _report(ref, t, error, data, config, files, contents, "node")})
 
 
 def addons_of(text_):
@@ -2287,6 +2538,12 @@ def route(h, method, rest, query, user, editor, admin):
             return import_upload(h, q_, user) or True
         if rest == "/in-use" and method == "GET":
             return h.send_json(200, {"images": images_in_use()}) or True
+        if rest == "/on-nodes" and method == "GET":
+            return h.send_json(200, {"images": images_on_nodes()}) or True
+        if rest == "/scan" and method == "POST":
+            need(editor)
+            image_id, build_id = start_ref_scan(str(read_json(h).get("image") or ""), user["username"])
+            return h.send_json(200, {"id": image_id, "build": build_id}) or True
         m = re.match(r"^/([a-z0-9-]+)(/.*)?$", rest)
         if not m:
             return h.send_json(404, {"error": "not found"}) or True
@@ -2300,6 +2557,10 @@ def route(h, method, rest, query, user, editor, admin):
             raise ValueError(TRACKED_NOTE % img["tracked"].get("image"))
         if img.get("imported") and (sub in ("/build", "/files/delete") or sub.startswith("/files/")):
             raise ValueError(IMPORTED_NOTE % img["imported"].get("from"))
+        if img.get("scanned") and ((sub == "" and method == "POST") or sub in ("/build", "/s3", "/s3/backup",
+                                                                             "/files/delete", "/download")
+                                   or sub.startswith("/files/")):
+            raise ValueError(SCANNED_NOTE % img["scanned"].get("image"))
 
         def detail(img):
             """The image page's view (GET, and what a save answers with, so the dashboard can keep it)."""
@@ -2409,8 +2670,10 @@ def _quiet(fn, *args):
             LOG(event="image-s3-backup-failed", error=str(e)[:300])
 
 
+SCANNED_NOTE = ("This entry is a scan of %s as it is, not an image built or kept here: it only holds its report. "
+                "Import the image to build on it.")
 RESERVED_NAMES = {"security-data", "rescan-all", "settings", "apt-check", "apt-search", "apt-refresh", "lint", "format",
-                  "dockerfile", "import", "import-upload", "in-use", TRACKED_ID}
+                  "dockerfile", "import", "import-upload", "in-use", "on-nodes", "scan", TRACKED_ID}
 
 IMPORTED_NOTE = ("This image was imported (%s), not built here: import a new version of it instead of building, or "
                  "build on it with New Image.")
@@ -2550,5 +2813,7 @@ if __name__ == "__main__":
         fetch_context(sys.argv[2], sys.argv[3])
     elif sys.argv[1:2] == ["scan"]:
         scan(sys.argv[2], sys.argv[3])
+    elif sys.argv[1:2] == ["scan-rootfs"]:
+        scan_rootfs(sys.argv[2], sys.argv[3], sys.argv[4])
     else:
         sys.exit(__doc__)

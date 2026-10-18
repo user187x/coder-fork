@@ -90,6 +90,15 @@ rules:
   - apiGroups: [""]
     resources: [pods/ephemeralcontainers]
     verbs: [patch]
+  # Provisioner Daemons (provisioners.py): the terraform processes in Coder's own pods read and, on a re-kick, stopped
+  # (exec in the coder container); a pod whose daemon a re-kick did not free restarted (deleted; its Deployment starts
+  # another).
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
   - apiGroups: [""]
     resources: [pods]
     verbs: [patch]
@@ -116,19 +125,21 @@ rules:
     resources: [networkpolicies]
     verbs: [get, list]
   {{- if eq (toString ($.Values.global.userStorage | default dict).enabled) "true" }}
-  # The safe (safe.py): every account's claim coder-safe-<id> (made above: persistentvolumeclaims create), the Secret
-  # its volume mounts with (made: secrets create; kept up to date here), and the chart's MinIO's address for the nodes.
+  # The safe (safe.py): every account's claim coder-safe-<id> (made above: persistentvolumeclaims create), the
+  # Secrets its volume mounts with (plain and TLS), the encrypted Cloud Drives' data keys (coder-cloud-drive-keys), the
+  # chart's MinIO's address for the nodes; a workspace folder as an account's Cloud Drive: its Service, mount Secret
+  # and volume (coder-drive-src-<id>, named per account, so Secrets and Services by any name - exec in Coder's pods,
+  # above, reaches as much already); and the ConfigMap the workspace templates read (coder-cloud-drive).
   - apiGroups: [""]
     resources: [secrets]
-    resourceNames: [coder-user-storage-mount]
-    verbs: [get, update]
-  - apiGroups: [""]
-    resources: [secrets]
-    verbs: [create]
+    verbs: [get, create, update, delete]
   - apiGroups: [""]
     resources: [services]
-    resourceNames: [coder-user-storage-minio]
-    verbs: [get]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [coder-cloud-drive]
+    verbs: [get, update]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -157,10 +168,11 @@ rules:
     resources: [nodes, pods]
     verbs: [get, list]
   {{- if eq (toString ($.Values.global.userStorage | default dict).enabled) "true" }}
-  # The safe: every account's PersistentVolume coder-safe-<id> (static, its S3 prefix; Retain).
+  # The safe: every account's PersistentVolume coder-safe-<id> (static, its S3 prefix; Retain), and its source's
+  # (coder-drive-src-<id>); replaced when what it mounts changes (encryption, another backend), once unused.
   - apiGroups: [""]
     resources: [persistentvolumes]
-    verbs: [get, create]
+    verbs: [get, list, create, delete]
   {{- end }}
   # The Settings menu's network graph: each node's traffic counters from its kubelet's /stats/summary, read on the
   # kubelet's port as metrics-server does (nodes/stats; not nodes/proxy, which reaches far more).

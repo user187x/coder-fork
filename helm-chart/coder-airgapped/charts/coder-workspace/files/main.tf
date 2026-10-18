@@ -342,6 +342,28 @@ locals {
   # The Cloud Drive's volume, out of the way: user_storage_path links to it while the owner keeps the workspace
   # connected (coder_script.cloud_drive).
   cloud_drive_mount = "/mnt/cloud-drive"
+  # What the platform service says of the Cloud Drive when this workspace starts (data.kubernetes_config_map_v1.cloud_drive):
+  # a workspace shared with others has none (the Cloud Drive is its owner's alone); the owner's source workspace (a
+  # folder of it is their Cloud Drive) serves that folder and links to it; the owner's others mount the source's
+  # volume while it runs, else nothing until their next start ("offline"); without a source, the S3 volume.
+  cloud_drive_state     = try(jsondecode(data.kubernetes_config_map_v1.cloud_drive[0].data["state"]), {})
+  cloud_drive_shared    = contains(try(local.cloud_drive_state.shared, []), data.coder_workspace.me.id)
+  cloud_drive_source    = try(local.cloud_drive_state.sources[data.coder_workspace_owner.me.id], null)
+  cloud_drive_is_source = try(local.cloud_drive_source.workspace, "") == data.coder_workspace.me.id
+  cloud_drive_mode = (!var.user_storage ? "" : local.cloud_drive_shared ? "shared" : local.cloud_drive_is_source ? "source"
+  : local.cloud_drive_source == null || try(local.cloud_drive_source.running, false) ? "mount" : "offline")
+  cloud_drive_claim = local.cloud_drive_mode != "mount" ? "" : (local.cloud_drive_source == null
+  ? "coder-safe-${data.coder_workspace_owner.me.id}" : "coder-drive-src-${data.coder_workspace_owner.me.id}")
+}
+
+# The Cloud Drive's state, kept by the platform service (the chart's coder-workspace Role lets Coder's service account
+# read this one ConfigMap): {"shared": [workspace ids], "sources": {owner id: {workspace, path, running}}}.
+data "kubernetes_config_map_v1" "cloud_drive" {
+  count = var.user_storage ? 1 : 0
+  metadata {
+    name      = "coder-cloud-drive"
+    namespace = var.namespace
+  }
 }
 
 resource "coder_agent" "main" {
@@ -478,8 +500,10 @@ resource "coder_script" "cloud_drive" {
   run_on_start       = true
   start_blocks_login = true
   script = templatefile("${path.module}/scripts/cloud-drive.sh", {
-    link  = var.user_storage_path
-    mount = local.cloud_drive_mount
+    link = var.user_storage_path
+    mode = local.cloud_drive_mode
+    # the volume, where this workspace has one ("on"); the source's folder comes in the annotation (source:<folder>)
+    mount = local.cloud_drive_claim != "" ? local.cloud_drive_mount : ""
   })
 }
 
@@ -769,7 +793,9 @@ resource "kubernetes_deployment_v1" "main" {
         }
         # Connected to the owner's Cloud Drive from the start; the platform service sets "off" for a workspace the
         # owner disconnected (and back), and the pod reads it at /etc/platform/cloud-drive.
-        annotations = var.user_storage ? { "platform.coder/cloud-drive" = "on" } : {}
+        # The source workspace (a folder of it is the owner's Cloud Drive) starts linking that folder.
+        annotations = var.user_storage ? { "platform.coder/cloud-drive" = (local.cloud_drive_is_source
+        ? "source:${try(local.cloud_drive_source.path, "")}" : "on") } : {}
       }
       spec {
         security_context {
@@ -881,7 +907,7 @@ resource "kubernetes_deployment_v1" "main" {
           # The owner's Cloud Drive: the same files in every one of their workspaces (and on the Workspaces page), at
           # user_storage_path while the workspace is connected (a link to this mount; coder_script.cloud_drive).
           dynamic "volume_mount" {
-            for_each = var.user_storage ? [1] : []
+            for_each = local.cloud_drive_claim != "" ? [1] : []
             content {
               mount_path = local.cloud_drive_mount
               name       = "safe"
@@ -965,13 +991,14 @@ resource "kubernetes_deployment_v1" "main" {
           }
         }
 
-        # The owner's Cloud Drive: their S3 prefix, through the cluster's CSI driver (ReadWriteMany: all their workspaces).
+        # The owner's Cloud Drive: their S3 prefix, or their source workspace's folder, through the cluster's CSI driver
+        # (ReadWriteMany: all their workspaces); none in a shared workspace or the source itself (local.cloud_drive_mode).
         dynamic "volume" {
-          for_each = var.user_storage ? [1] : []
+          for_each = local.cloud_drive_claim != "" ? [1] : []
           content {
             name = "safe"
             persistent_volume_claim {
-              claim_name = "coder-safe-${data.coder_workspace_owner.me.id}"
+              claim_name = local.cloud_drive_claim
             }
           }
         }

@@ -141,6 +141,11 @@ spec:
     jsonPointers:
     - /data/password
     - /stringData/password
+  # The chart's MinIO's TLS (a CA and certificate made on the first sync, as the passwords).
+  - kind: Secret
+    name: coder-user-storage-minio-tls
+    jsonPointers:
+    - /data
   # The banner service stores what admins publish in this ConfigMap at runtime.
   - kind: ConfigMap
     name: coder-banner-state

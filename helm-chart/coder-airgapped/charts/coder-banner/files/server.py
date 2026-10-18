@@ -59,9 +59,16 @@ LEVELS = ("info", "success", "warning", "critical")
 # others with fx.css). The chart's defaults are checked against these lists as well (templates/_helpers.tpl).
 EFFECTS = ("none", "typewriter", "fade", "rise", "wave", "bounce", "flip", "shake", "pulse", "rainbow", "starwars",
            "pewpew", "flap", "shimmer", "kitt")
-# The crawl's pace (effect "starwars") and the banner's font (the dashboard's bundled fonts and generic stacks:
-# nothing is fetched, the network may be air-gapped). Keep in sync with the dashboard's bannerFonts.ts.
+# The Knight Rider sweep's pace (and the crawl's, in announcements saved before crawlSpeed) and the banner's font
+# (the dashboard's bundled fonts and generic stacks: nothing is fetched, the network may be air-gapped). Keep in sync
+# with the dashboard's bannerFonts.ts.
 SPEEDS = ("slow", "normal", "fast")
+# The crawl (effect "starwars"): its pace in pixels per second and how far its lines converge towards a horizon, in
+# percent (0 a flat scroller from the bottom up, 100 the opening crawl); the dashboard's CRAWL_SPEED and CRAWL_TILT.
+CRAWL_SPEED = (4, 60)
+CRAWL_TILT = (0, 100)
+# The crawl's pace before it had its own setting, by speed.
+LEGACY_CRAWL_SPEED = {"slow": 9, "normal": 15, "fast": 26}
 # How the dashboard takes the banner away when someone dismisses it.
 CLOSE_EFFECTS = ("none", "pixelate", "rollup", "fade", "wipe", "matrix", "gaussian", "evaporate", "kitt")
 # How the banner comes in when it appears (the dashboard's BANNER_OPEN_EFFECTS).
@@ -98,6 +105,8 @@ FIELDS = {
     "effect": "none",
     "repeat": False,
     "speed": "normal",
+    "crawlSpeed": 15,
+    "crawlTilt": 100,
     "font": "default",
     # Receipts: the dashboard records who viewed the announcement and lets them confirm it (the Viewed box, Confirm).
     # Off for a greeting nobody needs to account for.
@@ -206,10 +215,18 @@ class Banner:
         self._cached_at = 0.0
         self._cached = {}
 
+    @staticmethod
+    def with_fields(b):
+        """b over the fields' defaults; a crawl saved before crawlSpeed keeps the pace its speed gave it."""
+        out = {**FIELDS, **b}
+        if "crawlSpeed" not in b:
+            out["crawlSpeed"] = LEGACY_CRAWL_SPEED.get(out["speed"], FIELDS["crawlSpeed"])
+        return out
+
     def defaults(self):
         try:
             with open(DEFAULTS_FILE) as f:
-                return {**FIELDS, **json.load(f)}
+                return self.with_fields(json.load(f))
         except (OSError, ValueError):
             return dict(FIELDS)
 
@@ -237,7 +254,7 @@ class Banner:
         state = self.state()
         override = state.get("override")
         if override:
-            b = {**FIELDS, **override}
+            b = self.with_fields(override)
             b["id"] = self.make_id(b, state.get("revision", 0))
         else:
             b = self.defaults()
@@ -294,6 +311,13 @@ class Banner:
         out["speed"] = payload.get("speed", "normal")
         if out["speed"] not in SPEEDS:
             raise BannerError("Speed must be one of: %s." % ", ".join(SPEEDS))
+        crawl_speed = payload.get("crawlSpeed", LEGACY_CRAWL_SPEED.get(out["speed"], FIELDS["crawlSpeed"]))
+        for key, value, (low, high), what in (("crawlSpeed", crawl_speed, CRAWL_SPEED, "The crawl's speed"),
+                                              ("crawlTilt", payload.get("crawlTilt", FIELDS["crawlTilt"]), CRAWL_TILT,
+                                               "The crawl's convergence")):
+            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                raise BannerError("%s must be a whole number from %d to %d." % (what, low, high))
+            out[key] = value
         out["font"] = payload.get("font", "default")
         if out["font"] not in FONTS:
             raise BannerError("Font must be one of: %s." % ", ".join(FONTS))

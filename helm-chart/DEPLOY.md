@@ -524,10 +524,11 @@ written at every start) list every language model LM Studio has, the default the
 ## The Cloud Drive (each account's own storage)
 
 Every account has a **Cloud Drive**: its own files on S3, the same ones everywhere. On the Workspaces page it is one
-button above the table, flush with its right edge, with a cable from its socket to a plug in each connected workspace
-row; it opens a window in the middle of the screen (folders, upload with progress or by dropping files, download,
-delete) with its **Workspaces** (which are connected, a switch each) and its **Settings**: where the files are kept
-and whether that storage answers (checked every half minute; the cables turn red and dashed when it does not). Every
+button above the table (as tall as **+ Workspace**), flush with its right edge, with a cable from its socket to a plug
+in each connected workspace row; it opens a window in the middle of the screen (folders, upload with progress or by
+dropping files, download, delete) with its **Workspaces** (which are connected, a switch each), its **Encryption**, its
+**Source** and its **Settings**: where the files are kept and whether that storage answers (checked every half minute;
+the cables turn red and dashed when it does not). Every
 connected workspace of the account has it at `~/cloud-drive`; the workspace page shows a cloud right of the latency,
 with how full the drive is and its first files on hover. On by default (`global.userStorage.enabled`). Its API,
 claims and volumes keep the earlier name, `safe` (`/api/safe`, `coder-safe-<user id>`).
@@ -542,6 +543,37 @@ claims and volumes keep the earlier name, `safe` (`/api/safe`, `coder-safe-<user
   (`/data/cloud-drive-links.json`) and every running workspace pod's annotation so (a restarted one gets its
   disconnection back within 5 seconds). A workspace on a template version from before this takes the change once it
   is updated. It is a convenience, not a wall: the volume stays mounted in the pod.
+* **Only its owner:** the API serves the caller's own drive only, and a workspace shared with other users or groups
+  (Coder's workspace sharing) never has its owner's: its link is cut at once, it cannot be connected while shared, and
+  from its next start it mounts no Cloud Drive (the platform service lists shared workspaces in the ConfigMap
+  `coder-cloud-drive`, which the template reads when a workspace starts; Coder's service account may read that one
+  ConfigMap). One shared while it ran keeps the volume it started with until it restarts: the Cloud Drive's
+  **Workspaces** says so.
+* **Encryption (each owner's choice):** in **Encryption** the owner wraps a key of their own with a password (12
+  characters or more, never stored) or their certificate (an RSA certificate, PEM or DER - its public part; e.g.
+  `openssl pkcs12 -in you.p12 -clcerts -nokeys`). The recovery kit downloads first - where the files are (endpoint,
+  bucket, prefix), how many and how much, the scheme, the key wrapped for `openssl enc` (password) or `openssl
+  pkeyutl` (certificate), and the steps to get every file back with the AWS CLI or GeeseFS - and encryption turns on
+  only once the owner says it is kept and none of their workspaces has the drive (stop them first). Every object is
+  then re-encrypted in place with S3's customer-key encryption (SSE-C, AES-256: the storage keeps no copy of the key),
+  in the background; a run that stops is taken up again where it was. The key is kept for the mounts in Secret
+  `coder-cloud-drive-keys` (admins can reach it); the connected workspaces read and write as before and show a lock
+  on their icon. Turning it off needs the password (or the data key from the kit). SSE-C needs TLS: the chart's MinIO
+  serves TLS on 9443 (its certificate made once, Secret `coder-user-storage-minio-tls`; Argo CD: ignoreDifferences on
+  its `/data`), and its old port 9000 is a plain bridge to it in the same pod for unencrypted mounts and the
+  libraries. The nodes' encrypted mounts reach MinIO by its ClusterIP, which no certificate can name, so they do not
+  check its certificate (GeeseFS takes no CA); the platform service checks it. An S3 service of your own needs an
+  https endpoint for it.
+* **A workspace folder as the Cloud Drive (Source):** the owner picks one of their workspaces and a folder of its home
+  (not the home itself, not a hidden folder). The platform service starts a small S3 server in that workspace
+  (`drivesource.py`, through the exec API, as the workspace's user; every request signed with a key of its own),
+  and their other workspaces mount it (volume `coder-drive-src-<user id>`, through Service `coder-drive-src-<user
+  id>`) from their next start while it runs - one that starts while it is stopped has no Cloud Drive until its next
+  start. The source workspace links `~/cloud-drive` to the folder itself. The files on the S3 storage stay, unused,
+  until the owner goes back to it (**Back to the S3 storage**). Deleting the source workspace is guarded: the delete
+  dialog lists the workspaces connected to it, each needs **Confirm: OK to disconnect**, and `delete` must be typed
+  and Enter pressed; it is never deleted in a batch. Deleted past the dashboard (CLI, API), the drive goes back to
+  S3 within half a minute. Encryption is for the S3 storage: off while a folder is the source.
 
 * **Where the files are:** one bucket (`userStorage.bucket`), a prefix `users/<user id>/` per account. By default on
   the chart's MinIO (one instance, a `userStorage.minio.size` volume; its keys in Secret `coder-user-storage-s3`,
@@ -560,9 +592,9 @@ claims and volumes keep the earlier name, `safe` (`/api/safe`, `coder-safe-<user
 * **Each account's volume:** the platform service makes a PersistentVolume and claim `coder-safe-<user id>` for every
   account within a minute of its creation (Retain: removing them never removes files). A workspace started before
   that waits for it.
-* **Mount options** (`userStorage.csi.mountOptions`) are written into each account's volume when it is made. To give
-  an account the new ones, delete its claim and volume `coder-safe-<user id>` while none of its workspaces runs; the
-  files stay, and the platform service makes them again within a minute.
+* **Mount options** (`userStorage.csi.mountOptions`) are written into each account's volume when it is made. When they
+  change (or the account's encryption, or the storage), the platform service makes the volume again once none of the
+  account's workspaces has it; the files stay.
 * **Limits:** `userStorage.quotaGiB` (10) per account for uploads on the page, `userStorage.maxUploadGiB` (5) a file.
   Admins change every account's capacity in the Cloud Drive's **Settings** (a slider, or a number of 1 to 10240 GiB;
   kept in the platform service's volume, `/data/cloud-drive-quota.json`); **Use the chart's** goes back to
@@ -573,6 +605,24 @@ claims and volumes keep the earlier name, `safe` (`/api/safe`, `coder-safe-<user
   Files written inside a workspace are not stopped at the quota (S3 has none per prefix); the page shows what is used.
 * **Images:** `ghcr.io/user187x/coder-minio` (Chainguard's MinIO build; the MinIO project publishes no images since
   2025: `development/tools/build-minio-image.sh`) and the driver's two images, all in `images.txt` and the bundle.
+
+## Disaster recovery for Coder's database (General > Persistence)
+
+Besides CloudNativePG's backups (in the cluster), the Persistence view's **Disaster recovery** card copies Coder's
+database out of it:
+
+* **Download a dump** - `pg_dump` (custom format) streamed to the admin's browser. Restore it with
+  `pg_restore --clean --if-exists --no-owner -d <database> coder-db-<time>.dump`.
+* **An S3 bucket** - a dump every N hours (or **Run now**) to `<prefix>coder-db-<UTC time>.dump`, the newest N kept;
+  a private CA can be given. The dump streams through the platform service one part at a time, never whole.
+* **An external PostgreSQL** - Coder's database copied into it every N hours (`pg_dump | pg_restore --clean`): it
+  holds what Coder's held then, and is never written back. The copy runs in the database's primary pod, so that pod
+  must reach the external database (an egress rule where NetworkPolicies limit it); its address is passed on stdin,
+  never in a command line.
+
+The dumps run in the CloudNativePG primary (it has `pg_dump`, `pg_restore` and `psql`; the platform service has none)
+through the exec API. Targets and their keys are kept in the platform service's volume (`/data/dr.json`, 0600), with
+the last 50 runs. A database outside the cluster (no CloudNativePG primary) is left to its provider's backups.
 
 ## High availability
 

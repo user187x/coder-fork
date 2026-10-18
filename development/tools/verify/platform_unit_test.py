@@ -18,8 +18,149 @@ def load(name, file):
 
 
 ui = load("ui_service", "ui-service.py")
+_banner_spec = importlib.util.spec_from_file_location("banner_server", os.path.normpath(os.path.join(
+    SRC, "../../charts/coder-banner/files/server.py")))
+bn = importlib.util.module_from_spec(_banner_spec)
+_banner_spec.loader.exec_module(bn)
 ib = load("imagebuilder", "imagebuilder.py")
 ld = load("lockdown", "lockdown.py")
+pv = load("provisioners", "provisioners.py")
+
+
+class NodeScanTest(unittest.TestCase):
+    """Images: any image can be scanned - from the builder's registry, else from a node that holds it (air-gapped,
+    preloaded), with the image's files copied out by the tools image's busybox run through musl's loader."""
+
+    def test_where_an_image_is_scanned_from(self):
+        nodes = {"ghcr.io/x/ws:1": {"sizeBytes": 1, "nodes": ["n2", "n1"]}}
+        with mock.patch.object(ib, "node_images", return_value=nodes):
+            self.assertEqual(ib.scan_target("ghcr.io/x/ws:1"), ("ghcr.io/x/ws:1", "n1"))
+            self.assertEqual(ib.scan_target("harbor.local/x/other:2"), ("harbor.local/x/other:2", None))
+            self.assertEqual(ib.scan_target(ib.PULL_PREFIX + "/coder-images/a:3"),
+                             (ib.REGISTRY + "/coder-images/a:3", None))
+
+    def test_scanned_entries_are_named_after_the_image(self):
+        a = ib.scanned_id("ghcr.io/user187x/coder-workspace-dataflow:1.1.0")
+        self.assertRegex(a, r"^scan-coder-workspace-dataflow-1-1-0-[0-9a-f]{6}$")
+        self.assertNotEqual(a, ib.scanned_id("other.io/user187x/coder-workspace-dataflow:1.1.0"))
+
+    def test_the_node_job_copies_the_files_as_root_and_runs_nothing_privileged(self):
+        _, job = ib.scan_job("scan-x", 7, 1, "tok", ref="ghcr.io/x/ws:1", node="n1")
+        spec = job["spec"]["template"]["spec"]
+        self.assertEqual(spec["nodeName"], "n1")
+        names = [c["name"] for c in spec["initContainers"]]
+        self.assertEqual(names[:3], ["scan-tools", "image-user", "image-files"])
+        user, copy = spec["initContainers"][1], spec["initContainers"][2]
+        for c in (user, copy):
+            self.assertEqual(c["image"], "ghcr.io/x/ws:1")
+            self.assertEqual(c["imagePullPolicy"], "Never")       # the node's copy, never pulled
+            self.assertEqual(c["command"][:2], ib.NODE_BUSYBOX)    # the loader runs busybox in any image
+            self.assertFalse(c["securityContext"]["allowPrivilegeEscalation"])
+        self.assertNotIn("runAsUser", user["securityContext"])   # the image's own default user
+        self.assertEqual(copy["securityContext"]["capabilities"], {"drop": ["ALL"], "add": ["DAC_READ_SEARCH"]})
+        self.assertIn("scan-rootfs", spec["containers"][0]["command"])
+
+    def test_reads_a_copied_image_like_a_registry_one(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "etc"))
+            with open(os.path.join(d, "etc/os-release"), "w") as f:
+                f.write('PRETTY_NAME="Ubuntu 24.04 LTS"\n')
+            with open(os.path.join(d, "etc/shadow"), "w") as f:
+                f.write("root:!:1::::::\ncoder::1::::::\n")
+            files, contents = ib.walk_rootfs(d)
+            self.assertIn("etc/shadow", files)
+            self.assertEqual(files["etc"][2], "d")
+            data = {"stamp": {"vulnerabilityDbUpdatedAt": "2026-10-01"}, "java": True, "rules": None}
+            trivy = {"Results": [{"Target": "x", "Vulnerabilities": [
+                {"VulnerabilityID": "CVE-1", "PkgName": "openssl", "Severity": "HIGH", "FixedVersion": "3.1"}]}]}
+            report = ib._report("ghcr.io/x/ws:1", trivy, None, data, {"config": {"User": "1000"}}, files, contents,
+                                "node")
+        self.assertEqual(report["source"], "node")
+        self.assertEqual(report["os"], "Ubuntu 24.04 LTS")
+        self.assertEqual(report["vulnerabilities"]["counts"]["HIGH"], 1)
+        self.assertEqual(next(c for c in report["checks"] if c["id"] == "passwords")["status"], "fail")
+        self.assertEqual(next(c for c in report["checks"] if c["id"] == "user")["status"], "pass")
+
+
+class ProvisionersTest(unittest.TestCase):
+    """Provisioner Daemons: the terraform processes read from a Coder pod, the exec WebSocket's frames, and a re-kick
+    that stops only the processes of the jobs it was given."""
+
+    def test_parses_processes_and_their_subcommand(self):
+        procs = pv.parse_processes("812 S 930 /usr/local/bin/terraform apply -auto-approve -json\n"
+                                   "900 Z 12 terraform\njunk\n")
+        self.assertEqual([(p["pid"], p["command"], p["defunct"], p["ageSeconds"]) for p in procs],
+                         [(812, "apply", False, 930), (900, "", True, 12)])
+
+    def test_reads_websocket_frames(self):
+        import struct as st
+        big = b"\x01" + b"x" * 300
+        frames = (bytes([0x82, len(b"\x01hi")]) + b"\x01hi"
+                  + bytes([0x82, 126]) + st.pack(">H", len(big)) + big
+                  + bytes([0x82, 0x80 | 3]) + b"\x00\x00\x00\x00" + b"\x02ok"
+                  + bytes([0x88, 0]))
+
+        class Sock:
+            def __init__(self, data):
+                self.data = data
+
+            def recv(self, n):
+                out, self.data = self.data[:n], self.data[n:]
+                return out
+        r = pv._Frames(Sock(frames[5:]), frames[:5])
+        self.assertEqual(r.next(), (2, b"\x01hi"))
+        self.assertEqual(r.next(), (2, big))
+        self.assertEqual(r.next(), (2, b"\x02ok"))
+        self.assertEqual(r.next()[0], 8)
+        self.assertIsNone(r.next())
+
+    def test_rekick_stops_only_what_predates_the_jobs_still_running(self):
+        stuck = {"id": "j1", "status": "running", "ageSeconds": 3600, "workspaceBuildId": "b1", "workspace": "w"}
+        healthy = {"id": "j2", "status": "running", "ageSeconds": 60, "workspaceBuildId": "b2", "workspace": "v"}
+        procs = {"coder-0": [{"pid": 10, "state": "S", "defunct": False, "ageSeconds": 3590, "command": "apply"},
+                             {"pid": 11, "state": "S", "defunct": False, "ageSeconds": 50, "command": "apply"},
+                             {"pid": 12, "state": "Z", "defunct": True, "ageSeconds": 4000, "command": ""}]}
+        calls = []
+        with mock.patch.object(pv, "jobs", side_effect=lambda *a, **k: [stuck, healthy]), \
+                mock.patch.object(pv, "processes", return_value=procs), \
+                mock.patch.object(pv, "cancel", return_value=None), \
+                mock.patch.object(pv, "exec_in", side_effect=lambda pod, cmd, **k: calls.append((pod, cmd)) or (0, "", "")), \
+                mock.patch.object(pv, "CANCEL_WAIT", 0), mock.patch.object(pv.time, "sleep"):
+            out = pv.rekick("token", ["j1"], "admin")
+        self.assertEqual([p["pid"] for p in out["stopped"]], [10])   # not the healthy job's, not the zombie
+        self.assertIn("kill -TERM 10", calls[0][1][2])
+        self.assertEqual(out["stillRunning"], ["j1"])
+        with mock.patch.object(pv, "jobs", return_value=[]):
+            with self.assertRaises(LookupError):
+                pv.rekick("token", ["gone"], "admin")
+
+
+class BannerCrawlTest(unittest.TestCase):
+    """The announcement service (coder-banner) takes the crawl's pace and convergence as whole numbers in range, and a
+    crawl saved before they existed keeps the pace its speed gave it."""
+
+    def payload(self, **kv):
+        return {"enabled": True, "message": "Hello", "effect": "starwars", **kv}
+
+    def test_takes_both_in_range(self):
+        out = bn.Banner.clean(self.payload(crawlSpeed=4, crawlTilt=0))
+        self.assertEqual((out["crawlSpeed"], out["crawlTilt"]), (4, 0))
+        out = bn.Banner.clean(self.payload(crawlSpeed=60, crawlTilt=100))
+        self.assertEqual((out["crawlSpeed"], out["crawlTilt"]), (60, 100))
+
+    def test_refuses_out_of_range_and_non_numbers(self):
+        for bad in ({"crawlSpeed": 3}, {"crawlSpeed": 61}, {"crawlTilt": -1}, {"crawlTilt": 101},
+                    {"crawlTilt": True}, {"crawlSpeed": "15"}, {"crawlTilt": 50.5}):
+            with self.assertRaises(bn.BannerError, msg=bad):
+                bn.Banner.clean(self.payload(**bad))
+
+    def test_missing_takes_the_speeds_pace_and_the_opening_crawl(self):
+        out = bn.Banner.clean(self.payload(speed="slow"))
+        self.assertEqual((out["crawlSpeed"], out["crawlTilt"]), (9, 100))
+        saved = bn.Banner.with_fields({"message": "Hi", "speed": "fast"})
+        self.assertEqual((saved["crawlSpeed"], saved["crawlTilt"]), (26, 100))
+        self.assertEqual(bn.Banner.with_fields({"speed": "fast", "crawlSpeed": 40})["crawlSpeed"], 40)
 
 
 class TTLCacheTest(unittest.TestCase):
@@ -650,6 +791,129 @@ class PeerChatTest(unittest.TestCase):
         self.assertEqual(self.chat.purge(), 2)
         self.assertEqual(self.chat.stats()["messages"], 0)
         self.assertEqual(self.chat.settings["purgeVersion"], version + 1)
+
+
+class GroupChatTest(unittest.TestCase):
+    """An admin's group chat (Admin > Accounts, Chat): nobody sees it before its first message; that message, the
+    admin's, takes each member's focus until they click it, once; members only."""
+
+    ADMIN = {"id": "00000000-0000-0000-0000-00000000000a", "username": "boss", "name": "Boss", "admin": True}
+    ANN = {"id": "00000000-0000-0000-0000-000000000001", "username": "ann", "name": "Ann", "admin": False}
+    BOB = {"id": "00000000-0000-0000-0000-000000000002", "username": "bob", "name": "Bob", "admin": False}
+    EVE = {"id": "00000000-0000-0000-0000-000000000003", "username": "eve", "name": "Eve", "admin": False}
+
+    def setUp(self):
+        import tempfile
+        self.path = os.path.join(tempfile.mkdtemp(), "ui.sqlite")
+        self.chat = ui.ChatStore(self.path)
+
+    def test_first_message_takes_focus_once(self):
+        peer = self.chat.create_group(self.ADMIN, [self.ANN, self.BOB])
+        gid = peer["id"]
+        self.assertTrue(ui.CHAT_GROUP_RE.match(gid))
+        self.assertEqual(self.chat.conversations(self.ANN["id"]), [])  # nothing before its first message
+        self.assertEqual(self.chat.focus_pending(self.ANN["id"]), [])
+        first = self.chat.send(self.ADMIN, True, peer, "All hands: maintenance at 5")
+        for member in (self.ANN, self.BOB):
+            focus = self.chat.focus_pending(member["id"])
+            self.assertEqual([(f["group"]["id"], f["message"]["id"]) for f in focus], [(gid, first["id"])])
+        self.assertEqual(self.chat.focus_pending(self.ADMIN["id"]), [])  # never the admin's own
+        self.chat.ack_focus(self.ANN["id"], gid)
+        self.assertEqual(self.chat.focus_pending(self.ANN["id"]), [])
+        self.assertEqual(len(ui.ChatStore(self.path).focus_pending(self.BOB["id"])), 1)  # kept across a restart
+        # the answers and later messages take nobody's focus
+        self.chat.send(self.BOB, False, peer, "ok")
+        self.chat.send(self.ADMIN, True, peer, "thanks")
+        self.chat.ack_focus(self.BOB["id"], gid)
+        self.assertEqual(self.chat.focus_pending(self.BOB["id"]), [])
+        convo = self.chat.conversations(self.ANN["id"])
+        self.assertEqual((convo[0]["peer"]["id"], convo[0]["unread"]), (gid, 3))
+        self.assertEqual([m["text"] for m in self.chat.since(self.ANN["id"], 0)],
+                         ["All hands: maintenance at 5", "ok", "thanks"])
+
+    def test_members_only(self):
+        peer = self.chat.create_group(self.ADMIN, [self.ANN])
+        self.chat.send(self.ADMIN, True, peer, "hello")
+        self.assertEqual(self.chat.may_write(self.EVE, False, peer["id"]), "You are not in that chat.")
+        self.assertIsNone(self.chat.may_write(self.ANN, False, peer["id"]))
+        self.assertEqual(self.chat.history(self.EVE["id"], peer["id"]), ([], 0))
+        self.assertEqual(self.chat.since(self.EVE["id"], 0), [])
+        self.assertEqual(self.chat.focus_pending(self.EVE["id"]), [])
+        with self.assertRaises(PermissionError):
+            self.chat.delete(self.ANN["id"], peer["id"])  # only its admin
+        self.chat.delete(self.ADMIN["id"], peer["id"])
+        self.assertEqual(self.chat.conversations(self.ANN["id"]), [])
+
+
+class DisasterRecoveryTest(unittest.TestCase):
+    """Persistence > Disaster recovery (dr.py): targets checked, secrets never shown, dumps streamed into S3 with the
+    newest kept, a failed dump never left as a backup."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.dr = load("dr", "dr.py")
+        self.dr.LOG = lambda **kw: None
+        self.dr.SETTINGS_FILE = os.path.join(self.dir.name, "dr.json")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_targets_are_checked_and_secrets_kept_out_of_sight(self):
+        for bad in ({"kind": "ftp", "name": "x"},
+                    {"kind": "s3", "name": "x", "endpoint": "s3.example", "bucket": "b-1"},
+                    {"kind": "s3", "name": "x", "endpoint": "https://s3.example", "bucket": "B"},
+                    {"kind": "postgres", "name": "x", "url": "mysql://h/db"},
+                    {"kind": "postgres", "name": "x", "url": "postgresql://h/db", "everyHours": 1000}):
+            with self.assertRaises(ValueError, msg=bad):
+                self.dr.clean_target(bad)
+        s3 = self.dr.clean_target({"kind": "s3", "name": "Offsite", "endpoint": "https://s3.example/",
+                                   "bucket": "dr-bucket", "prefix": "coder", "accessKey": "AK", "secretKey": "SK"})
+        self.assertEqual((s3["prefix"], s3["keep"], s3["everyHours"]), ("coder/", 14, 24))
+        again = self.dr.clean_target({**s3, "secretKey": ""}, old=s3)  # left empty: kept
+        self.assertEqual((again["id"], again["secretKey"]), (s3["id"], "SK"))
+        self.assertNotIn("secretKey", self.dr.public(s3))
+        pg = self.dr.clean_target({"kind": "postgres", "name": "Standby",
+                                   "url": "postgresql://dr:pw@db.example:5432/coder?sslmode=require"})
+        shown = self.dr.public(pg)
+        self.assertNotIn("url", shown)
+        self.assertEqual((shown["where"], shown["hasSecret"]), ("db.example:5432/coder", True))
+
+    def test_a_dump_into_s3_keeps_the_newest(self):
+        target = self.dr.clean_target({"kind": "s3", "name": "Offsite", "endpoint": "https://s3.example",
+                                       "bucket": "dr-bucket", "prefix": "c/", "accessKey": "AK", "secretKey": "SK",
+                                       "keep": 2})
+        s3 = mock.Mock()
+        got = {}
+
+        def put_stream(bucket, key, read):
+            data = b""
+            while True:
+                chunk = read(7)
+                if not chunk:
+                    break
+                data += chunk
+            got[key] = data
+            return len(data)
+
+        s3.put_stream.side_effect = put_stream
+        s3.list.return_value = ([{"key": "c/coder-db-20260101T000000Z.dump"}, {"key": "c/coder-db-20260102T000000Z.dump"},
+                                 {"key": "c/coder-db-20260103T000000Z.dump"}], [])
+        with mock.patch.object(self.dr, "_s3", return_value=s3), \
+                mock.patch.object(self.dr, "dump", side_effect=lambda write: [write(b"PGDMP"), write(b"-rest")]):
+            out = self.dr.to_s3(target)
+        self.assertEqual(list(got.values()), [b"PGDMP-rest"])
+        self.assertEqual(out["bytes"], 10)
+        s3.delete_many.assert_called_with("dr-bucket", ["c/coder-db-20260101T000000Z.dump"])
+
+        def broken(write):
+            write(b"PGDMP")
+            raise RuntimeError("pg_dump failed")
+
+        with mock.patch.object(self.dr, "_s3", return_value=s3), mock.patch.object(self.dr, "dump", side_effect=broken):
+            with self.assertRaises(RuntimeError):
+                self.dr.to_s3(target)
+        s3.delete.assert_called()  # the partial dump removed
 
 
 class AgentNetHistoryTest(unittest.TestCase):
@@ -1314,8 +1578,15 @@ class CloudDriveConnectionsTest(unittest.TestCase):
         def __init__(self, pods):
             self.pods = pods
             self.patches = []
+            self.state = None  # the ConfigMap the templates read
 
         def call(self, method, path, body=None, patch_type=None):
+            if "/configmaps" in path:
+                if method == "GET":
+                    return (404, {}) if self.state is None else (200, {"metadata": {"resourceVersion": "1"},
+                                                                       "data": {"state": self.state}})
+                self.state = body["data"]["state"]
+                return 200, body
             if method == "GET":
                 sel = urllib.parse.unquote(path.split("labelSelector=", 1)[1]) if "labelSelector=" in path else ""
                 want = sel.split("=", 1)[1] if "=" in sel else None
@@ -1357,7 +1628,9 @@ class CloudDriveConnectionsTest(unittest.TestCase):
         self.dir.cleanup()
 
     def test_disconnect_and_connect_again_at_once_in_the_running_pod(self):
-        self.assertEqual(self.safe.connections(self.OWNER), {"disconnected": [], "older": [self.OLD]})
+        self.assertEqual(self.safe.connections(self.OWNER),
+                         {"disconnected": [], "older": [self.OLD], "shared": [], "sharedWithVolume": [],
+                          "encrypted": False, "restart": [], "source": None})
         out = self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": False})
         self.assertEqual((out["disconnected"], out["applied"]), ([self.WS], True))
         self.assertEqual(self.kube.patches, [("coder-ws-1", {"platform.coder/cloud-drive": "off"})])
@@ -1391,6 +1664,295 @@ class CloudDriveConnectionsTest(unittest.TestCase):
         self.assertEqual(self.kube.patches, [])
         # another user's disconnections are not listed
         self.assertEqual(self.safe.connections({"id": "bob", "username": "bob"})["disconnected"], [])
+
+    def test_a_shared_workspace_never_has_the_owners_drive(self):
+        self.safe.SHARED = lambda: {self.WS: self.OWNER["id"]}
+        self.safe.links_once()
+        self.assertEqual(self.kube.patches, [("coder-ws-1", {"platform.coder/cloud-drive": "off"})])
+        # the templates read it: from its next start it mounts none
+        self.assertEqual(json.loads(self.kube.state)["shared"], [self.WS])
+        with self.assertRaises(ValueError):
+            self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": True})
+        self.assertEqual(self.safe.connections(self.OWNER)["shared"], [self.WS])
+        # no longer shared: connected again (it was never disconnected by its owner)
+        self.safe.SHARED = lambda: {}
+        self.safe._shared["at"] = 0
+        self.safe.links_once()
+        self.assertEqual(self.kube.patches[-1], ("coder-ws-1", {"platform.coder/cloud-drive": "on"}))
+        self.assertEqual(json.loads(self.kube.state)["shared"], [])
+
+
+class KitCryptoTest(unittest.TestCase):
+    """The recovery kit's wrapping (kitcrypto.py): AES-256 as FIPS-197 has it, and what openssl opens."""
+
+    def setUp(self):
+        self.kc = load("kitcrypto", "kitcrypto.py")
+
+    def test_aes256_known_answer(self):
+        rounds = self.kc._expand(bytes(range(32)))
+        self.assertEqual(self.kc._encrypt_block(rounds, bytes.fromhex("00112233445566778899aabbccddeeff")).hex(),
+                         "8ea2b7ca516745bfeafc49904b496089")
+
+    def test_openssl_opens_the_password_and_certificate_wraps(self):
+        import shutil, subprocess, tempfile
+        if not shutil.which("openssl"):
+            self.skipTest("no openssl")
+        key = os.urandom(32)
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "k.enc"), "w") as f:
+                f.write(self.kc.openssl_enc(key, "correct horse battery", iterations=1000))
+            out = subprocess.run(["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-md", "sha256", "-iter", "1000",
+                                  "-a", "-in", os.path.join(d, "k.enc"), "-pass", "pass:correct horse battery"],
+                                 capture_output=True, check=True).stdout
+            self.assertEqual(out, key)
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout",
+                            os.path.join(d, "key.pem"), "-out", os.path.join(d, "cert.pem"), "-days", "1", "-subj",
+                            "/CN=jdoe"], capture_output=True, check=True)
+            with open(os.path.join(d, "cert.pem"), "rb") as f:
+                cert = self.kc.certificate(f.read())
+            self.assertEqual((cert["subject"], cert["key"]["bits"]), ("CN=jdoe", 2048))
+            with open(os.path.join(d, "w.bin"), "wb") as f:
+                f.write(self.kc.rsa_oaep_encrypt(cert["key"], key))
+            out = subprocess.run(["openssl", "pkeyutl", "-decrypt", "-inkey", os.path.join(d, "key.pem"), "-pkeyopt",
+                                  "rsa_padding_mode:oaep", "-pkeyopt", "rsa_oaep_md:sha256", "-pkeyopt",
+                                  "rsa_mgf1_md:sha256", "-in", os.path.join(d, "w.bin")],
+                                 capture_output=True, check=True).stdout
+            self.assertEqual(out, key)
+            with open(os.path.join(d, "key.pem"), "rb") as f:
+                with self.assertRaises(ValueError):  # never a private key
+                    self.kc.certificate(f.read())
+        with self.assertRaises(ValueError):
+            self.kc.certificate("not a certificate")
+
+
+class CloudDriveEncryptionTest(unittest.TestCase):
+    """An encrypted Cloud Drive (safe.py): its volume mounts with the key over TLS; the key is turned on only after the
+    recovery kit is downloaded, and only while none of the owner's workspaces has the drive."""
+
+    UID = "3f0c2a52-7d7e-4c5b-9a3e-2f4b8c1d0e9a"
+    USER = {"id": UID, "username": "ann", "roles": []}
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.safe = load("safe", "safe.py")
+        self.safe.LOG = lambda **kw: None
+        self.safe.ENCRYPTION_FILE = os.path.join(self.dir.name, "enc.json")
+        self.safe.SOURCES_FILE = os.path.join(self.dir.name, "src.json")
+        self.safe.SETTINGS_FILE = os.path.join(self.dir.name, "none.json")
+        self.safe.NODE_SERVICE = "coder-user-storage-minio"
+        self.safe.NODE_TLS_PORT = 9443
+        self.safe.S3_ENDPOINT = "https://coder-user-storage-minio.coder.svc:9443"
+        self.secrets = {}
+        self.pods = []
+        test = self
+
+        class Kube:
+            ok = True
+
+            def call(self, method, path, body=None, patch_type=None):
+                name = path.split("?")[0].rsplit("/", 1)[-1]
+                if "/secrets" in path:
+                    if method == "GET":
+                        return (200, {"metadata": {"resourceVersion": "1"}, "data": test.secrets[name]}) \
+                            if name in test.secrets else (404, {})
+                    test.secrets[body["metadata"]["name"]] = body["data"]
+                    return 201, body
+                if "/pods" in path:
+                    return 200, {"items": test.pods}
+                return 404, {}
+
+        self.safe.KUBE = Kube()
+        s3 = mock.Mock()
+        s3.list.return_value = ([{"key": "users/%s/a.txt" % self.UID, "size": 5, "modified": "t"}], [])
+        self.client = mock.patch.object(self.safe, "client", return_value=s3)
+        self.client.start()
+
+    def tearDown(self):
+        self.client.stop()
+        self.dir.cleanup()
+
+    def test_the_kit_comes_first_and_running_workspaces_stop_it(self):
+        with self.assertRaises(ValueError):
+            self.safe.prepare_encryption(self.USER, {"method": "password", "password": "short"})
+        out = self.safe.prepare_encryption(self.USER, {"method": "password", "password": "a long enough password"})
+        kit = out["kit"]
+        self.assertEqual((kit["account"]["username"], kit["storage"]["bucket"], kit["storage"]["prefix"],
+                          kit["storage"]["objects"], kit["storage"]["bytes"], kit["key"]["method"]),
+                         ("ann", "coder-user-storage", "users/%s/" % self.UID, 1, 5, "password"))
+        self.assertTrue(kit["key"]["ciphertext"].startswith("U2FsdGVkX1"))  # openssl's "Salted__"
+        self.assertNotIn("a long enough password", json.dumps(kit))
+        self.assertFalse(self.safe.encryption_on(self.UID))  # nothing changed yet
+        with self.assertRaises(ValueError):  # the kit must be saved
+            self.safe.enable_encryption(self.USER, {"keyId": out["keyId"]})
+        self.pods = [{"metadata": {"labels": {"com.coder.workspace.id": "w1"}}, "status": {"phase": "Running"},
+                      "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "coder-safe-" + self.UID}}]}}]
+        with self.assertRaises(ValueError):  # a workspace has the drive
+            self.safe.enable_encryption(self.USER, {"keyId": out["keyId"], "kitSaved": True})
+        self.assertNotIn("coder-cloud-drive-keys", self.secrets)
+
+    def test_an_encrypted_volume_mounts_with_its_key_over_tls(self):
+        import base64
+        key = os.urandom(32)
+        self.safe.store_key(self.UID, key)
+        self.safe._write_json(self.safe.ENCRYPTION_FILE, {self.UID: {"state": "on", "method": "password"}})
+        pv, _ = self.safe.volume_objects(self.UID, "ann")
+        self.assertEqual(pv["spec"]["csi"]["nodePublishSecretRef"]["name"], "coder-user-storage-mount-tls")
+        opts = pv["spec"]["csi"]["volumeAttributes"]["options"]
+        self.assertIn("--sse-c " + base64.b64encode(key).decode(), opts)
+        self.assertIn("--no-verify-ssl", opts)  # the chart's MinIO by its ClusterIP
+        # a plain one keeps the plain Secret and options
+        self.safe._write_json(self.safe.ENCRYPTION_FILE, {})
+        pv, _ = self.safe.volume_objects(self.UID, "ann")
+        self.assertEqual((pv["spec"]["csi"]["nodePublishSecretRef"]["name"],
+                          pv["spec"]["csi"]["volumeAttributes"]["options"]),
+                         ("coder-user-storage-mount", self.safe.MOUNT_OPTIONS))
+
+    def test_no_encryption_over_plain_http(self):
+        self.safe.S3_ENDPOINT = "http://coder-user-storage-minio.coder.svc:9000"
+        self.assertFalse(self.safe.tls_available()[0])
+        with self.assertRaises(ValueError):
+            self.safe.prepare_encryption(self.USER, {"method": "password", "password": "a long enough password"})
+
+    def test_turning_it_off_needs_the_password(self):
+        self.safe._write_json(self.safe.ENCRYPTION_FILE, {self.UID: {
+            "state": "on", "method": "password", "verifier": self.safe._verifier("the right password", iterations=1000)}})
+        with self.assertRaises(PermissionError):
+            self.safe.disable_encryption(self.USER, {"password": "a wrong password!"})
+        self.assertTrue(self.safe._password_ok(self.safe.encryption_records()[self.UID], "the right password"))
+
+
+class DriveSourceTest(unittest.TestCase):
+    """A workspace folder served as the owner's Cloud Drive (drivesource.py): signed requests only, the owner's prefix
+    only, never outside the folder; what the platform's client does works."""
+
+    def setUp(self):
+        import socket, tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        root = os.path.join(self.dir.name, "root")
+        os.makedirs(os.path.join(root, "sub"))
+        with open(os.path.join(root, "a.txt"), "w") as f:
+            f.write("hello")
+        os.symlink("/etc", os.path.join(root, "escape"))
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        cfg = os.path.join(self.dir.name, "config.json")
+        with open(cfg, "w") as f:
+            json.dump({"root": root, "bucket": "drive", "prefix": "u1/", "accessKey": "AK", "secretKey": "SK",
+                       "port": port, "id": "c1"}, f)
+        self.ds = load("drivesource", "drivesource.py")
+        self.ds.load(cfg)
+        self.server = self.ds.Server(("127.0.0.1", port), self.ds.Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.s3c = load("s3client", "s3client.py")
+        self.s3 = self.s3c.S3("http://127.0.0.1:%d" % port, "", "AK", "SK", timeout=10)
+        self.root = root
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.dir.cleanup()
+
+    def test_the_folder_as_s3(self):
+        import io
+        objects, prefixes = self.s3.list("drive", prefix="u1/", delimiter="/")
+        self.assertEqual(([o["key"] for o in objects], prefixes), (["u1/a.txt"], ["u1/sub/"]))  # no link
+        self.s3.put("drive", "u1/sub/new file.txt", b"data")
+        with open(os.path.join(self.root, "sub", "new file.txt"), "rb") as f:
+            self.assertEqual(f.read(), b"data")
+        data = os.urandom(3 * 1024 * 1024 + 7)
+        self.s3.put_large("drive", "u1/big.bin", io.BytesIO(data), len(data), part_size=1024 * 1024)
+        self.s3.copy("drive", "u1/big.bin", "u1/copy.bin", len(data))
+        r = self.s3.get("drive", "u1/copy.bin")
+        self.assertEqual(r.read(), data)
+        r.close()
+        r.conn.close()
+        self.assertEqual(self.s3.delete_many("drive", ["u1/copy.bin", "u1/sub/new file.txt", "u1/sub/"]), [])
+        self.assertFalse(os.path.exists(os.path.join(self.root, "sub")))
+
+    def test_nothing_outside(self):
+        for key in ("u1/escape/passwd", "u1/../a.txt", "u2/a.txt"):
+            with self.assertRaises(self.s3c.S3Error, msg=key) as e:
+                self.s3.get("drive", key)
+            self.assertIn(e.exception.status, (400, 403, 404))
+        bad = self.s3c.S3(self.s3.scheme + "://" + self.s3.netloc, "", "AK", "wrong", timeout=10)
+        with self.assertRaises(self.s3c.S3Error) as e:
+            bad.list("drive", prefix="u1/")
+        self.assertEqual(e.exception.code, "SignatureDoesNotMatch")
+
+
+class CloudDriveSourceTest(unittest.TestCase):
+    """A workspace folder as the Cloud Drive (safe.py): only a folder of the home, and deleting the source workspace
+    needs each connected workspace confirmed and "delete" typed."""
+
+    UID = "3f0c2a52-7d7e-4c5b-9a3e-2f4b8c1d0e9a"
+    USER = {"id": UID, "username": "ann", "roles": []}
+    SRC = "11111111-2222-4333-8444-555555555555"
+    OTHER = "22222222-2222-4333-8444-555555555555"
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.safe = load("safe", "safe.py")
+        self.safe.LOG = lambda **kw: None
+        self.safe.SOURCES_FILE = os.path.join(self.dir.name, "src.json")
+        self.safe.LINKS_FILE = os.path.join(self.dir.name, "links.json")
+        self.safe._write_json(self.safe.SOURCES_FILE, {self.UID: {
+            "owner": self.UID, "workspace": self.SRC, "name": "src", "path": "/home/coder/data",
+            "accessKey": "a", "secretKey": "s"}})
+        self.safe.WORKSPACES = lambda owner: [{"id": self.SRC, "name": "src"}, {"id": self.OTHER, "name": "other"}]
+
+        class Kube:
+            ok = True
+
+            def call(self, method, path, body=None, patch_type=None):
+                if method == "GET" and "/pods" in path:
+                    return 200, {"items": []}
+                return 404, {}
+
+        self.safe.KUBE = Kube()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_workspaces_whose_volume_is_not_the_current_one(self):
+        def pod(wid, claim):
+            return {"metadata": {"name": "p-" + wid, "labels": {"com.coder.workspace.id": wid},
+                                 "annotations": {"platform.coder/cloud-drive": "on"}},
+                    "status": {"phase": "Running"},
+                    "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": claim}}] if claim else []}}
+        pods = [pod(self.SRC, None), pod(self.OTHER, "coder-safe-" + self.UID),
+                pod("33333333-2222-4333-8444-555555555555", "coder-drive-src-" + self.UID)]
+        self.safe.KUBE.call = lambda method, path, body=None, patch_type=None: (200, {"items": pods})
+        src = self.safe.sources()[self.UID]
+        self.safe._sources_seen[self.UID] = {"running": True}
+        # the source runs: the one still on S3 needs a restart; the source itself and the one on the source do not
+        self.assertEqual(self.safe.stale_mounts(self.UID, src, set()), [self.OTHER])
+        # no source any more: the one on the source's volume needs a restart
+        self.assertEqual(self.safe.stale_mounts(self.UID, None, set()),
+                         sorted([self.SRC, "33333333-2222-4333-8444-555555555555"]))
+
+    def test_only_a_folder_of_the_home(self):
+        c = self.safe.clean_source_path
+        self.assertEqual(c("data/x"), "/home/coder/data/x")
+        self.assertEqual(c("~/data"), "/home/coder/data")
+        for bad in ("/home/coder", "/etc", "/home/coder/../etc", "~/.ssh", "/home/coder/cloud-drive",
+                    "/home/coder/cloud-drive/x"):
+            with self.assertRaises(ValueError, msg=bad):
+                c(bad)
+
+    def test_deleting_the_source_is_guarded(self):
+        guard = self.safe.source_guard(self.USER, self.SRC)
+        self.assertEqual((guard["source"], [w["name"] for w in guard["connected"]]), (True, ["other"]))
+        self.assertFalse(self.safe.source_guard(self.USER, self.OTHER)["source"])
+        with self.assertRaises(ValueError):  # each connected workspace confirmed
+            self.safe.release_source(self.USER, {"workspace": self.SRC, "disconnect": [], "confirm": "delete"})
+        with self.assertRaises(ValueError):  # and "delete" typed
+            self.safe.release_source(self.USER, {"workspace": self.SRC, "disconnect": [self.OTHER], "confirm": "del"})
+        self.safe.release_source(self.USER, {"workspace": self.SRC, "disconnect": [self.OTHER], "confirm": "delete"})
+        self.assertEqual(self.safe.sources(), {})
+        self.assertIn(self.OTHER, self.safe.disconnected())
 
 
 class CloudDriveBackendTest(unittest.TestCase):

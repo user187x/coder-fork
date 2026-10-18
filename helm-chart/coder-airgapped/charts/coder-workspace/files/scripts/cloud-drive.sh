@@ -1,25 +1,44 @@
 #!/usr/bin/env bash
-# The owner's Cloud Drive in this workspace (coder_script.cloud_drive in ../main.tf): ~/cloud-drive links to its
-# volume, mounted out of the way, while the pod's annotation platform.coder/cloud-drive says "on". The owner may
-# disconnect the workspace on the Workspaces page (dragging its cable away) and connect it again; the platform service
-# sets the annotation, the pod sees it at /etc/platform/cloud-drive (the downward API) within a second, and the watcher
-# started here follows it: no restart.
-# main.tf renders this with templatefile(): link and mount are the template's values (no shell braces here).
+# The owner's Cloud Drive in this workspace (coder_script.cloud_drive in ../main.tf): ~/cloud-drive links to it while
+# the pod's annotation platform.coder/cloud-drive says so. The platform service sets the annotation, the pod sees it at
+# /etc/platform/cloud-drive (the downward API) within a second, and the watcher started here follows it: no restart.
+#   on              its volume, mounted out of the way (MOUNT), when this workspace started with one
+#   off             none: disconnected by the owner (dragging its cable away), or shared with others (the Cloud
+#                   Drive is the owner's alone)
+#   source:<folder> a folder of this workspace is the owner's Cloud Drive (the platform service serves it from here
+#                   to their other workspaces): linked as it is
+# How it started (mode, from the platform service then): "mount" with the volume; "source"; "shared" or "offline"
+# (the owner's source workspace was not running) without one - the drive comes with the next start.
+# main.tf renders this with templatefile(): link, mode and mount are the template's values (no shell braces here).
 LINK='${link}'
+MODE='${mode}'
 MOUNT='${mount}'
 STATE=/etc/platform/cloud-drive
 PIDFILE=/tmp/cloud-drive-watch.pid
 
+case "$MODE" in
+shared) echo "Cloud Drive: none here - this workspace is shared with others, and the Cloud Drive is its owner's alone" ;;
+offline) echo "Cloud Drive: its source workspace was not running when this one started - restart this one once it runs" ;;
+esac
+
 sync_link() {
- if [ "$(cat "$STATE" 2>/dev/null)" = off ]; then
+ local state target
+ state="$(cat "$STATE" 2>/dev/null)"
+ case "$state" in
+ off) target="" ;;
+ source:/*) target="$${state#source:}" ;;
+ *) target="$MOUNT" ;;
+ esac
+ if [ -z "$target" ]; then
   if [ -L "$LINK" ]; then
-   rm -f "$LINK" && echo "Cloud Drive: disconnected ($LINK removed)"
+   rm -f "$LINK" && echo "Cloud Drive: not here ($LINK removed)"
   fi
   return 0
  fi
- if [ -L "$LINK" ] && [ "$(readlink "$LINK")" = "$MOUNT" ]; then
+ if [ -L "$LINK" ] && [ "$(readlink "$LINK")" = "$target" ]; then
   return 0
  fi
+ mkdir -p "$target" 2>/dev/null || true
  if [ -L "$LINK" ]; then
   rm -f "$LINK"
  elif [ -d "$LINK" ] && ! rmdir "$LINK" 2>/dev/null; then
@@ -28,7 +47,7 @@ sync_link() {
   [ -e "$aside" ] && aside="$LINK.local-$(date +%Y%m%d-%H%M%S)"
   mv "$LINK" "$aside" && echo "Cloud Drive: the folder $LINK had files: moved to $aside"
  fi
- ln -s "$MOUNT" "$LINK" && echo "Cloud Drive: connected at $LINK"
+ ln -s "$target" "$LINK" && echo "Cloud Drive: $LINK -> $target"
 }
 
 sync_link

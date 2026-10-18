@@ -85,6 +85,10 @@
   GET  /__coder-ui/api/certificates[?refresh]  admins: TLS of Coder / Keycloak / database and every mounted certificate
   POST /__coder-ui/api/chat/delete {"to"}   the whole conversation, for both (either participant); the other side's
        poll answers with "cleared": [user id]
+  POST /__coder-ui/api/chat/groups {"members": [user ids]}   admins: one thread with all of them (Admin > Accounts,
+       Chat); its id ("g:<hex>") is the conversation's peer in every chat call. Nobody sees it before its first
+       message; that first message, the admin's, comes up for every member in front of everything (state / poll
+       "focus") until they click it: POST /__coder-ui/api/chat/focus/ack {"group"}. Never again for that thread.
 
   Default images (resources/defaults/, mounted from ConfigMaps coder-ui-updates-default-logo / -avatar into
   DEFAULTS_DIR): the logo a fresh installation starts with (written to the logo table when this service creates it),
@@ -94,6 +98,8 @@
   GET  /__coder-ui/api/monitoring          users and their running workspaces
   GET  /__coder-ui/api/monitoring/posture  zero-trust checks and runtime signals (identity, exposure, pods, failures)
   GET  /__coder-ui/api/lockdown[/<id>]      admins (an owner: their workspace): Lock Down; POST /<id> {mode}: see lockdown.py
+  GET  /__coder-ui/api/provisioners          admins: provisioner daemons, running jobs, terraform processes; POST
+                                             /rekick {jobs}, /restart {pod}: see provisioners.py
   GET  /__coder-ui/api/hud                 admins: the HUD's metrics (totals, leaders, health) and Coder's uptime, cached 5 seconds
   GET  /__coder-ui/api/hud/history?range=  admins: the HUD graphs (CPU, memory, latency), sampled every 15 s, kept 7 days
   GET  /__coder-ui/api/workspaces/<id>/network   a workspace's network traffic, the last 5 minutes per agent (who
@@ -141,6 +147,8 @@ import imagebuilder  # noqa: E402  (next to this file: the Images view)
 import workspacevolumes  # noqa: E402  (workspace icons, home backups, disk growth)
 import lockdown  # noqa: E402  (Lock Down: admins jail a workspace's network and sudo)
 import safe  # noqa: E402  (the safe: each account's own files on S3, on the Workspaces page and in its workspaces)
+import provisioners  # noqa: E402  (Provisioner Daemons: stuck jobs, their terraform processes, a re-kick)
+import dr  # noqa: E402  (Persistence > Disaster recovery: Coder's database dumped or copied outside the cluster)
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -5299,6 +5307,15 @@ CHAT_FILE_RESERVE = 200 * 1024 * 1024  # an upload must leave this much free on 
 CHAT_UPLOAD_TTL = 3600  # an uploaded file not sent within this is removed
 CHAT_TAB_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 CHAT_UPLOAD_RE = re.compile(r"^[0-9a-f]{32}$")
+# A group chat (an admin's, from Admin > Accounts: the accounts chosen, in one thread): its id stands where a user's
+# would, as the conversation's peer.
+CHAT_GROUP_RE = re.compile(r"^g:[0-9a-f]{32}$")
+CHAT_GROUP_MAX = 200  # people in one group chat
+
+
+def chat_peer_id_ok(peer_id):
+    """A user's id, or a group chat's."""
+    return bool(UUID_RE.match(peer_id) or CHAT_GROUP_RE.match(peer_id))
 # Attached files shown in the conversation as pictures (checked against their content); every other file is a
 # download, never shown in the browser.
 CHAT_INLINE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
@@ -5416,6 +5433,30 @@ class ChatStore:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS chat_presence (user_id TEXT PRIMARY KEY, invisible INTEGER NOT NULL, updated_at TEXT NOT NULL)"
             )
+            # Group chats: the thread (its admin, whether its first message takes everyone's focus, and which message
+            # that was), its members, and who has clicked that first message.
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS chat_groups (
+                  id TEXT PRIMARY KEY, title TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                  focus INTEGER NOT NULL DEFAULT 1, focus_message_id INTEGER);
+                CREATE TABLE IF NOT EXISTS chat_group_members (
+                  group_id TEXT NOT NULL, user_id TEXT NOT NULL, username TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+                  PRIMARY KEY (group_id, user_id));
+                CREATE TABLE IF NOT EXISTS chat_focus_ack (
+                  group_id TEXT NOT NULL, user_id TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (group_id, user_id));
+            """
+            )
+            self.groups = {}
+            for r in db.execute("SELECT * FROM chat_groups"):
+                self.groups[r["id"]] = {"id": r["id"], "title": r["title"], "createdBy": r["created_by"],
+                                        "createdAt": r["created_at"], "focus": bool(r["focus"]),
+                                        "focusMessage": r["focus_message_id"], "members": {}}
+            for r in db.execute("SELECT * FROM chat_group_members"):
+                if r["group_id"] in self.groups:
+                    self.groups[r["group_id"]]["members"][r["user_id"]] = {
+                        "id": r["user_id"], "username": r["username"], "name": r["name"] or ""}
+            self.acks = {(r[0], r[1]) for r in db.execute("SELECT group_id, user_id FROM chat_focus_ack")}
             for r in db.execute("SELECT key, value FROM chat_settings"):
                 if r[0] in self.settings:
                     try:
@@ -5462,13 +5503,78 @@ class ChatStore:
             ),
         }
 
+    # ---- group chats
+
+    def create_group(self, creator, members, focus=True):
+        """A thread with the creator (an admin) and members ([{id, username, name}]): its peer. Nobody sees it before
+        its first message."""
+        group_id = "g:" + uuid.uuid4().hex
+        everyone = {creator["id"]: {"id": creator["id"], "username": creator["username"], "name": creator.get("name") or ""}}
+        for m in members:
+            everyone.setdefault(m["id"], {"id": m["id"], "username": m["username"], "name": m.get("name") or ""})
+        others = [m for uid, m in everyone.items() if uid != creator["id"]]
+        names = [m["name"] or m["username"] for m in others]
+        title = ", ".join(names[:3]) + (" and %d more" % (len(names) - 3) if len(names) > 3 else "")
+        group = {"id": group_id, "title": title, "createdBy": creator["id"], "createdAt": now(), "focus": bool(focus),
+                 "focusMessage": None, "members": everyone}
+        with self.lock, self.connect() as db:
+            db.execute("INSERT INTO chat_groups (id, title, created_by, created_at, focus) VALUES (?, ?, ?, ?, ?)",
+                       (group_id, title, creator["id"], group["createdAt"], int(bool(focus))))
+            db.executemany("INSERT INTO chat_group_members (group_id, user_id, username, name) VALUES (?, ?, ?, ?)",
+                           [(group_id, m["id"], m["username"], m["name"]) for m in everyone.values()])
+            self.groups[group_id] = group
+        return self.group_peer(group_id)
+
+    def group(self, group_id):
+        return self.groups.get(group_id)
+
+    def group_peer(self, group_id):
+        """A group chat as a conversation's peer: its title, its members."""
+        g = self.groups[group_id]
+        members = sorted(g["members"].values(), key=lambda m: m["username"])
+        return {"id": group_id, "username": g["title"],
+                "name": ", ".join(m["name"] or m["username"] for m in members), "group": True,
+                "members": members, "admin": False}
+
+    def groups_of(self, user_id):
+        return [gid for gid, g in self.groups.items() if user_id in g["members"]]
+
+    def in_group(self, user_id, group_id):
+        g = self.groups.get(group_id)
+        return bool(g and user_id in g["members"])
+
+    def focus_pending(self, user_id):
+        """The first messages of group chats that take this user's focus and that they have not clicked yet."""
+        out = []
+        ids = {gid: g["focusMessage"] for gid, g in self.groups.items()
+               if g["focus"] and g["focusMessage"] and user_id in g["members"] and g["createdBy"] != user_id
+               and (gid, user_id) not in self.acks}
+        if not ids:
+            return out
+        with self.connect() as db:
+            for gid, mid in ids.items():
+                r = db.execute("SELECT * FROM chat_messages WHERE id = ?", (mid,)).fetchone()
+                if r:
+                    out.append({"group": self.group_peer(gid), "message": self._message(r)})
+        return out
+
+    def ack_focus(self, user_id, group_id):
+        with self.lock, self.connect() as db:
+            db.execute("INSERT INTO chat_focus_ack (group_id, user_id, at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                       (group_id, user_id, now()))
+            self.acks.add((group_id, user_id))
+
+    def _concerns(self, user_id):
+        """SQL (and its parameters) for the messages that concern a user: theirs, to them, in their group chats."""
+        groups = self.groups_of(user_id)
+        sql = "(from_id = ? OR to_id = ?" + (" OR to_id IN (%s)" % ",".join("?" * len(groups)) if groups else "") + ")"
+        return sql, [user_id, user_id] + groups
+
     def newest(self, user_id):
         if user_id not in self.latest:
+            where, params = self._concerns(user_id)
             with self.connect() as db:
-                row = db.execute(
-                    "SELECT max(id) FROM chat_messages WHERE from_id = ? OR to_id = ?",
-                    (user_id, user_id),
-                ).fetchone()
+                row = db.execute("SELECT max(id) FROM chat_messages WHERE " + where, params).fetchone()
             self.latest[user_id] = row[0] or 0
         return self.latest[user_id]
 
@@ -5519,6 +5625,17 @@ class ChatStore:
             )
             kept = {str(r[0]) for r in db.execute("SELECT id FROM chat_messages WHERE file_name != ''")}
         self._remove_files(with_files)
+        # group chats with nothing left in them, started before the retention
+        with self.lock, self.connect() as db:
+            empty = [r[0] for r in db.execute(
+                "SELECT id FROM chat_groups WHERE created_at < ? AND id NOT IN (SELECT DISTINCT to_id FROM chat_messages)",
+                (cutoff,))]
+            for gid in empty:
+                for table, column in (("chat_group_members", "group_id"), ("chat_focus_ack", "group_id"),
+                                      ("chat_read", "peer_id"), ("chat_groups", "id")):
+                    db.execute("DELETE FROM %s WHERE %s = ?" % (table, column), (gid,))
+                self.groups.pop(gid, None)
+            self.acks = {a for a in self.acks if a[0] in self.groups}
         # files whose message is gone some other way
         for name in os.listdir(self.files_dir):
             if name.isdigit() and name not in kept:
@@ -5547,6 +5664,10 @@ class ChatStore:
                 if name.isdigit():
                     self._remove_files([name])
             db.execute("DELETE FROM chat_read")
+            for table in ("chat_groups", "chat_group_members", "chat_focus_ack"):
+                db.execute("DELETE FROM " + table)
+            self.groups.clear()
+            self.acks.clear()
             self.settings["purgeVersion"] = int(self.settings.get("purgeVersion") or 0) + 1
             db.execute(
                 "INSERT INTO chat_settings (key, value) VALUES ('purgeVersion', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -5782,11 +5903,11 @@ class ChatStore:
 
     def attachment(self, user_id, message_id):
         """(path, name, type, size) of a message's attached file, for the two people in that conversation only."""
+        where, params = self._concerns(user_id)
         with self.connect() as db:
             r = db.execute(
-                """SELECT file_name, file_type, file_size FROM chat_messages
-                   WHERE id = ? AND file_name != '' AND (from_id = ? OR to_id = ?)""",
-                (message_id, user_id, user_id),
+                "SELECT file_name, file_type, file_size FROM chat_messages WHERE id = ? AND file_name != '' AND "
+                + where, [message_id] + params,
             ).fetchone()
         path = self._file_path(message_id)
         return (path, r[0], r[1], r[2]) if r and os.path.exists(path) else None
@@ -5813,6 +5934,8 @@ class ChatStore:
         """
         if peer_id == user["id"]:
             return "You can't chat with yourself."
+        if CHAT_GROUP_RE.match(peer_id):
+            return None if self.in_group(user["id"], peer_id) else "You are not in that chat."
         if admin:
             return None
         if peer_id in self.off:
@@ -5909,8 +6032,15 @@ class ChatStore:
                 self.by_client[(user["id"], client_id)] = (time.time(), message)
                 while len(self.by_client) > CHAT_CLIENT_IDS:
                     self.by_client.popitem(last=False)
+            group = self.groups.get(peer["id"])
+            if group and group["focus"] and not group["focusMessage"] and user["id"] == group["createdBy"]:
+                # the admin's first message: it takes every member's focus, once
+                group["focusMessage"] = row["id"]
+                db.execute("UPDATE chat_groups SET focus_message_id = ? WHERE id = ?", (row["id"], peer["id"]))
         with self.changed:
             self.latest[user["id"]] = self.latest[peer["id"]] = row["id"]
+            for member in (group or {}).get("members", {}):
+                self.latest[member] = row["id"]
             self.typing.pop(
                 (user["id"], peer["id"]), None
             )  # a sent message ends "typing"
@@ -5929,23 +6059,33 @@ class ChatStore:
                 self.changed.notify_all()
 
     def typing_to(self, user_id):
+        """Who is typing to this user, and the group chats of theirs where someone else is."""
         t = time.time()
         return sorted(
-            f
-            for (f, to), until in list(self.typing.items())
-            if to == user_id and until > t
+            {f for (f, to), until in list(self.typing.items()) if to == user_id and until > t}
+            | {to for (f, to), until in list(self.typing.items())
+               if until > t and f != user_id and CHAT_GROUP_RE.match(to) and self.in_group(user_id, to)}
         )
 
     def since(self, user_id, after):
+        where, params = self._concerns(user_id)
         with self.connect() as db:
             rows = db.execute(
-                """SELECT * FROM chat_messages WHERE id > ? AND (from_id = ? OR to_id = ?)
-                                 ORDER BY id LIMIT 200""",
-                (after, user_id, user_id),
+                "SELECT * FROM chat_messages WHERE id > ? AND " + where + " ORDER BY id LIMIT 200",
+                [after] + params,
             ).fetchall()
         return [self._message(r) for r in rows]
 
     def history(self, user_id, peer_id, before=None, limit=100):
+        if CHAT_GROUP_RE.match(peer_id):
+            if not self.in_group(user_id, peer_id):
+                return [], 0
+            with self.connect() as db:
+                rows = db.execute("SELECT * FROM chat_messages WHERE to_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+                                  (peer_id, before or 2**62, limit)).fetchall()
+                read = db.execute("SELECT last_id FROM chat_read WHERE user_id = ? AND peer_id = ?",
+                                  (user_id, peer_id)).fetchone()
+            return [self._message(r) for r in reversed(rows)], read[0] if read else 0
         with self.connect() as db:
             rows = db.execute(
                 """SELECT * FROM chat_messages WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))
@@ -5978,6 +6118,8 @@ class ChatStore:
             }
         out = []
         for r in rows:
+            if CHAT_GROUP_RE.match(r["to_id"]):
+                continue  # a group's (below), sent by this user
             mine = r["from_id"] == user_id
             peer = {
                 "id": r["to_id"] if mine else r["from_id"],
@@ -5991,10 +6133,28 @@ class ChatStore:
                     "unread": unread.get(peer["id"], 0),
                 }
             )
+        groups = self.groups_of(user_id)
+        if groups:
+            marks = ",".join("?" * len(groups))
+            with self.connect() as db:
+                lasts = db.execute(
+                    "SELECT m.* FROM chat_messages m JOIN (SELECT to_id, max(id) AS last FROM chat_messages WHERE to_id IN "
+                    "(%s) GROUP BY to_id) c ON m.id = c.last" % marks, groups).fetchall()
+                counts = dict(db.execute(
+                    "SELECT m.to_id, count(*) FROM chat_messages m LEFT JOIN chat_read r ON r.user_id = ? AND "
+                    "r.peer_id = m.to_id WHERE m.to_id IN (%s) AND m.from_id != ? AND m.id > coalesce(r.last_id, 0) "
+                    "GROUP BY m.to_id" % marks, [user_id] + groups + [user_id]).fetchall())
+            for r in lasts:  # a group nobody has written in yet is nobody's conversation
+                out.append({"peer": self.group_peer(r["to_id"]), "last": self._message(r),
+                            "unread": counts.get(r["to_id"], 0)})
+            out.sort(key=lambda c: c["last"]["id"], reverse=True)
         return out
 
     def delete(self, user_id, peer_id):
-        """Removes the whole conversation between the two, for both of them (either may do it). The number deleted."""
+        """Removes the whole conversation between the two, for both of them (either may do it). The number deleted.
+        A group chat: its admin removes it for everyone."""
+        if CHAT_GROUP_RE.match(peer_id):
+            return self.delete_group(user_id, peer_id)
         with self.lock, self.connect() as db:
             with_files = [r[0] for r in db.execute(
                 """SELECT id FROM chat_messages WHERE file_name != '' AND
@@ -6025,13 +6185,38 @@ class ChatStore:
         self._remove_files(with_files)
         return n
 
+    def delete_group(self, user_id, group_id):
+        g = self.groups.get(group_id)
+        if not g or g["createdBy"] != user_id:
+            raise PermissionError("Only the admin who started this chat can delete it.")
+        with self.lock, self.connect() as db:
+            with_files = [r[0] for r in db.execute(
+                "SELECT id FROM chat_messages WHERE file_name != '' AND to_id = ?", (group_id,))]
+            db.execute("DELETE FROM chat_files WHERE message_id IN (SELECT id FROM chat_messages WHERE to_id = ?)",
+                       (group_id,))
+            n = db.execute("DELETE FROM chat_messages WHERE to_id = ?", (group_id,)).rowcount
+            db.execute("DELETE FROM chat_read WHERE peer_id = ?", (group_id,))
+            db.execute("DELETE FROM chat_group_members WHERE group_id = ?", (group_id,))
+            db.execute("DELETE FROM chat_focus_ack WHERE group_id = ?", (group_id,))
+            db.execute("DELETE FROM chat_groups WHERE id = ?", (group_id,))
+            self.groups.pop(group_id, None)
+            self.acks = {a for a in self.acks if a[0] != group_id}
+        with self.changed:
+            self.clear_ver += 1
+            for member in g["members"]:
+                self.cleared[member] = (self.cleared.get(member, []) + [(self.clear_ver, group_id)])[-50:]
+            self.changed.notify_all()
+        self._remove_files(with_files)
+        return n
+
     def file(self, user_id, message_id):
         """(content type, bytes) of a message's screenshot, for the two people in that conversation only."""
+        where, params = self._concerns(user_id)
         with self.connect() as db:
             r = db.execute(
-                """SELECT m.image_type, f.data FROM chat_messages m JOIN chat_files f ON f.message_id = m.id
-                              WHERE m.id = ? AND (m.from_id = ? OR m.to_id = ?)""",
-                (message_id, user_id, user_id),
+                "SELECT m.image_type, f.data FROM chat_messages m JOIN chat_files f ON f.message_id = m.id "
+                "WHERE m.id = ? AND " + where.replace("from_id", "m.from_id").replace("to_id", "m.to_id"),
+                [message_id] + params,
             ).fetchone()
         return (r[0], bytes(r[1])) if r else None
 
@@ -6170,6 +6355,11 @@ def quota_limits(settings, username):
 
 def _coder_get(token, path, timeout=10):
     return http_json(CODER_URL + path, headers={"Coder-Session-Token": token}, timeout=timeout)
+
+
+def _coder_send(token, method, path, body=None, timeout=15):
+    return http_json(CODER_URL + path, method=method, body=body, headers={"Coder-Session-Token": token},
+                     timeout=timeout)
 
 
 def _param_resources(params):
@@ -7717,6 +7907,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if workspacevolumes.handle(self, "GET", path, url.query):
             return
+        if dr.handle(self, "GET", path, url.query):
+            return
+        if provisioners.handle(self, "GET", path, url.query):
+            return
         if lockdown.handle(self, "GET", path, url.query):
             return
         if safe.handle(self, "GET", path, url.query) or safe.handle_libraries(self, "GET", path, url.query):
@@ -8311,6 +8505,7 @@ class Handler(BaseHTTPRequestHandler):
                     "conversations": CHAT.conversations(user["id"]),
                     "cursor": CHAT.newest(user["id"]),
                     "typing": CHAT.typing_to(user["id"]),
+                    "focus": CHAT.focus_pending(user["id"]),
                     "clearVersion": max(CHAT.last_clear(user["id"]), CHAT.clear_ver),
                     **chat_availability(),
                 },
@@ -8352,7 +8547,7 @@ class Handler(BaseHTTPRequestHandler):
             )
         if what == "messages":
             peer = (q.get("peer") or [""])[0]
-            if not UUID_RE.match(peer):
+            if not chat_peer_id_ok(peer):
                 return self.send_json(400, {"error": "peer=<user id> is required."})
             try:
                 before = int((q.get("before") or ["0"])[0] or 0) or None
@@ -8371,7 +8566,7 @@ class Handler(BaseHTTPRequestHandler):
                     400, {"error": "after, cleared and av must be numbers."}
                 )
             known = sorted(
-                p for p in (q.get("typing") or [""])[0].split(",") if UUID_RE.match(p)
+                p for p in (q.get("typing") or [""])[0].split(",") if chat_peer_id_ok(p)
             )
             typing = CHAT.wait(user["id"], after, known, cleared, avail, pv)
             CHAT.tab(user["id"], tab) if tab else CHAT.touch(user["id"])
@@ -8380,6 +8575,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "messages": CHAT.since(user["id"], after),
                     "typing": typing,
+                    "focus": CHAT.focus_pending(user["id"]),
                     "cleared": CHAT.cleared_since(user["id"], cleared),
                     "clearVersion": max(CHAT.last_clear(user["id"]), cleared),
                     **chat_availability(),
@@ -8445,7 +8641,7 @@ class Handler(BaseHTTPRequestHandler):
         admin = bool(set(user["roles"]) & ADMIN_ROLES)
         q = urllib.parse.parse_qs(query or "")
         peer_id = (q.get("to") or [""])[0]
-        if not UUID_RE.match(peer_id):
+        if not chat_peer_id_ok(peer_id):
             return self.send_json(400, {"error": "Who is it for? (to=<user id>)"})
         try:
             length = int(self.headers.get("Content-Length") or -1)
@@ -8545,8 +8741,32 @@ class Handler(BaseHTTPRequestHandler):
                     "stats": CHAT.stats(),
                 },
             )
+        if what == "groups":  # an admin's one thread with the accounts chosen (Admin > Accounts, Chat)
+            if not admin:
+                return self.send_json(403, {"error": "Only admins start group chats."})
+            ids = payload.get("members")
+            if not isinstance(ids, list) or not all(isinstance(i, str) and UUID_RE.match(i) for i in ids):
+                return self.send_json(400, {"error": "members: the user ids."})
+            ids = [i for i in dict.fromkeys(ids) if i != user["id"]]
+            if not ids or len(ids) > CHAT_GROUP_MAX:
+                return self.send_json(400, {"error": "Choose 1 to %d other people." % CHAT_GROUP_MAX})
+            members = []
+            for i in ids:
+                peer = self.chat_peer(i)
+                if not peer:
+                    return self.send_json(404, {"error": "A user chosen doesn't exist (any more)."})
+                members.append(peer)
+            group = CHAT.create_group(user, members, focus=payload.get("focus", True) is not False)
+            log(event="chat-group", by=user["username"], group=group["id"], members=len(members))
+            return self.send_json(200, {"peer": group})
+        if what == "focus/ack":  # a member clicked a group chat's first message
+            group_id = str(payload.get("group") or "")
+            if not CHAT_GROUP_RE.match(group_id) or not CHAT.in_group(user["id"], group_id):
+                return self.send_json(404, {"error": "There is no such chat."})
+            CHAT.ack_focus(user["id"], group_id)
+            return self.send_json(200, {"ok": True})
         peer_id = str(payload.get("to") or "")
-        if not UUID_RE.match(peer_id):
+        if not chat_peer_id_ok(peer_id):
             return self.send_json(400, {"error": "Who is it for? (to=<user id>)"})
         if what == "read":
             try:
@@ -8555,7 +8775,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(400, {"error": "last must be a message id."})
             return self.send_json(200, {"ok": True})
         if what == "delete":
-            n = CHAT.delete(user["id"], peer_id)
+            try:
+                n = CHAT.delete(user["id"], peer_id)
+            except PermissionError as e:
+                return self.send_json(403, {"error": str(e)})
             log(event="chat-deleted", by=user["username"], peer=peer_id, messages=n)
             return self.send_json(200, {"ok": True, "deleted": n})
         all_admins = [] if admin else chat_admins()
@@ -8615,8 +8838,11 @@ class Handler(BaseHTTPRequestHandler):
             )
         if why:
             return self.send_json(403, {"error": why})
+        group = CHAT.group(peer_id) if CHAT_GROUP_RE.match(peer_id) else None
         peer = (
-            self.chat_peer(peer_id)
+            CHAT.group_peer(peer_id)
+            if group
+            else self.chat_peer(peer_id)
             if admin
             else next((a for a in admins if a["id"] == peer_id), None)
         )
@@ -8707,6 +8933,10 @@ class Handler(BaseHTTPRequestHandler):
         if imagebuilder.handle(self, "POST", path, url.query, ADMIN_ROLES):
             return
         if workspacevolumes.handle(self, "POST", path, url.query):
+            return
+        if provisioners.handle(self, "POST", path, url.query):
+            return
+        if dr.handle(self, "POST", path, url.query):
             return
         if lockdown.handle(self, "POST", path, url.query):
             return
@@ -9133,6 +9363,27 @@ def safe_accounts():
     return [(r[0], r[1]) for r in pool.query("SELECT id::text, username FROM users WHERE deleted = false")]
 
 
+def safe_shared_workspaces():
+    """The workspaces shared with other users or groups (Coder's workspace sharing): {workspace id: owner id}; None
+    before the database is up. Their owner's Cloud Drive stays out of them."""
+    pool = LOGOS.pool if LOGOS else None
+    if not pool:
+        return None
+    return {r[0]: r[1] for r in pool.query(
+        "SELECT id::text, owner_id::text FROM workspaces WHERE deleted = false "
+        "AND (user_acl <> '{}'::jsonb OR group_acl <> '{}'::jsonb)")}
+
+
+def safe_owner_workspaces(owner_id):
+    """An account's workspaces (Coder's database): [{id, name}]; None before the database is up."""
+    pool = LOGOS.pool if LOGOS else None
+    if not pool:
+        return None
+    return [{"id": r[0], "name": r[1]} for r in pool.query(
+        "SELECT id::text, name FROM workspaces WHERE deleted = false AND owner_id = $1::uuid ORDER BY name",
+        [owner_id])]
+
+
 def main():
     global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY, BACKGROUNDS, BANNER_PICTURES, HUD_HISTORY
     global NET_HISTORY
@@ -9158,9 +9409,13 @@ def main():
     workspacevolumes.CODER_URL = CODER_URL
     workspacevolumes.start()
     lockdown.setup(log, KUBE, workspace_info, ADMIN_ROLES, CODER_ACCESS_URL)
+    provisioners.setup(log, KUBE, ADMIN_ROLES, _coder_get, _coder_send)
+    dr.setup(log, KUBE)
+    dr.start()
     lockdown.start()
     safe.setup(log, KUBE, safe_accounts, lambda user: imagebuilder.can_edit(user, ADMIN_ROLES),
-               lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), workspace_info)
+               lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), workspace_info,
+               shared=safe_shared_workspaces, workspaces=safe_owner_workspaces)
     safe.start()
     if imagebuilder.ENABLED:
         # the apt indices for the package check, ready before anyone opens the builder

@@ -84,11 +84,13 @@ banner:
   # Text effect (bundled in the chart - nothing is downloaded). Browsers whose user asked for reduced motion always
   # see plain text.
   #   none | typewriter | fade | rise | wave | bounce | flip | shake | pulse | rainbow
-  #   starwars (the opening crawl) | pewpew (letters fired in as laser bolts) | flap (split-flap board)
+  #   starwars (the message rising within the banner: a flat scroller or the opening crawl, crawlTilt) | pewpew (letters fired in as laser bolts) | flap (split-flap board)
   #   shimmer (a light sweeping muted letters) | kitt (Knight Rider's scanner behind the message)
   effect: none
   repeat: false          # true = keep repeating; false = play once each time the banner appears
-  speed: normal          # slow | normal | fast: the crawl's pace and the scanner's sweep
+  speed: normal          # slow | normal | fast: the Knight Rider scanner's sweep
+  crawlSpeed: 15         # starwars: how fast the message rises, in pixels a second (4-60)
+  crawlTilt: 100         # starwars: how far its lines converge towards a horizon, percent: 0 a flat scroller, 100 the opening crawl
   font: default          # default | sans | serif | condensed | geist-mono | ibm-plex-mono | jetbrains-mono | fira-code | source-code-pro
   align: center          # left | center | right
   # The message is Markdown (the dashboard's editor writes plain text and sets this to false).

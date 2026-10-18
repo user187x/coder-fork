@@ -62,3 +62,20 @@ closeEffect: [none, pixelate, rollup, fade, wipe, matrix, gaussian, evaporate, k
 {{- end -}}
 {{- $b.id | default (join "|" $parts | sha256sum | trunc 12) -}}
 {{- end -}}
+
+{{/* banner.<key>, a whole number from low to high (empty: the default), as files/server.py takes it (CRAWL_SPEED,
+     CRAWL_TILT); out of range fails the install with a clear message.
+     include "coder-banner.number" (list . "crawlSpeed" 4 60 15) */}}
+{{- define "coder-banner.number" -}}
+{{- $root := index . 0 -}}{{- $key := index . 1 -}}{{- $low := index . 2 -}}{{- $high := index . 3 -}}
+{{- $value := get $root.Values.banner $key -}}
+{{- if eq (toString $value) "" -}}{{- $value = index . 4 -}}{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" (toString $value)) -}}
+  {{- fail (printf "banner.%s must be a whole number from %d to %d (got %v)" $key $low $high $value) -}}
+{{- end -}}
+{{- $n := int $value -}}
+{{- if or (lt $n $low) (gt $n $high) -}}
+  {{- fail (printf "banner.%s must be from %d to %d (got %d)" $key $low $high $n) -}}
+{{- end -}}
+{{- $n -}}
+{{- end -}}

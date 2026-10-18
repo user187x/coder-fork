@@ -368,45 +368,49 @@
 	}
 }
 
-/* ---- the opening crawl (starwars): the text, justified and tilted away, rises from below the banner and recedes ---- */
-/* into the distance, fading out at the top; banner.js sets its duration from its height and the banner's speed. */
+/* ---- the crawl (starwars): the text rises from the bottom of the banner to its top, within the banner as it stands ---- */
+/* The message keeps its place, invisible (it sizes the banner); the crawl runs over the banner, out of the flow. Its   */
+/* convergence (--crawl-tilt, 0-1) tilts the lines away towards a horizon: 0 a flat scroller, 1 the opening crawl.     */
+/* banner.js sets its frame, its duration from its height and the pace, and its tilt.                                 */
 .cb-crawl-host {
-	display: block;
-	flex: 1 1 auto;
-	align-self: stretch;
-	min-width: 0;
+	position: relative;
+}
+.cb-crawl-sizer {
+	visibility: hidden;
 }
 .cb-crawl {
-	position: relative;
+	--crawl-tilt: 1;
+	position: absolute;
 	display: block;
-	height: 2.7em;
 	overflow: hidden;
-	perspective: 9em;
+	pointer-events: none;
+	perspective: calc(9em + (1 - var(--crawl-tilt)) * 60em);
 	perspective-origin: 50% 0%;
-	-webkit-mask-image: linear-gradient(to top, #000 55%, transparent);
-	mask-image: linear-gradient(to top, #000 55%, transparent);
+	-webkit-mask-image: linear-gradient(to top, #000 calc(100% - 10% - var(--crawl-tilt) * 40%), transparent);
+	mask-image: linear-gradient(to top, #000 calc(100% - 10% - var(--crawl-tilt) * 40%), transparent);
 }
 .cb-crawl-text {
 	position: absolute;
 	top: 100%;
-	left: 6%;
-	right: 6%;
+	left: calc(var(--crawl-tilt) * 6%);
+	right: calc(var(--crawl-tilt) * 6%);
 	display: block;
 	text-align: justify;
 	text-align-last: center;
 	font-weight: 600;
 	letter-spacing: 0.02em;
 	transform-origin: 50% 0%;
+	pointer-events: auto;
 	animation-name: cb-crawl;
 	animation-timing-function: linear;
 	animation-fill-mode: both;
 }
 @keyframes cb-crawl {
 	from {
-		transform: rotateX(24deg) translateY(0);
+		transform: rotateX(calc(var(--crawl-tilt) * 30deg)) translateY(0);
 	}
 	to {
-		transform: rotateX(24deg) translateY(calc(-100% - 2.9em));
+		transform: rotateX(calc(var(--crawl-tilt) * 30deg)) translateY(calc(-100% - var(--crawl-screen, 3em)));
 	}
 }
 

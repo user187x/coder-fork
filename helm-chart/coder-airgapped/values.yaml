@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.60 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.63 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.60-airgap
+      tag: 2.0.0-platform.63-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -141,6 +141,11 @@ coder:
     # becomes the owner by signing in first.
     - name: CODER_PLATFORM_FIRST_OWNER
       value: '{{ if include "platform.decorated" . }}bootstrap{{ end }}'
+    # Templates > Create template starts every new template from the base template (the coder-workspace chart's,
+    # template.name), so each keeps what the platform builds into it: the Cloud Drive, Lock Down, the certificate, the
+    # metrics. The fork's own setting, as the two above.
+    - name: CODER_TEMPLATE_BUILDER_BASE_TEMPLATE
+      value: '{{ if include "platform.decorated" . }}{{ (index .Values "coder-workspace").template.name | default "ubuntu-vnc-desktop" }}{{ end }}'
     - name: CODER_BOOTSTRAP_INITIAL_USER_PASSWORD
       valueFrom:
         secretKeyRef:
@@ -395,14 +400,16 @@ userStorage:
 
 # ---------------------------------------------------------------------------------------------------------------
 # coder-ui-updates: the platform service under /__coder-ui/ (General, Health, Certificates, Chat, Network,
-# Monitoring, Keycloak, logo, avatars...). Files: files/ui-updates/ (source: devbox coder-ui-updates/resources).
+# Monitoring, Keycloak, logo, avatars...). Its code: files/ui-updates/, in its image (not in the chart).
 # The platform image renders the UI natively, so no Traefik rewrite middleware is involved for these.
 # ---------------------------------------------------------------------------------------------------------------
 uiUpdates:
   enabled: true
-  # The bundled Python with shellcheck, shfmt, trivy (+ its database) and regctl (development/image-tools): the Images
-  # view lints and formats installation scripts and scans built images with them.
-  image: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-image-tools:1.0.0") }}'
+  # The service's code (files/ui-updates) in /app of the tools image - the bundled Python with shellcheck, shfmt, trivy
+  # (+ its database) and regctl (development/image-tools), which the Images view lints, formats and scans with -
+  # tagged with the code's hash (development/tools/build-ui-image.sh builds and pins it). The chart carries no code:
+  # Helm keeps each release in a Secret of at most 1 MiB.
+  image: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-ebfb5afcfd01") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'

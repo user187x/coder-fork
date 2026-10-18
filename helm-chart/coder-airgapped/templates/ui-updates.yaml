@@ -2,27 +2,10 @@
 {{- if and .Values.uiUpdates.enabled (include "platform.hasLayer" .) }}
 {{- $ui := .Values.uiUpdates }}
 {{- $ns := .Release.Namespace }}
-{{- $code := list "ui-service.py" "pgwire.py" "certinfo.py" "imagebuilder.py" "workspacevolumes.py" "securitydata.py" "lockdown.py" "lockdown.sh" "fips-rules.json" "safe.py" "s3client.py" }}
-{{- $files := .Files.Glob "files/ui-updates/*" }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: coder-ui-updates
-  namespace: {{ $ns }}
-  labels:
-    {{- include "ca.uiLabels" . | nindent 4 }}
-data:
-  {{- range $path, $_ := $files }}
-  {{- if not (hasSuffix ".png" $path) }}
-  {{ base $path }}: {{ $.Files.Get $path | toJson }}
-  {{- end }}
-  {{- end }}
-binaryData:
-  {{- range $path, $_ := $files }}
-  {{- if hasSuffix ".png" $path }}
-  {{ base $path }}: {{ $.Files.Get $path | b64enc }}
-  {{- end }}
-  {{- end }}
+{{- /* The service's code is in its image (uiUpdates.image: development/tools/build-ui-image.sh puts
+     files/ui-updates/ in /app of the tools image, tagged with the code's hash), not in a ConfigMap: Helm keeps each
+     release in a Secret of at most 1 MiB, and the code - kept twice there, as the chart's files and as the rendered
+     ConfigMap - had nearly filled it. */}}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -60,8 +43,6 @@ spec:
     type: Recreate
   template:
     metadata:
-      annotations:
-        checksum/files: {{ $files | toString | sha256sum | trunc 16 | quote }}
       labels:
         app.kubernetes.io/name: coder-ui-updates
         app.kubernetes.io/part-of: coder
@@ -163,8 +144,12 @@ spec:
             - {name: SAFE_NAMESPACE, value: {{ $ns | quote }}}
             - {name: SAFE_MOUNT_OPTIONS, value: {{ $us.csi.mountOptions | quote }}}
             {{- if $us.minio.enabled }}
-            - {name: S3_ENDPOINT, value: {{ printf "http://coder-user-storage-minio.%s.svc:9000" $ns | quote }}}
+            # MinIO's TLS port, its certificate checked (an encrypted Cloud Drive's key goes over TLS only); the nodes'
+            # mounts: plain through its bridge (9000), encrypted ones on 9443.
+            - {name: S3_ENDPOINT, value: {{ printf "https://coder-user-storage-minio.%s.svc:9443" $ns | quote }}}
+            - {name: S3_CA_FILE, value: /etc/coder-user-storage/ca.crt}
             - {name: SAFE_NODE_SERVICE, value: coder-user-storage-minio}
+            - {name: SAFE_NODE_TLS_PORT, value: "9443"}
             - name: S3_ACCESS_KEY
               valueFrom: {secretKeyRef: {name: coder-user-storage-s3, key: username}}
             - name: S3_SECRET_KEY
@@ -216,9 +201,6 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
-            {{- range $code }}
-            - {name: code, mountPath: /app/{{ . }}, subPath: {{ . }}}
-            {{- end }}
             - {name: data, mountPath: /data}
             - {name: ca, mountPath: /etc/coder-ui/ca, readOnly: true}
             - {name: db-ca, mountPath: /etc/coder-ui/db-ca, readOnly: true}
@@ -230,17 +212,20 @@ spec:
             - {name: builder, mountPath: /builder}
             - {name: tmp, mountPath: /tmp}
             {{- end }}
+            {{- if and (eq (toString (.Values.global.userStorage | default dict).enabled) "true") .Values.userStorage.minio.enabled }}
+            - {name: user-storage-ca, mountPath: /etc/coder-user-storage, readOnly: true}
+            {{- end }}
       volumes:
-        - name: code
-          configMap:
-            name: coder-ui-updates
-            items:
-              {{- range $code }}
-              - {key: {{ . }}, path: {{ . }}}
-              {{- end }}
         - name: data
           persistentVolumeClaim:
             claimName: coder-ui-updates-data
+        {{- if and (eq (toString (.Values.global.userStorage | default dict).enabled) "true") .Values.userStorage.minio.enabled }}
+        # The chart's MinIO's CA (templates/user-storage.yaml).
+        - name: user-storage-ca
+          secret:
+            secretName: coder-user-storage-minio-tls
+            items: [{key: ca.crt, path: ca.crt}]
+        {{- end }}
         - name: ca
           secret:
             secretName: {{ .Values.secrets.tlsCa.name }}

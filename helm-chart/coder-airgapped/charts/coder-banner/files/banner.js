@@ -74,7 +74,8 @@
   // whether the element on screen is out of date (e.g. an admin changed only "let people dismiss it").
   function signature(c) {
     return JSON.stringify([c.level, c.title, c.message, c.linkText, c.linkUrl, !!c.dismissible, c.effect || 'none', !!c.repeat,
-      c.speed || 'normal', c.font || 'default', c.align || 'center', c.picture || '', c.pictureFit || 'span', !!c.outline, c.countdown || '']);
+      c.speed || 'normal', c.crawlSpeed || 0, typeof c.crawlTilt === 'number' ? c.crawlTilt : 100, c.font || 'default',
+      c.align || 'center', c.picture || '', c.pictureFit || 'span', !!c.outline, c.countdown || '']);
   }
 
   // What needs the stylesheet: a picture, the outline, the countdown, or an effect it draws.
@@ -458,7 +459,7 @@
     starwars: { crawl: true },
   };
   // Knight Rider: one sweep there and back by the banner's speed; a lamp for about every 44 px; without repeat, two
-  // sweeps and the lamps go dark. The crawl's pace in pixels per second.
+  // sweeps and the lamps go dark. The crawl's pace in pixels per second, for announcements saved before crawlSpeed.
   var KITT_CYCLE_MS = { slow: 2400, normal: 1600, fast: 1000 };
   var KITT_LAMP_PX = 44;
   var KITT_MIN_LAMPS = 8;
@@ -565,19 +566,35 @@
     };
   }
 
-  // The opening crawl: the text tilted away, rising from below the banner and receding, at a steady pace (its
-  // duration from its height); without repeat once, then the plain text.
+  // The crawl: the text rises from the bottom of the banner to its top at a steady pace (its duration from its
+  // height), tilted away towards a horizon as far as its convergence says (0 a flat scroller, 100 the opening crawl).
+  // The banner keeps its size: the message stays in its place, invisible, and the crawl runs over the banner. Without
+  // repeat once, then the plain text.
   function crawl(text, c, done) {
+    var sizer = document.createElement('span');
+    sizer.className = 'cb-crawl-sizer';
+    sizer.setAttribute('aria-hidden', 'true');
+    while (text.firstChild) sizer.appendChild(text.firstChild);
     var view = document.createElement('span');
     view.className = 'cb-crawl';
     var inner = document.createElement('span');
     inner.className = 'cb-crawl-text';
-    while (text.firstChild) inner.appendChild(text.firstChild);
+    Array.prototype.forEach.call(sizer.childNodes, function (n) { inner.appendChild(n.cloneNode(true)); });
     view.appendChild(inner);
+    text.appendChild(sizer);
     text.appendChild(view);
     text.classList.add('cb-crawl-host');
-    var travel = inner.offsetHeight + view.offsetHeight;
-    inner.style.animationDuration = Math.max(4, travel / (CRAWL_PX_PER_SECOND[c.speed] || CRAWL_PX_PER_SECOND.normal)) + 's';
+    var screen = text.parentElement || text;
+    var h = text.getBoundingClientRect();
+    var s = screen.getBoundingClientRect();
+    view.style.left = '0';
+    view.style.width = h.width + 'px';
+    view.style.top = (s.top - h.top) + 'px';
+    view.style.height = s.height + 'px';
+    view.style.setProperty('--crawl-tilt', String((typeof c.crawlTilt === 'number' ? c.crawlTilt : 100) / 100));
+    view.style.setProperty('--crawl-screen', s.height + 'px');
+    var speed = c.crawlSpeed || CRAWL_PX_PER_SECOND[c.speed] || CRAWL_PX_PER_SECOND.normal;
+    inner.style.animationDuration = Math.max(4, (inner.offsetHeight + s.height) / speed) + 's';
     inner.style.animationIterationCount = c.repeat ? 'infinite' : '1';
     if (!c.repeat) {
       inner.addEventListener('animationend', function (e) {
@@ -586,8 +603,9 @@
     }
     return function () {
       text.classList.remove('cb-crawl-host');
-      while (inner.firstChild) text.appendChild(inner.firstChild);
       view.remove();
+      while (sizer.firstChild) text.appendChild(sizer.firstChild);
+      sizer.remove();
     };
   }
 

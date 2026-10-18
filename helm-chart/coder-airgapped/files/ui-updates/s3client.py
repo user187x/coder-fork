@@ -1,5 +1,7 @@
 """A small S3 client (standard library only): AWS Signature Version 4, path-style requests (MinIO, AWS S3, Ceph...),
-streamed uploads and downloads. What the safe needs and nothing more: buckets, listing, objects, batch deletes.
+streamed uploads and downloads. What the safe needs and nothing more: buckets, listing, objects, batch deletes, copies;
+an encrypted Cloud Drive's objects with its key (SSE-C: sse=<32-byte key>; S3 keeps nothing of the key, and takes it
+over TLS only).
 
     s3 = S3("http://minio:9000", "us-east-1", access_key, secret_key)
     s3.list("bucket", prefix="users/u1/", delimiter="/")
@@ -32,6 +34,22 @@ def _quote(text, safe="-_.~"):
 
 def _hmac(key, msg):
     return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+
+SSE_C = "x-amz-server-side-encryption-customer-"
+COPY_LIMIT = 5 * 1024 ** 3  # one CopyObject; larger objects are copied in parts
+
+
+def sse_headers(key, copy_source=False):
+    """The headers of an object encrypted with the customer key `key` (SSE-C, AES-256): for the object itself, or for
+    the source of a copy. None: none."""
+    if not key:
+        return {}
+    if len(key) != 32:
+        raise ValueError("an SSE-C key is 32 bytes")
+    prefix = "x-amz-copy-source-server-side-encryption-customer-" if copy_source else SSE_C
+    return {prefix + "algorithm": "AES256", prefix + "key": base64.b64encode(key).decode(),
+            prefix + "key-md5": base64.b64encode(hashlib.md5(key).digest()).decode()}
 
 
 class S3:
@@ -174,44 +192,23 @@ class S3:
                 return objects, prefixes
             token = root.findtext(NS + "NextContinuationToken")
 
-    def put(self, bucket, key, body, length=None, content_type="application/octet-stream"):
-        self._done(self.request("PUT", bucket, key, body=body, length=length, headers={"content-type": content_type}))
+    def put(self, bucket, key, body, length=None, content_type="application/octet-stream", sse=None):
+        self._done(self.request("PUT", bucket, key, body=body, length=length,
+                                headers={"content-type": content_type, **sse_headers(sse)}))
 
-    def put_large(self, bucket, key, body, length, part_size=64 * 1024 * 1024, content_type="application/octet-stream",
-                  progress=None):
-        """A stream of `length` bytes, in parts (multipart upload: S3 takes at most 5 GB in one PUT); small ones in
-        one PUT. progress(bytes so far) after each part. The upload is aborted if anything fails."""
-        if length <= part_size:
-            self.put(bucket, key, body, length=length, content_type=content_type)
-            if progress:
-                progress(length)
-            return
+    def _multipart(self, bucket, key, content_type, sse, parts_of):
+        """A multipart upload: parts_of(upload id) sends the parts and gives [(number, etag)]; then completed, or
+        aborted if anything fails."""
         root = ET.fromstring(self._done(self.request("POST", bucket, key, query=[("uploads", "")], body=b"",
-                                                     headers={"content-type": content_type})))
+                                                     headers={"content-type": content_type, **sse_headers(sse)})))
         upload_id = root.findtext(NS + "UploadId")
-        parts, done, number = [], 0, 1
         try:
-            while done < length:
-                size = min(part_size, length - done)
-                data = bytearray()
-                while len(data) < size:
-                    chunk = body.read(min(1024 * 1024, size - len(data)))
-                    if not chunk:
-                        raise IOError("the upload ended %d bytes early" % (length - done - len(data)))
-                    data += chunk
-                resp = self.request("PUT", bucket, key, query=[("partNumber", str(number)), ("uploadId", upload_id)],
-                                    body=bytes(data))
-                parts.append((number, resp.headers.get("ETag")))
-                self._done(resp)
-                done += size
-                number += 1
-                if progress:
-                    progress(done)
+            parts = parts_of(upload_id)
             xml = "<CompleteMultipartUpload>%s</CompleteMultipartUpload>" % "".join(
                 "<Part><PartNumber>%d</PartNumber><ETag>%s</ETag></Part>" % (n, (etag or "").replace("&", "&amp;"))
                 for n, etag in parts)
             answer = self._done(self.request("POST", bucket, key, query=[("uploadId", upload_id)], body=xml.encode(),
-                                             headers={"content-type": "application/xml"}))
+                                             headers={"content-type": "application/xml", **sse_headers(sse)}))
             if b"<Error>" in answer:  # S3 may answer 200 with an error in the body
                 root = ET.fromstring(answer)
                 raise S3Error(200, root.findtext("Code") or "", root.findtext("Message") or "")
@@ -222,12 +219,104 @@ class S3:
                 pass
             raise
 
-    def get(self, bucket, key):
-        """The open response: .headers, .read(n); close() it and its .conn when done."""
-        return self.request("GET", bucket, key)
+    def put_large(self, bucket, key, body, length, part_size=64 * 1024 * 1024, content_type="application/octet-stream",
+                  progress=None, sse=None):
+        """A stream of `length` bytes, in parts (multipart upload: S3 takes at most 5 GB in one PUT); small ones in
+        one PUT. progress(bytes so far) after each part. The upload is aborted if anything fails."""
+        if length <= part_size:
+            self.put(bucket, key, body, length=length, content_type=content_type, sse=sse)
+            if progress:
+                progress(length)
+            return
 
-    def head(self, bucket, key):
-        resp = self.request("HEAD", bucket, key)
+        def parts_of(upload_id):
+            parts, done, number = [], 0, 1
+            while done < length:
+                size = min(part_size, length - done)
+                data = bytearray()
+                while len(data) < size:
+                    chunk = body.read(min(1024 * 1024, size - len(data)))
+                    if not chunk:
+                        raise IOError("the upload ended %d bytes early" % (length - done - len(data)))
+                    data += chunk
+                resp = self.request("PUT", bucket, key, query=[("partNumber", str(number)), ("uploadId", upload_id)],
+                                    body=bytes(data), headers=sse_headers(sse))
+                parts.append((number, resp.headers.get("ETag")))
+                self._done(resp)
+                done += size
+                number += 1
+                if progress:
+                    progress(done)
+            return parts
+
+        self._multipart(bucket, key, content_type, sse, parts_of)
+
+    def put_stream(self, bucket, key, read, part_size=16 * 1024 * 1024, content_type="application/octet-stream"):
+        """A stream of unknown length: read(n) gives up to n bytes, b"" at its end. In parts (multipart upload) as
+        they fill, so at most one part is held; a stream shorter than a part in one PUT. Its size."""
+        def fill():
+            data = bytearray()
+            while len(data) < part_size:
+                chunk = read(part_size - len(data))
+                if not chunk:
+                    break
+                data += chunk
+            return bytes(data)
+
+        first = fill()
+        if len(first) < part_size:
+            self.put(bucket, key, first, content_type=content_type)
+            return len(first)
+        total = [0]
+
+        def parts_of(upload_id):
+            parts, data, number = [], first, 1
+            while data:
+                resp = self.request("PUT", bucket, key, query=[("partNumber", str(number)), ("uploadId", upload_id)],
+                                    body=data)
+                parts.append((number, resp.headers.get("ETag")))
+                self._done(resp)
+                total[0] += len(data)
+                number += 1
+                data = fill()
+            return parts
+
+        self._multipart(bucket, key, content_type, None, parts_of)
+        return total[0]
+
+    def copy(self, bucket, src, dst, size, content_type="application/octet-stream", src_sse=None, dst_sse=None,
+             part_size=1024 ** 3):
+        """Copies an object of `size` bytes within the bucket (in place too: a new key, or none, re-encrypts it):
+        src_sse its key now, dst_sse the copy's. Larger than one CopyObject takes, in parts."""
+        source = "/%s/%s" % (bucket, _quote(src, safe="/-_.~"))
+        headers = {"x-amz-copy-source": source, **sse_headers(src_sse, copy_source=True)}
+        if size <= COPY_LIMIT:
+            answer = self._done(self.request("PUT", bucket, dst, headers={
+                **headers, **sse_headers(dst_sse), "x-amz-metadata-directive": "REPLACE",
+                "content-type": content_type}))
+            if b"<Error>" in answer:  # a copy may fail after its 200
+                root = ET.fromstring(answer)
+                raise S3Error(200, root.findtext("Code") or "", root.findtext("Message") or "")
+            return
+
+        def parts_of(upload_id):
+            parts = []
+            for number, start in enumerate(range(0, size, part_size), 1):
+                end = min(size, start + part_size) - 1
+                root = ET.fromstring(self._done(self.request(
+                    "PUT", bucket, dst, query=[("partNumber", str(number)), ("uploadId", upload_id)],
+                    headers={**headers, **sse_headers(dst_sse), "x-amz-copy-source-range": "bytes=%d-%d" % (start, end)})))
+                parts.append((number, root.findtext(NS + "ETag")))
+            return parts
+
+        self._multipart(bucket, dst, content_type, dst_sse, parts_of)
+
+    def get(self, bucket, key, sse=None):
+        """The open response: .headers, .read(n); close() it and its .conn when done."""
+        return self.request("GET", bucket, key, headers=sse_headers(sse))
+
+    def head(self, bucket, key, sse=None):
+        resp = self.request("HEAD", bucket, key, headers=sse_headers(sse))
         self._done(resp)
         return resp
 

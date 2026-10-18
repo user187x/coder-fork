@@ -43,6 +43,8 @@ data:
         "effect" (include "coder-banner.choice" (list . "effect" "none"))
         "repeat" (include "coder-banner.bool" (list . "repeat") | eq "true")
         "speed" (include "coder-banner.choice" (list . "speed" "normal"))
+        "crawlSpeed" (include "coder-banner.number" (list . "crawlSpeed" 4 60 15) | int)
+        "crawlTilt" (include "coder-banner.number" (list . "crawlTilt" 0 100 100) | int)
         "font" (include "coder-banner.choice" (list . "font" "default"))
         "align" (include "coder-banner.choice" (list . "align" "center"))
         "markdown" (include "coder-banner.bool" (list . "markdown") | eq "true")

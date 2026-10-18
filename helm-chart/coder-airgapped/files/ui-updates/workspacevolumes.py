@@ -227,11 +227,9 @@ def workspace_node(wid):
 
 
 def job_body(name, op_id, containers, volumes, root=False, node=None):
-    code = {"name": "code", "configMap": {"name": "coder-ui-updates", "items": [
-        {"key": "workspacevolumes.py", "path": "workspacevolumes.py"}] + ib.CODE_ITEMS}}
     ctx = ({"runAsUser": 0, "runAsGroup": 0, "seccompProfile": {"type": "RuntimeDefault"}} if root else
            {"runAsNonRoot": True, "runAsUser": 1000, "runAsGroup": 1000, "seccompProfile": {"type": "RuntimeDefault"}})
-    spec = {"restartPolicy": "Never", "securityContext": ctx, "containers": containers, "volumes": volumes + [code]}
+    spec = {"restartPolicy": "Never", "securityContext": ctx, "containers": containers, "volumes": volumes}
     if node:
         spec["nodeName"] = node
     if ib.PULL_SECRETS:
@@ -283,7 +281,8 @@ def tools_container(name, command, mounts, root=False):
         # copying keeps every file's owner and mode
         sc["capabilities"]["add"] = ["CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER", "FSETID"]
     return {"name": name, "image": ib.TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent", "command": command,
-            "securityContext": sc, "volumeMounts": mounts + [{"name": "code", "mountPath": "/app"}],
+            # the service's own image: its code in /app
+            "securityContext": sc, "volumeMounts": mounts,
             "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"memory": "512Mi"}}}
 
 
