@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The workspace's startup script (coder_agent.main in ../main.tf): the shell defaults, the cluster sign-in for admins,
-# the desktop and the apps (code-server, File Browser, marimo; in the ubuntu-dataflow template, Apache NiFi and
-# Apache Airflow in place of code-server and marimo; in the AI templates, ubuntu-lmstudio and ubuntu-opencode, LM Studio
-# and its server in place of marimo). Runs at every start; each step is safe to repeat.
+# the desktop and the apps (code-server, File Browser; in the ubuntu-dataflow template, Apache NiFi and Apache Airflow
+# in place of code-server; in the AI templates, ubuntu-lmstudio and ubuntu-opencode, LM Studio and its server too). A
+# template made in Create new template may leave out the desktop or File Browser (its desktop and file_browser
+# variables). Runs at every start; each step is safe to repeat.
 # The .tf file renders this with templatefile(), so Terraform template syntax applies here: a shell variable in
 # braces is written with two dollar signs ($${HOME}), and a percent sign before a brace is doubled (%%{).
 set -e
@@ -15,7 +16,9 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
-APP_SET='${app_set}'           # developer (code-server, marimo), dataflow (NiFi, Airflow), lmstudio or opencode (AI)
+APP_SET='${app_set}'           # developer (code-server), dataflow (NiFi, Airflow), lmstudio or opencode (AI)
+DESKTOP='${desktop}'           # true: the desktop (noVNC's Desktop app)
+FILE_BROWSER='${file_browser}' # true: File Browser
 AI_CONTEXT='${context_length}' # the AI templates' Context length parameter: LM Studio's default context, in tokens
 ACCESS_HOST='${access_host}'   # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
 START_DIR='${start_directory}' # the Start folder parameter: where the terminal and File Browser open
@@ -80,7 +83,8 @@ if command -v tmux-mirror-setup >/dev/null && [ ! -e ~/.config/tmux ] && [ ! -e 
  tmux-mirror-setup >/tmp/tmux-mirror-setup.log 2>&1 || true
 fi
 
-# ~/.cert/<owner>.p12 is installed by the "Certificates" script (certificates.tf) from Settings > Certificates.
+# ~/.cert/<owner>.p12 is installed by the "Certificates" script (main.tf's platform section "certificates") from
+# Settings > Certificates.
 
 # Admins: kubectl and k9s on this cluster. ~/.kube/coder-cluster.yaml (this template's own file, rewritten at
 # every start; KUBECONFIG lists it before ~/.kube/config, which is never touched) has the context
@@ -130,10 +134,15 @@ fi
 
 # 1. Desktop Environment & noVNC, first: it needs no network. It is in the workspace image
 # (ghcr.io/user187x/coder-workspace, without light-locker); installed here only on an image without it.
-# code-server, File Browser and marimo below are downloaded; offline they are skipped, the rest still starts.
-# An image built in Templates > Images names its desktop in /etc/coder-image/desktop: xfce, gnome or none (no
-# desktop: the Desktop app stays down).
+# code-server and File Browser below are downloaded when the image lacks them; offline they are skipped, the rest
+# still starts. An image built in Templates > Images names its desktop in /etc/coder-image/desktop: xfce, gnome or
+# none (no desktop: the Desktop app stays down); a template without the Desktop app starts none either.
 IMAGE_DESKTOP=$(cat /etc/coder-image/desktop 2>/dev/null || echo xfce)
+NO_DESKTOP="none in this image"
+if [ "$DESKTOP" != true ]; then
+ IMAGE_DESKTOP=none
+ NO_DESKTOP="not in this template"
+fi
 if [ ! -f /usr/bin/vncserver ] && [ "$IMAGE_DESKTOP" != none ]; then
  sudo apt-get update
  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies dbus-x11 tigervnc-standalone-server novnc websockify light-locker- lightdm- lightdm-gtk-greeter-
@@ -188,7 +197,7 @@ if [ "$IMAGE_DESKTOP" != none ] && ! pgrep -f "^Xtigervnc :1 " >/dev/null; then
  DISPLAY=:1 XAUTHORITY=~/.Xauthority setsid ~/.config/tigervnc/xstartup >/tmp/xstartup.log 2>&1 </dev/null &
  log "Desktop: started ($IMAGE_DESKTOP on display :1)"
 elif [ "$IMAGE_DESKTOP" = none ]; then
- log "Desktop: none in this image (the Desktop app stays down)"
+ log "Desktop: $NO_DESKTOP (the Desktop app stays down)"
 else
  log "Desktop: running already"
 fi
@@ -202,61 +211,12 @@ if [ "$IMAGE_DESKTOP" != none ] && ! curl -s -o /dev/null http://127.0.0.1:6901/
  log "Desktop app (noVNC): started"
 fi
 
-# (Only in the developer template: the others have no marimo.)
-if [ "$APP_SET" = developer ]; then
- # Windows of marimo notebooks (tkinter): a second, private X display (:2: no desktop, no window manager, on its
- # own Unix socket), sized by the notebook to the window it shows. coder_marimo_tk (marimo, below) opens tkinter
- # windows there and shows each one live in its cell's output: the minimal noVNC page below, through the hidden
- # app "marimo-windows" (websockify on 127.0.0.1:6902).
- APPS_SOCK=/tmp/coder-vnc/apps.sock
- if ! pgrep -f "^Xtigervnc :2 " >/dev/null; then
-  rm -f "$APPS_SOCK" /tmp/.X2-lock /tmp/.X11-unix/X2
-  touch ~/.Xauthority && chmod 600 ~/.Xauthority
-  xauth -f ~/.Xauthority add :2 MIT-MAGIC-COOKIE-1 "$(mcookie)"
-  Xtigervnc :2 -auth ~/.Xauthority -geometry 640x480 -depth 24 -rfbport -1 -rfbunixpath "$APPS_SOCK" \
-   -SecurityTypes None -AlwaysShared -FrameRate 60 -desktop marimo-windows >/tmp/xvnc-apps.log 2>&1 &
-  for i in $(seq 1 50); do
-   [ -S "$APPS_SOCK" ] && break
-   sleep 0.2
-  done
- fi
- APPS_WEB=/tmp/coder-vnc/apps-web
- mkdir -p "$APPS_WEB" && ln -sfn /usr/share/novnc/core "$APPS_WEB/core" && ln -sfn /usr/share/novnc/vendor "$APPS_WEB/vendor"
- cat <<'APPS_VIEW' >"$APPS_WEB/index.html"
-<!doctype html>
-<html><head><meta charset="utf-8"><title>marimo window</title>
-<style>html,body{margin:0;height:100%;overflow:hidden;background:#fff}#screen{width:100%;height:100%}
-#msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:12px sans-serif;color:#777}</style>
-</head><body><div id="msg">Connecting...</div><div id="screen"></div>
-<script type="module">
-import RFB from "./core/rfb.js";
-// The websocket next to this page (Coder's app path), so it works under any prefix.
-const url = new URL("websockify", location.href);
-url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
-const msg = document.getElementById("msg");
-const connect = () => {
-  const rfb = new RFB(document.getElementById("screen"), url.href);
-  rfb.scaleViewport = false;
-  rfb.resizeSession = false;
-  rfb.addEventListener("connect", () => { msg.style.display = "none"; });
-  rfb.addEventListener("disconnect", () => {
-    msg.textContent = "Window closed";
-    msg.style.display = "flex";
-    setTimeout(connect, 2000);
-  });
-};
-connect();
-</script></body></html>
-APPS_VIEW
- # (By its port: pgrep -f would match this script, whose text contains the pattern.)
- if ! curl -s -o /dev/null http://127.0.0.1:6902/; then
-  websockify --web="$APPS_WEB" --unix-target="$APPS_SOCK" 127.0.0.1:6902 >/tmp/novnc-apps.log 2>&1 &
- fi
-fi
-
 # 2. code-server: the workspace image's (1.8.0 and later), so it works without internet. Downloaded only on an
-# image without it, which needs internet (it is skipped, with a note in the log, when there is none).
-if [ "$APP_SET" != dataflow ]; then
+# image without it, which needs internet (it is skipped, with a note in the log, when there is none). With code-server
+# HA (CODER_CODE_SERVER_HA, the template's code_server_ha) it runs elsewhere: the relay in this pod answers instead.
+if [ -n "$${CODER_CODE_SERVER_HA:-}" ]; then
+ log "code-server: high availability - its instance runs apart from the workspace (the relay answers on 13337)"
+elif [ "$APP_SET" != dataflow ]; then
  CODE_SERVER="$(command -v code-server || true)"
  if [ -z "$CODE_SERVER" ]; then
   if [ ! -x /tmp/code-server/bin/code-server ]; then
@@ -275,15 +235,20 @@ if [ "$APP_SET" != dataflow ]; then
  fi
 fi
 
-# 3. File Browser: the workspace image's as well; downloaded only on an image without it (needs internet).
-if ! command -v filebrowser >/dev/null; then
+# 3. File Browser (when the template has it): the workspace image's as well; downloaded only on an image without it
+# (needs internet).
+if [ "$FILE_BROWSER" != true ]; then
+ log "File Browser: not in this template"
+elif ! command -v filebrowser >/dev/null; then
  curl -fsSL --max-time 60 https://raw.githubusercontent.com/filebrowser/get/master/get.sh | sudo bash ||
   echo "File Browser is not in this image and could not be downloaded: skipped"
 fi
 # Path-based apps are proxied with their full /@user/workspace.agent/apps/<slug> prefix
 # intact, so filebrowser must serve under it or its assets 404 (endless spinner).
 # The agent name ("main") is hardcoded: referencing coder_agent.main here would be a cycle.
-if ! pgrep -x filebrowser >/dev/null; then
+if [ "$FILE_BROWSER" != true ]; then
+ :
+elif ! pgrep -x filebrowser >/dev/null; then
  filebrowser --noauth --root "$START_DIR" --port 13339 \
   --baseurl "$APPS/filebrowser" \
   >/tmp/filebrowser.log 2>&1 &
@@ -292,209 +257,8 @@ else
  log "File Browser: running already"
 fi
 
-# 4. marimo (Python notebooks), with no network: the workspace image has it with everything it needs in /opt/marimo
-# (marimo and its extras - SQL, charts, formatting, language server, uv - and a data stack; tkinter). Each user's
-# notebooks run in ~/.marimo-venv, which sees all of /opt/marimo (a .pth file) and takes the packages they add
-# (pip or uv; with no network, only what is already there). It is (re)made when missing, when an older one installed
-# marimo itself from the internet, or when the image's Python changes. (Only in the developer template.)
-if [ "$APP_SET" = developer ]; then
- MARIMO_VENV=/home/coder/.marimo-venv
- MARIMO_BASE="$APPS/marimo"
- if [ -x /opt/marimo/bin/marimo ]; then
-  MARIMO_STAMP="$(python3 -V) /opt/marimo $(/opt/marimo/bin/marimo --version)"
-  if [ "$(cat "$MARIMO_VENV/.coder-workspace" 2>/dev/null)" != "$MARIMO_STAMP" ]; then
-   rm -rf "$MARIMO_VENV"
-   python3 -m venv "$MARIMO_VENV"
-   /opt/marimo/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' \
-    >"$("$MARIMO_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/coder-workspace-marimo.pth"
-   echo "$MARIMO_STAMP" >"$MARIMO_VENV/.coder-workspace"
-  fi
-  # tkinter windows show in the notebook and stop with marimo's Stop button: coder_marimo_tk, loaded through the .pth.
-  MARIMO_SITE="$("$MARIMO_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-  cat <<'CODER_MARIMO_TK' >"$MARIMO_SITE/coder_marimo_tk.py"
-"""Workspace template: tkinter windows in marimo notebooks show in the notebook, and stop with its Stop button.
-
-In a marimo kernel (marimo imported before tkinter) and with the template's settings in the environment:
-  - a Tk window opens on the workspace's private display for notebook windows (CODER_MARIMO_TK_DISPLAY, :2 - no
-    desktop, no window manager), at its top-left corner, and that display is sized to the window;
-  - while mainloop() runs, the cell's output is the window itself, live and interactive: a noVNC view of that
-    display (CODER_MARIMO_TK_VIEW, the hidden app "marimo-windows"), resized when the window is;
-  - mainloop() runs the window's events from Python, so marimo's Stop works at once (Tk's own loop waits in C,
-    where the interrupt is only noticed at the next window event). Stop is the window's close button: the window
-    closes and the cell ends normally ("Window closed"), not with an interrupt traceback; closing the window from
-    code (destroy) ends it the same way. A failed cell does not leave a dead window behind.
-Loaded lazily (when tkinter is imported) from coder-workspace-marimo.pth in ~/.marimo-venv.
-"""
-
-import importlib.abc
-import importlib.machinery
-import os
-import subprocess
-import sys
-
-DISPLAY = os.environ.get("CODER_MARIMO_TK_DISPLAY", "")
-VIEW = os.environ.get("CODER_MARIMO_TK_VIEW", "")
-
-
-def _size(root):
-    root.update_idletasks()
-    return max(root.winfo_width(), root.winfo_reqwidth(), 1), max(root.winfo_height(), root.winfo_reqheight(), 1)
-
-
-def _show(root, size):
-    """The cell's output: the window, live (the display is cut to the window's size)."""
-    width, height = size
-    if DISPLAY:
-        subprocess.run(["xrandr", "-d", DISPLAY, "--fb", "%dx%d" % (width, height)], capture_output=True, check=False)
-    if not VIEW:
-        return
-    try:
-        import marimo as mo
-
-        mo.output.replace(
-            mo.Html(
-                '<iframe src="%s" title="tkinter window" style="display:block;width:%dpx;height:%dpx;'
-                'border:1px solid rgba(127,127,127,.35);border-radius:6px;background:#fff" '
-                'allow="clipboard-read; clipboard-write"></iframe>' % (VIEW, width + 2, height + 2)
-            )
-        )
-    except Exception:
-        pass
-
-
-def _closed(how):
-    """The cell's output once its window is gone (the live view would only say "Window closed")."""
-    if not VIEW:
-        return
-    try:
-        import marimo as mo
-
-        mo.output.replace(
-            mo.Html('<span style="font-size:12px;opacity:.65">Window closed%s.</span>' % how)
-        )
-    except Exception:
-        pass
-
-
-def _patch(tkinter):
-    import time
-
-    if DISPLAY:
-        tk_init = tkinter.Tk.__init__
-
-        def __init__(self, screenName=None, *args, **kwargs):
-            tk_init(self, DISPLAY if screenName is None else screenName, *args, **kwargs)
-            try:
-                self.wm_geometry("+0+0")  # no window manager there: the window is all the view shows
-            except tkinter.TclError:
-                pass
-
-        tkinter.Tk.__init__ = __init__
-
-    def mainloop(widget=None, n=0):
-        root = tkinter._get_default_root("run the main loop") if widget is None else widget._root()
-        shown = None
-        try:
-            ticks = 0
-            while root.winfo_exists():
-                root.update()
-                if ticks % 25 == 0:  # twice a second: follow the window's size
-                    size = _size(root)
-                    if size != shown:
-                        _show(root, size)
-                        shown = size
-                ticks += 1
-                time.sleep(0.02)
-        except tkinter.TclError:
-            pass  # the window was closed (destroyed)
-        except KeyboardInterrupt:
-            # marimo's Stop (MarimoInterrupt is a KeyboardInterrupt): close the window, as its close button would.
-            try:
-                root.destroy()
-            except Exception:
-                pass
-            if shown is not None:
-                _closed(" (Stop)")
-            return
-        except BaseException:
-            try:
-                root.destroy()  # failed: do not leave a dead window behind
-            except Exception:
-                pass
-            raise
-        if shown is not None:
-            _closed("")
-
-    tkinter.Misc.mainloop = lambda self, n=0: mainloop(self, n)
-    tkinter.mainloop = lambda n=0: mainloop(None, n)
-
-
-class _Finder(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path, target=None):
-        if fullname != "tkinter" or "marimo" not in sys.modules:
-            return None
-        spec = importlib.machinery.PathFinder.find_spec(fullname, path)
-        if spec is None or spec.loader is None:
-            return None
-        loader = spec.loader
-        exec_module = loader.exec_module
-
-        def exec_and_patch(module):
-            exec_module(module)
-            _patch(module)
-
-        loader.exec_module = exec_and_patch
-        return spec
-
-
-if not any(isinstance(f, _Finder) for f in sys.meta_path):
-    sys.meta_path.insert(0, _Finder())
-CODER_MARIMO_TK
-  grep -qx "import coder_marimo_tk" "$MARIMO_SITE/coder-workspace-marimo.pth" 2>/dev/null ||
-   echo "import coder_marimo_tk" >>"$MARIMO_SITE/coder-workspace-marimo.pth"
-  # marimo installs missing packages with the manager in its settings: one that is not installed here (pixi, rye,
-  # poetry) cannot work, so it falls back to uv (in /opt/marimo). An installed choice is kept.
-  MARIMO_TOML=~/.config/marimo/marimo.toml
-  for m in pixi rye poetry; do
-   if grep -qx "manager = \"$m\"" "$MARIMO_TOML" 2>/dev/null && ! command -v "$m" >/dev/null; then
-    sed -i "s/^manager = \"$m\"$/manager = \"uv\"/" "$MARIMO_TOML"
-   fi
-  done
-  # marimo's dark theme by default: set once per user (a later change in marimo's settings is kept).
-  if [ ! -e ~/.config/marimo/.coder-workspace-dark ]; then
-   mkdir -p ~/.config/marimo
-   /opt/marimo/bin/python - "$MARIMO_TOML" <<'MARIMO_DARK' && touch ~/.config/marimo/.coder-workspace-dark
-import os, sys, tomlkit
-path = sys.argv[1]
-doc = tomlkit.parse(open(path).read()) if os.path.exists(path) else tomlkit.document()
-doc.setdefault("display", tomlkit.table())["theme"] = "dark"
-open(path, "w").write(tomlkit.dumps(doc))
-MARIMO_DARK
-  fi
-  mkdir -p /home/coder/notebooks
-  # --no-token: no marimo login page. marimo listens on 127.0.0.1 only, so the Coder agent's
-  # proxy is the only way in, and the app is share = "owner": Coder decides who gets in.
-  # /opt/marimo/bin on PATH: uv and ruff for marimo; pip and uv give up quickly with no network.
-  # DISPLAY: GUI windows of other libraries show on the workspace's desktop (display :1, the Desktop app);
-  # without a display they fail with "no $DISPLAY". tkinter windows show in the notebook instead
-  # (CODER_MARIMO_TK_*: coder_marimo_tk, the private display :2 and the app "marimo-windows").
-  if ! curl -fs "http://localhost:2718$MARIMO_BASE/health" >/dev/null; then
-   DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority CODER_MARIMO_TK_DISPLAY=:2 \
-    CODER_MARIMO_TK_VIEW="$APPS/marimo-windows/" \
-    PATH="$MARIMO_VENV/bin:/opt/marimo/bin:$PATH" PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_RETRIES=0 PIP_TIMEOUT=10 \
-    UV_HTTP_TIMEOUT=10 "$MARIMO_VENV/bin/python" -m marimo edit --headless --host 127.0.0.1 --port 2718 \
-    --no-token --skip-update-check --base-url "$MARIMO_BASE" /home/coder/notebooks >/tmp/marimo.log 2>&1 &
-   log "marimo: started (log: /tmp/marimo.log)"
-  else
-   log "marimo: running already"
-  fi
- else
-  log "marimo is not in this image (/opt/marimo): skipped"
- fi
-fi
-
-# 5. Apache NiFi and Apache Airflow: the ubuntu-dataflow template's apps, in place of code-server and marimo, with no
-# network. The workspace image has both: /opt/nifi (its NARs unpacked there, read-only) and /opt/airflow.
+# 4. Apache NiFi and Apache Airflow: the ubuntu-dataflow template's apps, in place of code-server, with no network.
+# The workspace image has both: /opt/nifi (its NARs unpacked there, read-only) and /opt/airflow.
 if [ "$APP_SET" = dataflow ]; then
  # NiFi: from /opt/nifi as the image installed it (its NARs unpacked there, read-only); everything it writes is a
  # link into ~/.nifi: conf (the image's, the first time; then the user's flows and settings), logs, state,
@@ -556,7 +320,7 @@ AIRFLOWRC
  fi
 fi
 
-# 6. LM Studio (the AI templates: ubuntu-lmstudio and ubuntu-opencode), on the AI workspace image, with no network:
+# 5. LM Studio (the AI templates: ubuntu-lmstudio and ubuntu-opencode), on the AI workspace image, with no network:
 # its home linked to the image's app (its engines are not copied into every home), the GGUF models of the model
 # library (~/models) and of the owner's Cloud Drive (~/cloud-drive/models) linked in, its window on the desktop,
 # then its server on 127.0.0.1:1234 (models load when first asked for, with the Context length parameter's tokens)

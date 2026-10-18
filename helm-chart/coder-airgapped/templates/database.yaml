@@ -33,4 +33,16 @@ spec:
   resources:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- if and .Values.codeServerHA.enabled .Values.uiUpdates.enabled }}
+  # code-server HA's relays (templates/code-server-ha.yaml): a login that may only call its schema's functions.
+  managed:
+    roles:
+      - name: code_server_relay
+        ensure: present
+        login: true
+        inherit: false
+        connectionLimit: 500
+        passwordSecret:
+          name: coder-code-server-ha-relay
+  {{- end }}
 {{- end }}

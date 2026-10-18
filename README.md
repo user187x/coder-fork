@@ -9,7 +9,7 @@ your network.
 | | Current release: [**v1.39.1**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
 | Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
-| Workspace image | `ghcr.io/user187x/coder-workspace:1.8.5` (desktop, IDEs, notebooks, Kubernetes tools; nothing fetched at start) |
+| Workspace image | `ghcr.io/user187x/coder-workspace:1.8.6` (desktop, IDEs, Kubernetes tools; nothing fetched at start) |
 | Platform service | `ghcr.io/user187x/coder-ui-updates` (its code on `coder-image-tools:1.0.0`: BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
 | Bundle | 22 images pinned by digest, in one folder per part (`images/ui/`: the user interface - Coder, the platform service, their databases; `workspaces/`, `cloud-drive/`, ...), and every chart packaged (`charts/`, a Helm repository); `-slim`: only our images; the same release in parts: `-charts` (no images) and `-images-<part>` per folder, together the bundle; `-layer`: the update for a cluster at the previous release, only what changed (often a few MB); `-decorator-update`: an Argo CD decorator install's update, the Coder image and both charts (~300 MB) |
@@ -109,7 +109,7 @@ The installing machine needs `docker`, `helm` and `kubectl` (`minikube` for Mini
  browser ─ HTTPS ─▶ Traefik ─▶ Coder server (fork) ── CloudNativePG (2 instances, coder-db)     │
   (Gateway API,     │          │  dashboard, API, provisioners (Terraform + provider mirror)    │
    wildcard TLS)    │          └─▶ workspaces (pods): agent, desktop, code-server, File Browser, │
-                    │               marimo, terminal; home on its own volume                    │
+                    │               terminal; home on its own volume                            │
                     ├─▶ /__coder-ui/  platform service coder-ui-updates (HUD, health, images,  │
                     │                 quotas, scheduler, notes, chat, certificates, ...)        │
                     │                 └─ image builder: BuildKit rootless Jobs, trivy scans,    │
@@ -145,10 +145,9 @@ The full feature list, with where each piece lives and how it is tested, is
 - **Terraform without the internet:** the Coder image carries a provider mirror, so template pushes and workspace
   builds never reach `registry.terraform.io`.
 - **No phoning home:** telemetry, the update check, trials and the premium funnel, STUN servers and the
-  GitHub/GitLab default logins are removed from Coder. code-server, Firefox and marimo run with their own telemetry
-  and update checks off.
-- **Workspaces start offline:** code-server, File Browser, marimo with a data stack, the desktop and every tool are in
-  the workspace image.
+  GitHub/GitLab default logins are removed from Coder. code-server and Firefox run with their own telemetry and
+  update checks off.
+- **Workspaces start offline:** code-server, File Browser, the desktop and every tool are in the workspace image.
 - **Coder runs without Keycloak:** it starts, and password sign-in works, before Keycloak is set up or while it is
   down. Keycloak sign-in starts working the moment it answers.
 
@@ -203,15 +202,15 @@ The full feature list, with where each piece lives and how it is tested, is
 - **UBUNTU** (`ubuntu-vnc-desktop`, with the Ubuntu icon):
   - an XFCE desktop in the browser (TigerVNC + noVNC);
   - Firefox (Mozilla's build, with offline policies);
-  - code-server, File Browser and marimo (Python notebooks, with in-notebook tkinter windows);
+  - code-server and File Browser;
   - tmux, btop, bat, eza, fzf, jq, yq and Vim;
   - k9s, kubectl and kubelogin;
   - the JetBrains Mono Nerd Font.
 - **The template's scripts are files** (`files/scripts/`, formatted with `shfmt -i 1`): the startup script, the
   certificate install, the agent activity monitor, and every metric as a function of one `metadata.sh`.
 - **The image documents itself:** each build records what it adds over its base in
-  `/usr/share/coder-workspace/addons.json`: every program with the version it reports, the apt packages asked for,
-  and marimo's Python packages.
+  `/usr/share/coder-workspace/addons.json`: every program with the version it reports, and the apt packages asked
+  for.
 
 ### Templates and the image builder
 
@@ -228,6 +227,20 @@ The full feature list, with where each piece lives and how it is tested, is
   up to S3.
 - **Every image is scanned offline**, built ones and the workspace image the template runs (listed first, read-only,
   "In use by workspaces"). See [Image security](#image-security).
+- **Every model is scanned before it is used:** a model added to the model library waits in a hold (mounted nowhere)
+  until [garak](https://github.com/NVIDIA/garak) has probed it in a Job, offline (its detector models and probe data
+  in its image; llama.cpp serves the model), and its file is checked (no code in its chat template, nothing
+  appended); its grade (A-F, from garak's DEFCON levels) releases it, or an admin does. The report: every probe's
+  severity and OWASP LLM category, failing prompts and answers, garak's own files. A newer garak is a newer scanner
+  image, imported and chosen in the library.
+- **The base template is a prototype, its platform parts a decorator:** Create new template starts every template
+  from UBUNTU (Desktop, File Browser and Terminal each in or out) with the template's own logic only; Coder injects
+  the platform's sections (the certificate, Lock Down, the Cloud Drive, the metrics, code-server HA) into every
+  template when it is built. Source Code shows the code and, beside it, the **Materialized** main.tf; **Global files**
+  lists what every template gets.
+- **code-server HA:** a template can make its code-server a global singleton - one instance per workspace across the
+  clusters sharing Coder's database, replaced when it fails, taken over by another healthy cluster - kept by the
+  code-server-replicator and reached through relays, its state in Coder's database.
 
 ### Administration and monitoring
 
@@ -235,7 +248,7 @@ The full feature list, with where each piece lives and how it is tested, is
   failures) and the Coder server's **System Uptime**; its totals on one line. The Settings menu shows the cluster's
   CPU, memory and network traffic (last 15 minutes) at a glance.
 - **Workspace settings** on one page of cards (General, Parameters, Schedule, Sharing).
-- **Four workspace templates:** UBUNTU (code-server, marimo), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow), and the
+- **Four workspace templates:** UBUNTU (code-server), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow), and the
   AI workspaces UBUNTU LM STUDIO (LM Studio on the desktop, its local server) and UBUNTU OPENCODE (the OpenCode agent
   on the workspace's own LM Studio), with a shared **model library** (GGUF) in Templates > Images; the same workspace
   otherwise; everything offline. LM Studio is for internal use only (its terms): `build-bundle.sh --no-lmstudio`
@@ -311,7 +324,7 @@ The full feature list, with where each piece lives and how it is tested, is
   refuses others), with **core dumps disabled** for everything the agent starts.
 - **Nothing in a workspace listens on its network:**
   - the desktop's VNC server listens only on a Unix socket (directory `0700`, socket `0600`), with no TCP port;
-  - every app (code-server, File Browser, marimo, websockify) and the agent's own ports listen on `127.0.0.1`.
+  - every app (code-server, File Browser, websockify) and the agent's own ports listen on `127.0.0.1`.
   - The only way in is Coder's authenticated app proxy, with every app shared with its owner only.
 - **Home volumes are protected:** their storage class can never change after creation, and they only ever grow, so
   a template change cannot replace (empty) anyone's home.
@@ -367,8 +380,7 @@ The full feature list, with where each piece lives and how it is tested, is
   upgraded; File Browser built from its source with the current Go and fixed Go modules; `basic-ftp` replaced in
   code-server (as `shell-quote` was for CVE-2026-102422); GNU coreutils instead of Rust coreutils; removed, as a
   workspace pod has no use for them: Docker's engine and plugins, PulseAudio with ffmpeg's libraries, libsoup (and
-  the weather plugin that needed it), the USB printer daemon, a stray `pebble` and the marimo environment's own pip
-  (with vulnerable vendored copies). What is left is medium findings with no fix released, in packages in use. Findings that cannot apply to a container are listed apart in the report, each with its reason, and not
+  the weather plugin that needed it), the USB printer daemon and a stray `pebble`. What is left is medium findings with no fix released, in packages in use. Findings that cannot apply to a container are listed apart in the report, each with its reason, and not
   graded: the kernel's header package (a container runs its node's kernel) and Ubuntu's snap-package advisories,
   two years old or more, on Mozilla's own Firefox.
 
@@ -402,7 +414,8 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 | **Static** (`chart_checks.py`, 31 checks) | The chart renders for Minikube, EKS, a private registry, Keycloak-only and admins' kubectl, plus: every image pinned and archived; no floating tags; Keycloak's Secrets optional; nothing at workspace start needs the internet; the first owner is the installer's; Argo CD hook order; the template's scripts shipped, `shfmt -i 1` formatted and `bash -n` clean | `./run.sh static` |
 | **Unit: fork** | `go test` on every package the fork changed (or upstream's whole suite), and the dashboard's vitest suite (upstream's ~4,700 tests and the fork's). New fork code comes with tests, e.g. OIDC fallback, first-owner guard, MD5, uptime, network lights, Inbox, Images | `./run.sh unit` |
 | **Unit: platform service** (`platform_unit_test.py`, 16 tests) | The session cache, admin sync, image builder offline refusals and base seeding, the tracked workspace image, add-ons parsing, Coder uptime | `python3 -m unittest` |
-| **Image build checks** | Every workspace image build asserts its tools, desktop, fonts and shell setup. With **no network**, it then runs Firefox, starts code-server and File Browser, and runs every cell of a marimo notebook | `build-workspace-image.sh` |
+| **Image build checks** | Every workspace image build asserts its tools, desktop, fonts and shell setup. With **no network**, it then runs Firefox and starts code-server and File Browser. The model scanner's build loads every probe and detector with no network, then scans a small model within a scan Job's memory | `build-workspace-image.sh`, `build-garak-image.sh` |
+| **code-server HA on PostgreSQL** (`csha_db_test.py`) | A throwaway PostgreSQL: the relay role confined to its workspace, two clusters' operators keeping one instance (replaced, taken over, fenced), the relays carrying a connection to the active code-server, its state restored | `python3 csha_db_test.py` |
 | **Air-gapped end to end** | DEPLOY.md followed from a fresh bundle on a kind cluster with **all internet egress blocked**, every image loaded from the bundle. The steps: sign-in and workspace checks (8), the image builder offline (9), Keycloak down and its Secrets missing (10) | `airgap-e2e/e2e.sh`, `step8–10.sh` |
 | **Live conformance** (`live.py`) | On a real deployment with a throwaway user and workspace. **Upstream:** users, tokens, organizations, templates (offline `terraform init`), the workspace lifecycle, agent, apps through Coder's proxy, the web terminal, ports, logs, insights, health, provisioners, notifications. **Fork:** every platform service view and its access rules | `./run.sh live` |
 | **Browser** (`ui.mjs`) | Every dashboard page loads; **no request leaves the domain**; no page throws; key pages render correctly. A memory soak (workspace page, HUD) requires the JS heap and the DOM to level off | `./run.sh ui` |

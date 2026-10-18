@@ -1,6 +1,10 @@
 #!/bin/sh
 # Lock Down: jails a workspace, as an admin set it (Workspace page > Lock Down; the platform service's lockdown.py).
 #   lockdown.sh MODES CODER_HOST [ROOT]
+#   lockdown.sh start file:PATH       at the workspace's start, as its user (the template's coder_script "lockdown",
+#                                     which login waits for): Sudo, when PATH (the admins' setting) has it, with sudo
+#                                     -n. Network is the pod's init container's (the first form, before the workspace
+#                                     runs); a running workspace gets both from the platform service at once.
 #
 # MODES     a comma list of network, sudo and freeze, or off; or file:PATH, to read it from that file (missing: off).
 #           It sets exactly MODES: what is not in it is lifted, so running it again changes nothing.
@@ -24,6 +28,22 @@
 # are listed in ROOT/run/coder-lockdown-frozen, so lifting Freeze resumes exactly those (SIGCONT) and nothing a user
 # had stopped on purpose. The platform service copies the workspace's disk while it is frozen (the snapshot).
 set -eu
+if [ "$1" = start ]; then
+ modes=$(cat "${2#file:}" 2>/dev/null || echo off)
+ case ",$modes," in
+ *,sudo,*) ;;
+ *)
+  echo "Lock Down: sudo works as usual (not locked)"
+  exit 0
+  ;;
+ esac
+ printf '%s\n' "# Lock Down: an admin took sudo away in this workspace (Workspace page > Lock Down)." \
+  'ALL ALL=(ALL:ALL) !ALL' | sudo -n tee /etc/sudoers.d/zz-coder-lockdown.new >/dev/null &&
+  sudo -n chmod 0440 /etc/sudoers.d/zz-coder-lockdown.new &&
+  sudo -n mv -f /etc/sudoers.d/zz-coder-lockdown.new /etc/sudoers.d/zz-coder-lockdown &&
+  echo "Lock Down: sudo is off in this workspace (an admin locked it)."
+ exit $?
+fi
 modes=$1
 host=$2
 root=${3-}

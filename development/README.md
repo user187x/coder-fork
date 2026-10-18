@@ -14,7 +14,6 @@ Everything needed to keep developing the coder-airgapped deliverable, other than
 | Default logo (animated GIF) and default user avatar | `../helm-chart/defaults/` (installed as ConfigMaps by `install.sh`) |
 | First user / template-push bootstrap | `../helm-chart/coder-airgapped/files/bootstrap/bootstrap.py`, `templates/bootstrap-job.yaml` |
 | Workspace image (desktop, fonts, tmux, preinstalled tools) | `workspace-image/` (then `tools/build-workspace-image.sh`) |
-| marimo's Python packages (all preinstalled: workspaces have no package index) | `workspace-image/marimo/requirements.in` (the build re-pins `requirements.lock`) |
 | Workspace template `ubuntu-vnc-desktop` (shown as UBUNTU) | `../helm-chart/coder-airgapped/charts/coder-workspace/files/*.tf`, its scripts in `files/scripts/` (format: `shfmt -i 1 -w files/scripts/*.sh`) |
 | Announcement banner | `../helm-chart/coder-airgapped/charts/coder-banner/` |
 | The Coder server itself (UI, API) | the fork, `~/workspace/coder` – see `coder-fork/FORK.md` |
@@ -34,7 +33,7 @@ minikube profile `coder` is the development cluster. Deploy (or redeploy) the wo
 | Path | What |
 |---|---|
 | `coder-fork/FORK.md` | Which fork commit the Coder image is built from, and how to build a new one |
-| `workspace-image/` | Dockerfile of the workspace image `ghcr.io/user187x/coder-workspace` (enterprise-base + desktop without light-locker, JetBrains Mono Nerd Font, tmux from `packages/tmux-installation.deb`, k9s/kubectl, marimo with its packages in `/opt/marimo` from `marimo/`, checked offline by `marimo/smoke_test.py`); build with `tools/build-workspace-image.sh` |
+| `workspace-image/` | Dockerfile of the workspace image `ghcr.io/user187x/coder-workspace` (enterprise-base + desktop without light-locker, JetBrains Mono Nerd Font, tmux from `packages/tmux-installation.deb`, k9s/kubectl, Python venv); build with `tools/build-workspace-image.sh` |
 | `airgap-image/` | Dockerfile + `terraformrc` of the `-airgap` Coder image (the fork's image + a Terraform provider mirror); `template/` is filled by the build |
 | `tools/build-bundle.sh` | Lint + render the chart, package our charts into `charts/`, fetch missing public image archives, write `../dist/coder-airgapped-<version>[-slim].tar.gz`, the release in parts (`-charts`, `-images-<part>`, `-ASSETS.txt`) and `-layer` |
 | `tools/build-workspace-image.sh` | Build the workspace image, check it, and save it into the bundle (`mirror-images.sh store`: `../helm-chart/images/workspaces/`) |

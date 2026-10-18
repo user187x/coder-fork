@@ -486,7 +486,7 @@ volume (`imageBuilder.enabled`) and the platform service's permission to manage 
   on EKS). Elsewhere it stops the workspace and copies its home onto a bigger volume.
 
 > **Good to know – workspaces in a strict air gap:** everything a workspace runs is in the workspace image: the
-> desktop, Firefox, code-server, File Browser, marimo (with all its packages), tmux, k9s/kubectl and the JetBrains Mono
+> desktop, Firefox, code-server, File Browser, tmux, k9s/kubectl and the JetBrains Mono
 > Nerd Font. Nothing is downloaded when a workspace starts (`coder-workspace:1.8.0` and later).
 
 ## AI workspaces: LM Studio and OpenCode
@@ -520,6 +520,35 @@ written at every start) list every language model LM Studio has, the default the
   built with `development/tools/build-bundle.sh --no-lmstudio`: no AI image, the AI templates off.
 * **Images:** `development/tools/build-ai-image.sh` builds the image (LM Studio's AppImage and OpenCode's release
   pinned by SHA-256) and checks it offline; `TEST_MODEL=<file.gguf>` also chats through LM Studio and OpenCode.
+
+## The model library's security scan (garak)
+
+Every model added to the model library (Templates › Images › Model library: uploaded, or fetched from an address) is
+scanned with [garak](https://github.com/NVIDIA/garak), NVIDIA's LLM vulnerability scanner, **before any workspace can
+use it**. Until then it waits in a hold that is mounted nowhere (`library/quarantine/models/` of the Cloud Drive's
+bucket). A scan Job (`modelScanner.image`, `ghcr.io/user187x/coder-garak`: garak, its detector models and probe data,
+CPU PyTorch and llama.cpp's `llama-server`, all in the image - it needs no network) fetches the model from the
+platform service, checks the file (a well-formed GGUF; no code in its chat template - the Jinja escape of
+CVE-2024-34359; nothing appended after its tensors), serves it with `llama-server` and runs garak's probes against
+it. Its report is graded like an image's (A to F) from garak's DEFCON levels against garak's calibration: DC-1
+critical, DC-2 high, DC-3 medium, DC-4 low. A model graded at the **release grade** or better, with no failed file
+check, moves into the library; any other stays held until an admin releases it anyway (recorded), rescans or
+deletes it. Models already in the library are scanned where they are; an admin can hold a released model again.
+
+* **The report**, in the image report's layout: the grade and garak's own TBSA score; every probe and detector with
+  its severity, failure rate and OWASP LLM Top 10 category (a filter each); a few failing prompts and answers per
+  probe; the model file's details and checks; garak's own `report.jsonl`, hits and HTML report to download.
+* **Profiles** (the scanner's settings): Quick (garak's tier 1 probes, 10 prompts each), **Standard** (tier 1, up to
+  30 prompts: enough for garak's calibrated scores; the default) and Thorough (tiers 1 and 2, 128 prompts, 3 answers
+  each: hours to days on CPUs). One scan at a time; each Job gets `modelScanner.cpu` and the model's size plus
+  `modelScanner.memoryGiB` of memory.
+* **Updating garak** (its probes, detectors, payloads and calibration - garak's "definitions" - ship with garak): build
+  a newer scanner with `development/tools/build-garak-image.sh <garak version>-<n> --relock` on a connected machine
+  (it checks the image offline and saves its archive), import it in the Images view (from a registry, or the
+  `docker save` archive) and choose it in the model library's **Scanner** settings: it is read first (its garak
+  version, profiles and probes), then used; **Rescan every model** grades the library again. Where the platform
+  service reaches PyPI (`modelScanner.pypiUrl`, or your mirror's), the newest garak release is shown beside the
+  scanner's. A release of the platform carries the newest scanner as `modelScanner.image`.
 
 ## The Cloud Drive (each account's own storage)
 
@@ -599,6 +628,14 @@ claims and volumes keep the earlier name, `safe` (`/api/safe`, `coder-safe-<user
   Admins change every account's capacity in the Cloud Drive's **Settings** (a slider, or a number of 1 to 10240 GiB;
   kept in the platform service's volume, `/data/cloud-drive-quota.json`); **Use the chart's** goes back to
   `quotaGiB`. Lowering it below what an account holds stops its uploads only.
+* **Mounted into a folder** (the window's **Mount**, or `cloud-drive mount PATH` in a workspace's terminal): the
+  Cloud Drive in any folder of a running workspace (absolute, or relative to the home; one with files of its own, or
+  a new one), its entries linked in beside the folder's own, folders of the same name merged. A file of the same name
+  there halts it until the owner chooses: **Keep both** (the Cloud Drive's is linked as `data-(cloud_drive).csv`) or
+  **Overwrite** - then **Overwrite all**, or **Prompt for each occurrence** (yes / no each; `[Y/n]` in the terminal).
+  An overwritten file moves to `~/.local/share/cloud-drive/overwritten/` and comes back when the folder is unmounted.
+  The workspace keeps its mounts up to date as the Cloud Drive changes (a new collision then: as the mount was made,
+  "prompt" keeping both). `cloud-drive unmount PATH`, `cloud-drive list`.
 * **Transfers:** uploads and downloads in the window show a moving bar, how much has gone, how fast and how long is
   left. A download is written to disk as it comes where the browser can (Chromium's save dialog); elsewhere it is held
   in memory, and a file over 1 GiB goes to the browser's own download.
@@ -623,6 +660,46 @@ database out of it:
 The dumps run in the CloudNativePG primary (it has `pg_dump`, `pg_restore` and `psql`; the platform service has none)
 through the exec API. Targets and their keys are kept in the platform service's volume (`/data/dr.json`, 0600), with
 the last 50 runs. A database outside the cluster (no CloudNativePG primary) is left to its provider's backups.
+
+## Templates: the base template and the decorator
+
+The UBUNTU template (`charts/coder-workspace/files/main.tf`, one file: the certificate's install, Lock Down's start
+mode in `lockdown.sh`) is the platform's base template, the prototype of every new one. Its platform parts are marked
+sections - `# platform:begin certificates`, `lockdown`, `cloud-drive`, `metrics`, `code-server-ha` ... `# platform:end` -
+and Coder's **template decorator** (the fork's `coderd/templatedecorator`) injects each into every template that lacks
+it when a provisioner takes its job (an import, a dry run, a workspace build): at the same place (top level, the
+agent, the pod, the agent's container), with what the sections use and the template does not declare, and their
+scripts as `.platform/<file>`. A template's own declarations win (it is skipped where they clash); one with
+`# platform:no-decorator` in its files is left as it is.
+
+* **Create new template** starts every template from the base without a choice shown; its step is the workspace's
+  apps - **Desktop**, **File Browser** and **Terminal**, each included or excluded (the template's `desktop`,
+  `file_browser` and `terminal` variables). The new template's code is the base's own logic only: its platform
+  sections come in when it is built.
+* **Source Code** shows a template's own code (**Code**) and, beside it, **Materialized**: its main.tf exactly as it
+  is provisioned, the injected sections in. The editor has a Materialized tab too (its files as they are now).
+  **Global files**, under Upload, are the files every template gets (`.platform/`): hovered, each says it is provided
+  and how a template reads it; clicked, its code, read-only.
+
+## code-server high availability
+
+A template can make its workspaces' code-server a **global singleton** (its `code_server_ha` variable, off by
+default; `codeServerHA` in the values): code-server no longer runs inside the workspace but as one instance per
+workspace across every cluster that shares Coder's database, kept by the **code-server-replicator** (one per cluster,
+two replicas: one works, one waits). The instance runs on the workspace's node with its home volume; when it fails a
+new one replaces it (a new generation), and when the workspace's own cluster stops answering, another connected,
+healthy cluster (`codeServerHA.endpointExternal` set: how its instances are reached) takes it over after its lease
+lapses, with the user's code-server state (settings, keybindings, snippets, extensions list) from the database; once
+the workspace's own cluster has answered again for a minute, the workspace goes back to it (and its home volume). Older
+generations are fenced off: deleted, and refused by the relays. A **relay** in the workspace's pod answers where
+code-server would (its app is unchanged) and takes each connection to the active instance, in this cluster or another;
+a relay beside each instance takes only its instance's connections and passes those of an older one on.
+
+Every bit of its state is in Coder's database (schema `code_server_ha`): the operators write it as the database's
+owner, the relays log in as the role `code_server_relay` (CloudNativePG makes it from the Secret
+`coder-code-server-ha-relay`), which may only call the schema's functions - a workspace's relay proves itself with its
+agent's token (Coder's own registry of agents), an instance's relay with its instance's token.
+`development/tools/verify/csha_db_test.py` checks it all against a real PostgreSQL (two clusters, a failover).
 
 ## High availability
 

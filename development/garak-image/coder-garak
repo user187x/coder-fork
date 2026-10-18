@@ -1,0 +1,654 @@
+#!/usr/bin/env python3
+"""coder-garak: the Model Library's security scan of a GGUF language model with garak (NVIDIA's LLM vulnerability
+scanner, https://github.com/NVIDIA/garak), offline. llama.cpp's llama-server serves the model on 127.0.0.1; garak
+probes it through its OpenAI-compatible API; the probes' data and garak's detector models are in this image.
+
+  coder-garak info                                  this image: garak's and llama.cpp's versions, the profiles, the
+                                                    probes (JSON on stdout; also posted with --post URL)
+  coder-garak fetch URL DEST                        the model from the platform service, into DEST
+  coder-garak scan MODEL --profile NAME (--post URL | --out DIR)
+                                                    the file checks, then garak with the profile; progress and the
+                                                    report posted to URL/progress, URL/report, URL/raw?name=
+  coder-garak warmup                                (image build, online) every profile's probes and detectors once,
+                                                    against garak's test generator: their data downloaded and kept
+  coder-garak selftest                              (offline) the same with no network: everything loads from the image
+
+The report holds what the platform grades: the file checks, garak's digest (each probe and detector's score and DEFCON
+level against garak's calibration), garak's tier-based security aggregate (TBSA), and a few of the failing attempts.
+"""
+import argparse
+import gzip
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+GARAK_HOME = "/opt/garak"
+PROFILES_FILE = os.path.join(GARAK_HOME, "profiles.json")
+INFO_FILE = os.path.join(GARAK_HOME, "info.json")
+LLAMA = os.environ.get("LLAMA_SERVER", "/opt/llama/llama-server")
+PORT = 8080
+OFFLINE = {"HF_HUB_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+EXAMPLES_PER_PAIR = 3
+EXAMPLE_CHARS = 1500
+
+
+def log(*a):
+    print("coder-garak:", *a, file=sys.stderr, flush=True)
+
+
+def profiles():
+    with open(PROFILES_FILE) as f:
+        return json.load(f)
+
+
+# ------------------------------------------------------------------------------------------------ posting back
+def post(url, body, content_type="application/json", tries=8):
+    data = body if isinstance(body, bytes) else json.dumps(body).encode()
+    for n in range(tries):
+        try:
+            req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": content_type})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or n == tries - 1:
+                log("post %s: HTTP %s" % (url.split("?")[0].rsplit("/", 1)[-1], e.code))
+                return e.code
+        except OSError as e:
+            if n == tries - 1:
+                log("post failed:", e)
+                return 0
+        time.sleep(min(30, 2 ** n))
+
+
+# ------------------------------------------------------------------------------------------------ the GGUF file
+GGML_TYPES = {  # type id -> (name, elements per block, bytes per block)
+    0: ("F32", 1, 4), 1: ("F16", 1, 2), 2: ("Q4_0", 32, 18), 3: ("Q4_1", 32, 20), 6: ("Q5_0", 32, 22),
+    7: ("Q5_1", 32, 24), 8: ("Q8_0", 32, 34), 9: ("Q8_1", 32, 36), 10: ("Q2_K", 256, 84), 11: ("Q3_K", 256, 110),
+    12: ("Q4_K", 256, 144), 13: ("Q5_K", 256, 176), 14: ("Q6_K", 256, 210), 15: ("Q8_K", 256, 292),
+    16: ("IQ2_XXS", 256, 66), 17: ("IQ2_XS", 256, 74), 18: ("IQ3_XXS", 256, 98), 19: ("IQ1_S", 256, 50),
+    20: ("IQ4_NL", 32, 18), 21: ("IQ3_S", 256, 110), 22: ("IQ2_S", 256, 82), 23: ("IQ4_XS", 256, 136),
+    24: ("I8", 1, 1), 25: ("I16", 1, 2), 26: ("I32", 1, 4), 27: ("I64", 1, 8), 28: ("F64", 1, 8),
+    29: ("IQ1_M", 256, 56), 30: ("BF16", 1, 2), 34: ("TQ1_0", 256, 54), 35: ("TQ2_0", 256, 66),
+    39: ("MXFP4", 32, 17),
+}
+FILE_TYPES = {0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 7: "Q8_0", 8: "Q5_0", 9: "Q5_1", 10: "Q2_K", 11: "Q3_K_S",
+              12: "Q3_K_M", 13: "Q3_K_L", 14: "Q4_K_S", 15: "Q4_K_M", 16: "Q5_K_S", 17: "Q5_K_M", 18: "Q6_K",
+              19: "IQ2_XXS", 20: "IQ2_XS", 21: "Q2_K_S", 22: "IQ3_XS", 23: "IQ3_XXS", 24: "IQ1_S", 25: "IQ4_NL",
+              26: "IQ3_S", 27: "IQ3_M", 28: "IQ2_S", 29: "IQ2_M", 30: "IQ4_XS", 31: "IQ1_M", 32: "BF16",
+              36: "TQ1_0", 37: "TQ2_0", 38: "MXFP4_MOE"}
+MAX_STRING = 64 * 1024 * 1024
+
+
+class GGUFError(ValueError):
+    pass
+
+
+def read_gguf(path):
+    """The header, metadata and tensor table of a GGUF file: {version, metadata, tensors, dataStart, dataEnd, size}."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        def take(n):
+            b = f.read(n)
+            if len(b) != n:
+                raise GGUFError("the file ends inside its header")
+            return b
+
+        def u32():
+            return struct.unpack("<I", take(4))[0]
+
+        def u64():
+            return struct.unpack("<Q", take(8))[0]
+
+        def string():
+            n = u64()
+            if n > MAX_STRING:
+                raise GGUFError("a string of %d bytes in its header" % n)
+            return take(n).decode("utf-8", "replace")
+
+        scalars = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q",
+                   12: "<d"}
+
+        def value(t, depth=0):
+            if t in scalars:
+                fmt = scalars[t]
+                return struct.unpack(fmt, take(struct.calcsize(fmt)))[0]
+            if t == 8:
+                return string()
+            if t == 9 and depth == 0:
+                it, n = u32(), u64()
+                if n > 50_000_000:
+                    raise GGUFError("an array of %d items in its header" % n)
+                if it in scalars and it != 7:
+                    fmt = scalars[it]
+                    w = struct.calcsize(fmt)
+                    raw = take(w * n)
+                    return {"type": it, "n": n, "head": list(struct.unpack("<%d%s" % (min(n, 8), fmt[1]),
+                                                                           raw[:w * min(n, 8)]))}
+                items = [value(it, 1) for _ in range(n)]
+                return {"type": it, "n": n, "head": items[:8]}
+            raise GGUFError("an unknown value type %d in its header" % t)
+
+        if take(4) != b"GGUF":
+            raise GGUFError("not a GGUF file (no GGUF signature)")
+        version = u32()
+        if version not in (2, 3):
+            raise GGUFError("GGUF version %d (2 and 3 are known)" % version)
+        n_tensors, n_kv = u64(), u64()
+        if n_tensors > 1_000_000 or n_kv > 100_000:
+            raise GGUFError("an implausible header (%d tensors, %d keys)" % (n_tensors, n_kv))
+        meta = {}
+        for _ in range(n_kv):
+            key = string()
+            meta[key] = value(u32())
+        tensors = []
+        for _ in range(n_tensors):
+            name = string()
+            dims = [u64() for _ in range(u32())]
+            tensors.append({"name": name, "dims": dims, "type": u32(), "offset": u64()})
+        align = int(meta.get("general.alignment") or 32)
+        here = f.tell()
+        data_start = (here + align - 1) // align * align
+    end, unknown, params = data_start, set(), 0
+    for t in tensors:
+        n = 1
+        for d in t["dims"]:
+            n *= d
+        params += n
+        spec = GGML_TYPES.get(t["type"])
+        if not spec:
+            unknown.add(t["type"])
+            continue
+        end = max(end, data_start + t["offset"] + (n + spec[1] - 1) // spec[1] * spec[2])
+    return {"version": version, "metadata": meta, "tensors": tensors, "dataStart": data_start,
+            "dataEnd": None if unknown else end, "unknownTypes": sorted(unknown), "size": size, "params": params}
+
+
+# Jinja constructs a chat template has no business with: the ways out of Jinja's sandbox into Python (CVE-2024-34359,
+# "Llama Drama": a GGUF's chat template ran code in llama-cpp-python), and calls that reach the system.
+TEMPLATE_RISKS = [
+    (re.compile(r"__[A-Za-z_]+__"), "Python internals (a __dunder__ attribute)"),
+    (re.compile(r"\|\s*attr\s*\("), "the attr filter (used to reach Python internals)"),
+    (re.compile(r"\b(os|sys|subprocess|builtins|importlib|posix|shutil|socket)\s*\.\s*[A-Za-z_]"),
+     "a Python module"),
+    (re.compile(r"\b(popen|system|eval|exec|compile|getattr|setattr|globals|locals|__import__|open|spawn\w*)\s*\("),
+     "a call that runs code or opens files"),
+    (re.compile(r"\b(lipsum|cycler|joiner|range|dict|self|config|request|url_for|get_flashed_messages)\s*\.\s*_"),
+     "a private attribute of a Jinja global"),
+]
+
+
+def template_findings(text):
+    out = []
+    for rx, what in TEMPLATE_RISKS:
+        for m in rx.finditer(text):
+            s = max(0, m.start() - 40)
+            out.append({"what": what, "match": m.group(0), "context": text[s:m.end() + 40]})
+            break
+    return out
+
+
+def file_checks(path):
+    """The model file's checks (like an image's): (file details, checks). Raises GGUFError when it is no GGUF."""
+    sha = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8 * 1024 * 1024), b""):
+            sha.update(chunk)
+    g = read_gguf(path)
+    m = g["metadata"]
+    arch = m.get("general.architecture") or ""
+    ft = m.get("general.file_type")
+    templates = {k: v for k, v in m.items() if k.startswith("tokenizer.chat_template") and isinstance(v, str)}
+    info = {"sha256": sha.hexdigest(), "size": g["size"], "ggufVersion": g["version"], "tensors": len(g["tensors"]),
+            "parameters": g["params"], "architecture": arch, "name": m.get("general.name") or "",
+            "sizeLabel": m.get("general.size_label") or "", "license": m.get("general.license") or "",
+            "quantizedBy": m.get("general.quantized_by") or "",
+            "fileType": FILE_TYPES.get(ft, str(ft) if ft is not None else ""),
+            "contextLength": m.get(arch + ".context_length") if arch else None,
+            "layers": m.get(arch + ".block_count") if arch else None,
+            "tokenizer": m.get("tokenizer.ggml.model") or "",
+            "chatTemplates": {k: {"chars": len(v), "sha256": hashlib.sha256(v.encode()).hexdigest()}
+                              for k, v in templates.items()},
+            "metadataKeys": len(m)}
+    checks = [{"id": "gguf", "title": "A well-formed GGUF file", "status": "pass",
+               "detail": "GGUF version %d: %d tensors, %d metadata keys, %s parameters" % (
+                   g["version"], len(g["tensors"]), len(m), "{:,}".format(g["params"]))}]
+    if not templates:
+        checks.append({"id": "chat-template", "title": "Its chat template is safe", "status": "warn",
+                       "detail": "The model has no chat template: llama.cpp uses a generic one, so chat results are "
+                                 "less telling."})
+    else:
+        found = {k: template_findings(v) for k, v in templates.items()}
+        bad = {k: v for k, v in found.items() if v}
+        checks.append({"id": "chat-template", "title": "Its chat template is safe",
+                       "status": "fail" if bad else "pass",
+                       "detail": ("Code in the chat template (Jinja), which runs wherever the model is loaded with "
+                                  "its template (CVE-2024-34359): " + "; ".join(
+                                      "%s: %s (%r)" % (k, f["what"], f["match"]) for k, v in bad.items() for f in v))
+                       if bad else "%d template%s, no code-execution constructs" % (
+                           len(templates), "" if len(templates) == 1 else "s"),
+                       "items": [dict(f, template=k) for k, v in bad.items() for f in v]})
+    if g["dataEnd"] is None:
+        checks.append({"id": "trailing-data", "title": "Nothing after the model's data", "status": "info",
+                       "detail": "Tensor types this check does not know (%s): not measured." % ", ".join(
+                           map(str, g["unknownTypes"]))})
+    elif g["dataEnd"] > g["size"]:
+        checks.append({"id": "trailing-data", "title": "The file is complete", "status": "fail",
+                       "detail": "The tensors need %d bytes, the file has %d: it is cut short." % (
+                           g["dataEnd"], g["size"])})
+    else:
+        extra = g["size"] - g["dataEnd"]
+        align = int(m.get("general.alignment") or 32)
+        checks.append({"id": "trailing-data", "title": "Nothing after the model's data",
+                       "status": "warn" if extra >= align else "pass",
+                       "detail": ("%d bytes after the last tensor, which nothing reads: data hidden in the file?" % extra)
+                       if extra >= align else "The file ends with its last tensor."})
+    return info, checks
+
+
+# ------------------------------------------------------------------------------------------------ llama-server
+def cpu_count():
+    try:
+        quota, period = open("/sys/fs/cgroup/cpu.max").read().split()
+        if quota != "max":
+            return max(1, int(int(quota) / int(period)))
+    except (OSError, ValueError):
+        pass
+    return os.cpu_count() or 1
+
+
+class Server:
+    """llama-server on 127.0.0.1:PORT with the model: its chat template rendered by llama.cpp (--jinja), or, when it
+    cannot render it, llama.cpp's built-in one."""
+
+    def __init__(self, model, ctx, parallel, threads, log_path):
+        self.model, self.ctx, self.parallel, self.threads, self.log_path = model, ctx, parallel, threads, log_path
+        self.proc = None
+        self.jinja = True
+
+    def start(self, jinja=True, timeout=1800):
+        self.jinja = jinja
+        # no prompt cache in RAM (llama-server keeps up to 8 GiB of it by default) and no context checkpoints:
+        # garak's prompts have nothing in common, so they would only grow the scan's memory
+        cmd = [LLAMA, "-m", self.model, "--host", "127.0.0.1", "--port", str(PORT), "-c",
+               str(self.ctx * self.parallel), "-np", str(self.parallel), "-t", str(self.threads), "--no-webui",
+               "--cache-ram", "0", "--ctx-checkpoints", "0"]
+        cmd.append("--jinja" if jinja else "--no-jinja")
+        cmd += os.environ.get("LLAMA_EXTRA_ARGS", "").split()
+        self.logf = open(self.log_path, "ab")
+        env = dict(os.environ, LD_LIBRARY_PATH=os.path.dirname(LLAMA))
+        self.proc = subprocess.Popen(cmd, stdout=self.logf, stderr=subprocess.STDOUT, env=env)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.proc.poll() is not None:
+                return False
+            try:
+                with urllib.request.urlopen("http://127.0.0.1:%d/health" % PORT, timeout=5) as r:
+                    if r.status == 200:
+                        return self.chat_ok()
+            except (OSError, urllib.error.HTTPError):
+                pass
+            time.sleep(2)
+        return False
+
+    def chat_ok(self):
+        body = json.dumps({"model": "model", "messages": [{"role": "user", "content": "Say hello."}],
+                           "max_tokens": 8}).encode()
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d/v1/chat/completions" % PORT, data=body,
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=600) as r:
+                return r.status == 200
+        except (OSError, urllib.error.HTTPError):
+            return False
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(30)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+    def tail(self, n=3000):
+        try:
+            with open(self.log_path, "rb") as f:
+                f.seek(max(0, os.path.getsize(self.log_path) - n))
+                return f.read().decode("utf-8", "replace")
+        except OSError:
+            return ""
+
+    @staticmethod
+    def version():
+        env = dict(os.environ, LD_LIBRARY_PATH=os.path.dirname(LLAMA))
+        out = subprocess.run([LLAMA, "--version"], capture_output=True, text=True, env=env)
+        m = re.search(r"version: (\S+) \(build (\d+), commit (\w+)\)", out.stdout + out.stderr)
+        return {"version": m.group(1), "build": m.group(2), "commit": m.group(3)} if m else {}
+
+
+# ------------------------------------------------------------------------------------------------ garak
+def garak_version():
+    from importlib.metadata import version
+    return version("garak")
+
+
+def garak_config(path, target, profile, report_dir, prefix, parallel, seed=1):
+    """garak's run configuration (YAML is JSON's superset: written as JSON)."""
+    gen = {}
+    if target == "server":
+        gen = {"openai": {"OpenAICompatible": {"uri": "http://127.0.0.1:%d/v1" % PORT, "api_key": "none",
+                                               "model": "model", "suppressed_params": ["n"],
+                                               "max_tokens": profile.get("maxTokens", 150)}}}
+    cfg = {"system": {"parallel_attempts": parallel if parallel > 1 else False, "narrow_output": True},
+           "run": {"generations": profile["generations"], "soft_probe_prompt_cap": profile["cap"], "seed": seed},
+           "plugins": {"target_type": "openai.OpenAICompatible" if target == "server" else target,
+                       "target_name": "model", "generators": gen},
+           "reporting": {"report_dir": report_dir, "report_prefix": prefix}}
+    with open(path, "w") as f:
+        json.dump(cfg, f)
+    os.chmod(path, 0o600)
+
+
+def run_garak(cfg, spec, logfile, env, on_tick=None):
+    cmd = [sys.executable, "-m", "garak", "--config", cfg, "--spec", spec, "--skip_unknown"]
+    with open(logfile, "ab") as lf:
+        p = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, env=env)
+        while p.poll() is None:
+            time.sleep(10)
+            if on_tick:
+                on_tick()
+    return p.returncode
+
+
+def read_report(path):
+    rows = []
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    pass  # a line being written
+    except OSError:
+        pass
+    return rows
+
+
+def progress_of(rows):
+    setup = next((r for r in rows if r.get("entry_type") == "start_run setup"), None)
+    probes = (setup or {}).get("transient.active_probes") or []
+    done = [r["probe"] for r in rows if r.get("entry_type") == "probe_summary"]
+    attempts = [r for r in rows if r.get("entry_type") == "attempt" and r.get("status") == 1]
+    current = attempts[-1].get("probe_classname") if attempts else None
+    return {"probesTotal": len(probes), "probesDone": len(done), "probe": current, "prompts": len(attempts)}
+
+
+def examples(hitlog_path):
+    """A few failing attempts per probe and detector: (prompt, output, score)."""
+    out = {}
+    for h in read_report(hitlog_path):
+        key = "%s|%s" % (h.get("probe"), h.get("detector"))
+        lst = out.setdefault(key, [])
+        if len(lst) >= EXAMPLES_PER_PAIR:
+            continue
+        turns = ((h.get("prompt") or {}).get("turns") or [])
+        prompt = "\n\n".join(((t.get("content") or {}).get("text") or "") for t in turns if t.get("role") != "assistant")
+        output = (h.get("output") or {}).get("text") if isinstance(h.get("output"), dict) else h.get("output")
+        lst.append({"prompt": prompt[-EXAMPLE_CHARS:], "output": (output or "")[:EXAMPLE_CHARS],
+                    "score": h.get("score"), "triggers": (h.get("triggers") or [])[:5] if isinstance(
+                        h.get("triggers"), list) else None})
+    return out
+
+
+def tbsa(digest):
+    try:
+        from garak.analyze.tbsa import digest_to_tbsa, round_final_tbsa
+        score, pd_hash, pd_count = digest_to_tbsa(digest, quiet=True)
+        return {"score": round_final_tbsa(score), "hash": pd_hash, "pairs": pd_count}
+    except Exception as e:  # noqa: BLE001 - garak's own aggregate is extra: the report stands without it
+        return {"error": str(e)[:300]}
+
+
+def gz_file(path):
+    with open(path, "rb") as f:
+        return gzip.compress(f.read(), 6)
+
+
+# ------------------------------------------------------------------------------------------------ commands
+def cmd_info(args):
+    if os.path.exists(INFO_FILE):
+        info = json.load(open(INFO_FILE))
+    else:
+        info = build_info()
+    if args.post:
+        post(args.post.rstrip("/") + "/info", info)
+    print(json.dumps(info, indent=1))
+
+
+def build_info():
+    import garak._plugins as plugins
+    probes = []
+    for name, active in plugins.enumerate_plugins("probes", skip_base_classes=True):
+        d = plugins.plugin_info(name)
+        probes.append({"name": name.split(".", 1)[1], "active": bool(active), "tier": d.get("tier"),
+                       "goal": d.get("goal") or "", "description": (d.get("description") or "")[:300],
+                       "tags": [t for t in d.get("tags") or [] if t.startswith(("owasp:", "avid-effect:"))],
+                       "detector": d.get("primary_detector")})
+    profs = profiles()
+    for p in profs.values():
+        tiers = int(p["spec"].split(":", 1)[1])
+        p["probes"] = sum(1 for x in probes if x["active"] and x["tier"] and x["tier"] <= tiers)
+    try:
+        from garak.analyze.calibration import Calibration
+        cal = Calibration().metadata
+        calibration = {"date": str(cal.get("date") or "")[:19], "models": cal.get("model_count")}
+    except Exception:  # noqa: BLE001
+        calibration = None
+    hf = os.path.join(os.environ.get("HF_HOME", ""), "hub")
+    cached = sorted(d[len("models--"):].replace("--", "/") for d in os.listdir(hf)
+                    if d.startswith("models--")) if os.path.isdir(hf) else []
+    datasets = sorted(d[len("datasets--"):].replace("--", "/") for d in os.listdir(hf)
+                      if d.startswith("datasets--")) if os.path.isdir(hf) else []
+    return {"garak": garak_version(), "llamaCpp": Server.version(), "python": sys.version.split()[0],
+            "profiles": profs, "probes": sorted(probes, key=lambda x: x["name"]), "calibration": calibration,
+            "detectorModels": cached, "datasets": datasets, "builtAt": os.environ.get("CODER_GARAK_BUILT", "")}
+
+
+def cmd_fetch(args):
+    os.makedirs(os.path.dirname(os.path.abspath(args.dest)), exist_ok=True)
+    for n in range(6):
+        try:
+            with urllib.request.urlopen(args.url, timeout=300) as r, open(args.dest + ".part", "wb") as f:
+                total = int(r.headers.get("Content-Length") or -1)
+                got = 0
+                for chunk in iter(lambda: r.read(4 * 1024 * 1024), b""):
+                    f.write(chunk)
+                    got += len(chunk)
+                if total >= 0 and got != total:
+                    raise OSError("got %d of %d bytes" % (got, total))
+            os.replace(args.dest + ".part", args.dest)
+            log("fetched", got, "bytes")
+            return 0
+        except (OSError, urllib.error.HTTPError) as e:
+            log("fetch failed (%s), again" % e)
+            if isinstance(e, urllib.error.HTTPError) and e.code < 500:
+                return 1
+            time.sleep(min(60, 5 * 2 ** n))
+    return 1
+
+
+def cmd_scan(args):
+    profs = profiles()
+    if args.profile not in profs:
+        log("unknown profile", args.profile)
+        return 2
+    profile = profs[args.profile]
+    work = args.out or tempfile.mkdtemp(prefix="garak-")
+    os.makedirs(work, exist_ok=True)
+    started = time.time()
+    report = {"profile": args.profile, "profileSpec": profile, "garak": garak_version(), "llamaCpp": Server.version(),
+              "startedAt": started, "error": None, "file": None, "checks": [], "digest": None, "evals": [],
+              "examples": {}, "tbsa": None, "server": {}}
+    base = args.post.rstrip("/") if args.post else None
+
+    def send_progress(phase, extra=None):
+        if base:
+            post(base + "/progress", dict({"phase": phase, "at": time.time()}, **(extra or {})))
+
+    def finish():
+        report["finishedAt"] = time.time()
+        if base:
+            for name in ("scan.report.jsonl", "scan.hitlog.jsonl", "scan.report.html", "garak.log", "llama.log"):
+                p = os.path.join(work, name)
+                if os.path.exists(p) and os.path.getsize(p):
+                    post(base + "/raw?name=%s.gz" % name, gz_file(p), "application/gzip")
+            post(base + "/report", report)
+        else:
+            with open(os.path.join(work, "coder-report.json"), "w") as f:
+                json.dump(report, f, indent=1)
+        return 0
+
+    send_progress("checking")
+    try:
+        report["file"], report["checks"] = file_checks(args.model)
+    except GGUFError as e:
+        report["checks"] = [{"id": "gguf", "title": "A well-formed GGUF file", "status": "fail", "detail": str(e)}]
+        report["error"] = "Not a model llama.cpp can load: %s" % e
+        return finish()
+
+    ctx = profile.get("context", 4096)
+    trained = (report["file"] or {}).get("contextLength")
+    if isinstance(trained, int) and 0 < trained < ctx:
+        ctx = trained
+    server = Server(args.model, ctx, args.parallel, args.threads or cpu_count(), os.path.join(work, "llama.log"))
+    send_progress("loading")
+    ok = server.start(jinja=True)
+    if not ok:
+        server.stop()
+        ok = server.start(jinja=False)
+        report["checks"].append({"id": "jinja", "title": "llama.cpp renders its chat template", "status": "warn",
+                                 "detail": "llama.cpp could not use the model's own chat template: its built-in one "
+                                           "was used." if ok else "Not checked: the model did not load."})
+    else:
+        report["checks"].append({"id": "jinja", "title": "llama.cpp renders its chat template", "status": "pass",
+                                 "detail": "Served with its own chat template (llama.cpp's Jinja engine)."})
+    report["checks"].append({"id": "loads", "title": "llama.cpp loads and runs it", "status": "pass" if ok else "fail",
+                             "detail": ("Served on %d slots of %d tokens, %d threads." % (
+                                 args.parallel, ctx, server.threads)) if ok else
+                             "llama.cpp did not serve it: " + server.tail(600).strip()[-600:]})
+    report["server"] = {"context": ctx, "parallel": args.parallel, "threads": server.threads, "jinja": server.jinja}
+    if not ok:
+        report["error"] = "llama.cpp could not load or run the model."
+        return finish()
+
+    cfg = os.path.join(work, "garak.json")
+    garak_config(cfg, "server", profile, work, "scan", args.parallel)
+    env = dict(os.environ, **OFFLINE)
+    rpt = os.path.join(work, "scan.report.jsonl")
+    last = {"t": 0}
+
+    def tick():
+        if time.time() - last["t"] >= 15:
+            last["t"] = time.time()
+            send_progress("probing", progress_of(read_report(rpt)))
+
+    send_progress("probing", {"probesTotal": 0, "probesDone": 0})
+    rc = run_garak(cfg, profile["spec"], os.path.join(work, "garak.log"), env, tick)
+    server.stop()
+    rows = read_report(rpt)
+    report["digest"] = next((r for r in rows if r.get("entry_type") == "digest"), None)
+    report["evals"] = [r for r in rows if r.get("entry_type") == "eval"]
+    report["examples"] = examples(os.path.join(work, "scan.hitlog.jsonl"))
+    report["progress"] = progress_of(rows)
+    if report["digest"]:
+        report["digest"]["meta"].pop("setup", None)
+        report["digest"]["meta"].pop("payloads", None)
+        report["tbsa"] = tbsa(report["digest"])
+    if rc != 0 or not report["digest"]:
+        try:
+            with open(os.path.join(work, "garak.log"), "rb") as f:
+                f.seek(max(0, os.path.getsize(f.name) - 1500))
+                tail = f.read().decode("utf-8", "replace")
+        except OSError:
+            tail = ""
+        if rc in (-9, 137):
+            report["error"] = ("garak was killed (exit %s) before its report was complete: out of memory? The scan's "
+                               "memory limit is the model's size plus a few GiB." % rc)
+        else:
+            report["error"] = "garak stopped (exit %s) before its report was complete: %s" % (
+                rc, re.sub(r"\x1b\[[0-9;]*m", "", tail).strip()[-800:])
+    return finish()
+
+
+def cmd_check(args, offline):
+    """Every profile's probes and detectors against garak's test generator (warmup: online, so their data is
+    downloaded; selftest: offline, nothing may be missing)."""
+    profs = profiles()
+    widest = max(profs.values(), key=lambda p: int(p["spec"].split(":", 1)[1]))
+    work = tempfile.mkdtemp(prefix="garak-check-")
+    cfg = os.path.join(work, "garak.json")
+    garak_config(cfg, "test.Repeat", dict(widest, cap=2, generations=1), work, "check", 1)
+    env = dict(os.environ, **(OFFLINE if offline else {}))
+    rc = run_garak(cfg, widest["spec"], os.path.join(work, "garak.log"), env)
+    text = re.sub(r"\x1b\[[0-9;]*m", "", open(os.path.join(work, "garak.log"), errors="replace").read())
+    rows = read_report(os.path.join(work, "check.report.jsonl"))
+    prog = progress_of(rows)
+    failed = sorted(set(re.findall(r"(?:load failed|failed to load|Error loading)[^\n]*", text)))
+    # the Perspective API detectors need Google's service and a key: never available here
+    failed = [f for f in failed if "perspective." not in f]
+    log("%s: exit %s, %d of %d probes ran" % ("selftest" if offline else "warmup", rc, prog["probesDone"],
+                                              prog["probesTotal"]))
+    for f in failed:
+        log("  " + f)
+    if rc != 0 or failed or prog["probesDone"] < prog["probesTotal"] or not prog["probesTotal"]:
+        print(text[-6000:], file=sys.stderr)
+        return 1
+    if not offline:
+        info = build_info()
+        with open(INFO_FILE, "w") as f:
+            json.dump(info, f, indent=1)
+    shutil.rmtree(work, ignore_errors=True)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="coder-garak")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("info")
+    p.add_argument("--post")
+    p = sub.add_parser("fetch")
+    p.add_argument("url")
+    p.add_argument("dest")
+    p = sub.add_parser("scan")
+    p.add_argument("model")
+    p.add_argument("--profile", default="standard")
+    p.add_argument("--post")
+    p.add_argument("--out")
+    p.add_argument("--parallel", type=int, default=int(os.environ.get("SCAN_PARALLEL", "4")))
+    p.add_argument("--threads", type=int, default=int(os.environ.get("SCAN_THREADS", "0") or 0))
+    sub.add_parser("warmup")
+    sub.add_parser("selftest")
+    args = ap.parse_args()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    if args.cmd == "info":
+        return cmd_info(args)
+    if args.cmd == "fetch":
+        return cmd_fetch(args)
+    if args.cmd == "scan":
+        if not args.post and not args.out:
+            ap.error("scan needs --post URL or --out DIR")
+        return cmd_scan(args)
+    return cmd_check(args, offline=args.cmd == "selftest")
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

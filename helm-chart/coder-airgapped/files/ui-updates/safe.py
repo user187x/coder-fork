@@ -37,6 +37,11 @@ account a PersistentVolume (Retain: removing it never removes files) and its cla
   POST /__coder-ui/api/safe/source {workspace, path}   a folder of one of the caller's workspaces as their Cloud Drive
   POST /__coder-ui/api/safe/source/clear      back to the S3 storage
   GET  /__coder-ui/api/safe/source/guard?workspace=   deleting a workspace: is it the source, which are connected
+  GET  /__coder-ui/api/safe/mounts?workspace=         where the Cloud Drive is mounted in one of the caller's workspaces
+  POST /__coder-ui/api/safe/mounts/plan {workspace, path}       what mounting it into that folder does: the collisions
+  POST /__coder-ui/api/safe/mounts/apply {workspace, path, mode, decisions}   mount it (keep-both | overwrite-all |
+                                                      ask with {path: overwrite | keep} for each collision)
+  POST /__coder-ui/api/safe/mounts/unmount {workspace, path}
   POST /__coder-ui/api/safe/source/release {workspace, disconnect: [ids], confirm: "delete"}   the guard confirmed
 
 Only the owner reaches their Cloud Drive: the API serves the caller's own, and a workspace shared with other users or
@@ -64,12 +69,13 @@ The shared libraries (the Images view), each a prefix of the same bucket mounted
 volume each, ReadOnlyMany); everyone sees them, admins and template admins add and remove their files:
   - the ISO library: disk images for every workspace, library/isos/, at ~/isos (volume coder-isos);
   - the model library: GGUF language models for the AI workspaces (LM Studio, OpenCode), library/models/, at ~/models
-    (volume coder-models).
+    (volume coder-models). A model added waits in library/quarantine/models/ (mounted nowhere) until its security scan
+    (garak, modelscan.py) releases it.
 
   GET  /__coder-ui/api/<isos|models>                   the library, and the imports under way
   PUT  /__coder-ui/api/<isos|models>/upload?name=      a file (the body; Content-Length)
   POST /__coder-ui/api/<isos|models>/import {url, name}   a file the service downloads (http/https), in the background
-  POST /__coder-ui/api/<isos|models>/delete {name}
+  POST /__coder-ui/api/<isos|models>/delete {name, held?}   (held: the model waiting in the hold, not the library's)
 """
 import base64
 import hashlib
@@ -123,8 +129,13 @@ LIBRARIES = {
                "mountPath": os.environ.get("SAFE_MODEL_MOUNT_PATH", "/home/coder/models"),
                "maxBytes": int(float(os.environ.get("SAFE_MODEL_MAX_GIB", "100")) * 1024 ** 3),
                "nameRe": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,160}\.gguf$", re.I),
-               "nameRule": "ending in .gguf"},
+               "nameRule": "ending in .gguf",
+               # new models wait here, mounted nowhere, until their security scan releases them (modelscan.py)
+               "holdPrefix": "library/quarantine/models/"},
 }
+# The model library's security gate (modelscan.py): told of each file added or deleted, and adds the scans to the
+# listing.
+LIBRARY_HOOKS = {"added": None, "deleted": None, "decorate": None}
 
 SETTINGS_FILE = os.environ.get("SAFE_SETTINGS_FILE", "/data/cloud-drive.json")
 # Every account's capacity as an admin set it (Cloud Drive > Settings), over the chart's (QUOTA_BYTES).
@@ -1755,9 +1766,23 @@ def library(kind, user):
                    key=lambda f: f["name"].lower())
     with _lock:
         imports = [dict(i) for (k, _n), i in _imports.items() if k == kind]
-    return {"enabled": True, "canEdit": bool(CAN_EDIT and CAN_EDIT(user)), "mountPath": lib["mountPath"],
-            "maxBytes": lib["maxBytes"], "files": files, "usedBytes": sum(f["size"] for f in files),
-            "imports": sorted(imports, key=lambda i: i["startedAt"], reverse=True)}
+    out = {"enabled": True, "canEdit": bool(CAN_EDIT and CAN_EDIT(user)), "mountPath": lib["mountPath"],
+           "maxBytes": lib["maxBytes"], "files": files, "usedBytes": sum(f["size"] for f in files),
+           "imports": sorted(imports, key=lambda i: i["startedAt"], reverse=True)}
+    if lib.get("holdPrefix") and LIBRARY_HOOKS["decorate"]:
+        out = LIBRARY_HOOKS["decorate"](out)
+    return out
+
+
+def library_key(kind, name):
+    """Where a new file of the library goes: its hold, where it has one."""
+    lib = LIBRARIES[kind]
+    return (lib.get("holdPrefix") or lib["prefix"]) + name
+
+
+def library_added(kind, name, user, size):
+    if LIBRARY_HOOKS["added"]:
+        LIBRARY_HOOKS["added"](kind, name, user, size)
 
 
 def library_upload(kind, h, user, name):
@@ -1769,9 +1794,10 @@ def library_upload(kind, h, user, name):
     if length > lib["maxBytes"]:
         return h.send_json(413, {"error": "A%s %s can be at most %s." % (
             "n" if lib["noun"][0] in "AEIOU" else "", lib["noun"], human(lib["maxBytes"]))})
-    client().put_large(bucket(), lib["prefix"] + name, h.rfile, length)
+    client().put_large(bucket(), library_key(kind, name), h.rfile, length)
     LOG(event="library-upload", library=kind, user=user["username"], name=name, bytes=length)
-    return h.send_json(200, {"ok": True, "name": name, "size": length})
+    library_added(kind, name, user["username"], length)
+    return h.send_json(200, {"ok": True, "name": name, "size": length, "held": bool(lib.get("holdPrefix"))})
 
 
 def _download(kind, state, url):
@@ -1790,10 +1816,11 @@ def _download(kind, state, url):
 
             def progress(n):
                 state["bytes"] = n
-            client().put_large(bucket(), lib["prefix"] + state["name"], resp, total, progress=progress)
+            client().put_large(bucket(), library_key(kind, state["name"]), resp, total, progress=progress)
         state["done"] = True
         LOG(event="library-import", library=kind, user=state["by"], name=state["name"], url=url,
             bytes=state.get("total"))
+        library_added(kind, state["name"], state["by"], total)
     except Exception as e:  # noqa: BLE001 - shown in the library until dismissed by the next import of the name
         state["error"] = str(e)[:300]
         LOG(event="library-import-failed", library=kind, user=state["by"], name=state["name"], error=str(e)[:300])
@@ -1846,11 +1873,15 @@ def handle_libraries(h, method, path, query):
         elif method == "POST" and path == root + "/import":
             h.send_json(200, library_import(kind, user, read_json(h)))
         elif method == "POST" and path == root + "/delete":
-            name = library_name(kind, read_json(h).get("name"))
-            client().delete(bucket(), lib["prefix"] + name)
+            body = read_json(h)
+            name = library_name(kind, body.get("name"))
+            held = bool(body.get("held")) and bool(lib.get("holdPrefix"))
+            client().delete(bucket(), (lib["holdPrefix"] if held else lib["prefix"]) + name)
             with _lock:
                 _imports.pop((kind, name), None)
-            LOG(event="library-delete", library=kind, user=user["username"], name=name)
+            LOG(event="library-delete", library=kind, user=user["username"], name=name, held=held)
+            if LIBRARY_HOOKS["deleted"]:
+                LIBRARY_HOOKS["deleted"](kind, name, held)
             h.send_json(200, {"ok": True})
         else:
             h.send_json(404, {"error": "not found"})
@@ -1864,6 +1895,104 @@ def handle_libraries(h, method, path, query):
     except (OSError, RuntimeError) as e:
         h.send_json(503, {"error": "The library's storage could not be reached: %s" % str(e)[:200]})
     return True
+
+
+# ---------------------------------------------------------------------------------------------------- mounts
+# The Cloud Drive mounted into a folder of one of the owner's workspaces: clouddrive_cli.py (the workspace's own
+# `cloud-drive` command, installed by the template) run there through exec, as the workspace's user, with --json. It
+# links the Cloud Drive's entries into the folder (folders of the same name merged); a file of the same name halts it
+# until the owner chooses: keep both (data-(cloud_drive).csv) or overwrite (all, or each occurrence). The code is sent
+# with each call, so a workspace of an older template version can mount too.
+CLI_BOOT = ("import sys; n = int(sys.argv[1]); code = sys.stdin.buffer.read(n).decode(); "
+            "sys.argv = ['cloud-drive'] + sys.argv[2:]; "
+            "exec(compile(code, 'cloud-drive', 'exec'), {'__name__': '__main__'})")
+MOUNT_MODES = ("keep-both", "overwrite-all", "ask")
+MOUNT_DECISIONS_MAX = 100000
+
+
+def _cli_text():
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "clouddrive_cli.py"), "rb") as f:
+        return f.read()
+
+
+def _mount_workspace(h, user, wid):
+    """(workspace, pod) of one of the caller's running workspaces that has their Cloud Drive."""
+    if not WORKSPACE_ID_RE.match(wid or ""):
+        raise ValueError("Choose one of your workspaces.")
+    ws = WORKSPACE_INFO(h.token(), wid) if WORKSPACE_INFO else None
+    if not ws:
+        raise ValueError("There is no such workspace.")
+    if ws.get("owner_id") != user["id"]:
+        raise PermissionError
+    if wid in shared_now():
+        raise ValueError("That workspace is shared with others: your Cloud Drive is not in it.")
+    found = _source_pod(wid)
+    if not found:
+        raise ValueError("%s is not running: start it to mount your Cloud Drive there." % ws.get("name"))
+    return ws, found[0]
+
+
+def run_cli(pod, args, stdin=b"", timeout=180):
+    """The workspace's cloud-drive command: (exit code, its JSON answer)."""
+    code = _cli_text()
+    rc, out, err = kexec.exec_in(KUBE, NAMESPACE, pod, SOURCE_CONTAINER,
+                                 ["python3", "-c", CLI_BOOT, str(len(code))] + args + ["--json"],
+                                 timeout=timeout, stdin=code + stdin)
+    try:
+        result = json.loads(out.strip().splitlines()[-1]) if out.strip() else None
+    except ValueError:
+        result = None
+    if result is None:
+        raise RuntimeError("the workspace answered: %s" % (err or out or "exit %s" % rc).strip()[-300:])
+    if isinstance(result, dict) and result.get("error"):
+        raise ValueError(result["error"])
+    return rc, result
+
+
+def clean_mount_path(path):
+    path = str(path or "").strip()
+    if not path or len(path) > 1024 or any(ord(c) < 32 for c in path):
+        raise ValueError("A folder: absolute, or relative to the workspace's home (/home/coder).")
+    return path
+
+
+def mounts_view(h, user, wid):
+    ws, pod = _mount_workspace(h, user, wid)
+    _, r = run_cli(pod, ["list"])
+    return dict(r, workspace=wid, name=ws.get("name"))
+
+
+def mount_plan(h, user, body):
+    _, pod = _mount_workspace(h, user, str(body.get("workspace") or ""))
+    return run_cli(pod, ["plan", clean_mount_path(body.get("path"))])[1]
+
+
+def mount_apply(h, user, body):
+    ws, pod = _mount_workspace(h, user, str(body.get("workspace") or ""))
+    path = clean_mount_path(body.get("path"))
+    mode = body.get("mode")
+    if mode not in MOUNT_MODES:
+        raise ValueError("How to resolve files of the same name: " + ", ".join(MOUNT_MODES))
+    decisions = body.get("decisions") or {}
+    if not isinstance(decisions, dict) or len(decisions) > MOUNT_DECISIONS_MAX or not all(
+            isinstance(k, str) and v in ("overwrite", "keep") for k, v in decisions.items()):
+        raise ValueError("Each collision: overwrite or keep (both).")
+    answers = json.dumps(decisions).encode()
+    # exec's stdin never ends (v4): the command reads exactly this many bytes of it
+    _, r = run_cli(pod, ["apply", path, "--mode", mode, "--decisions=-:%d" % len(answers)], stdin=answers)
+    if not r.get("halted"):
+        LOG(event="cloud-drive-mount", user=user["username"], workspace=ws.get("name"), path=r.get("target"),
+            mode=mode, linked=r.get("linked"), kept_both=len(r.get("keptBoth") or []),
+            overwritten=len(r.get("overwritten") or []))
+    return r
+
+
+def mount_remove(h, user, body):
+    ws, pod = _mount_workspace(h, user, str(body.get("workspace") or ""))
+    _, r = run_cli(pod, ["unmount", clean_mount_path(body.get("path"))])
+    LOG(event="cloud-drive-unmount", user=user["username"], workspace=ws.get("name"), path=r.get("target"),
+        restored=r.get("restored"))
+    return r
 
 
 def handle(h, method, path, query):
@@ -1919,6 +2048,14 @@ def handle(h, method, path, query):
             h.send_json(200, source_guard(user, q.get("workspace", "")))
         elif method == "POST" and path == BASE + "/api/safe/source/release":
             h.send_json(200, release_source(user, read_json(h)))
+        elif method == "GET" and path == BASE + "/api/safe/mounts":
+            h.send_json(200, mounts_view(h, user, q.get("workspace", "")))
+        elif method == "POST" and path == BASE + "/api/safe/mounts/plan":
+            h.send_json(200, mount_plan(h, user, read_json(h)))
+        elif method == "POST" and path == BASE + "/api/safe/mounts/apply":
+            h.send_json(200, mount_apply(h, user, read_json(h, limit=16 * 1024 * 1024)))
+        elif method == "POST" and path == BASE + "/api/safe/mounts/unmount":
+            h.send_json(200, mount_remove(h, user, read_json(h)))
         elif method == "POST" and path.startswith(BASE + "/api/safe/connections/"):
             h.send_json(200, set_connected(h, user, path[len(BASE + "/api/safe/connections/"):], read_json(h)))
         elif method == "POST" and path == BASE + "/api/safe/settings/test":
@@ -1944,5 +2081,6 @@ def handle(h, method, path, query):
             h.send_json(502, {"error": "The Cloud Drive's storage answered: %s" % (e.message or e.code or e.status)})
     except (OSError, RuntimeError) as e:
         LOG(event="safe-failed", user=user["username"], error=str(e)[:300])
-        h.send_json(503, {"error": "The Cloud Drive's storage could not be reached: %s" % str(e)[:200]})
+        h.send_json(503, {"error": ("The workspace could not be reached: %s" if "/mounts" in path else
+                                    "The Cloud Drive's storage could not be reached: %s") % str(e)[:200]})
     return True

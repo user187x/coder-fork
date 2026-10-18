@@ -67,7 +67,7 @@ else:  # first pin: in place of the tools image's line
 open(p, "w").write(s)
 p = top + "/helm-chart/coder-airgapped/values.yaml"
 s = open(p).read()
-s2 = re.sub(r'(uiUpdates:\n(?:.*\n)*?  image: \'\{\{ include "platform\.image" \(list \. ")[^"]+(" *\) \}\}\')',
+s2 = re.sub(r'(uiUpdates:\n(?:.*\n)*?  image: (?:&\w+ )?\'\{\{ include "platform\.image" \(list \. ")[^"]+(" *\) \}\}\')',
             lambda m: m.group(1) + img + m.group(2), s, count=1)
 assert s2 != s or img in s, "values.yaml: uiUpdates.image not found"
 open(p, "w").write(s2)

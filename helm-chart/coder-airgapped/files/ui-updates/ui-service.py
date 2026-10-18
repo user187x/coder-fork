@@ -149,6 +149,7 @@ import lockdown  # noqa: E402  (Lock Down: admins jail a workspace's network and
 import safe  # noqa: E402  (the safe: each account's own files on S3, on the Workspaces page and in its workspaces)
 import provisioners  # noqa: E402  (Provisioner Daemons: stuck jobs, their terraform processes, a re-kick)
 import dr  # noqa: E402  (Persistence > Disaster recovery: Coder's database dumped or copied outside the cluster)
+import modelscan  # noqa: E402  (the Model Library's security gate: garak scans before a model is released)
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -7901,7 +7902,8 @@ class Handler(BaseHTTPRequestHandler):
         path = url.path
         if path == BASE + "/healthz":
             return self.send(200, "ok\n")
-        if path.startswith(BASE + "/internal/") and imagebuilder.handle_internal(self, "GET", path):
+        if path.startswith(BASE + "/internal/") and (imagebuilder.handle_internal(self, "GET", path)
+                                                     or modelscan.handle_internal(self, "GET", path)):
             return
         if imagebuilder.handle(self, "GET", path, url.query, ADMIN_ROLES):
             return
@@ -7912,6 +7914,8 @@ class Handler(BaseHTTPRequestHandler):
         if provisioners.handle(self, "GET", path, url.query):
             return
         if lockdown.handle(self, "GET", path, url.query):
+            return
+        if modelscan.handle(self, "GET", path, url.query):
             return
         if safe.handle(self, "GET", path, url.query) or safe.handle_libraries(self, "GET", path, url.query):
             return
@@ -8928,7 +8932,8 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         url = urllib.parse.urlsplit(self.path)
         path = url.path
-        if path.startswith(BASE + "/internal/") and imagebuilder.handle_internal(self, "POST", path):
+        if path.startswith(BASE + "/internal/") and (imagebuilder.handle_internal(self, "POST", path)
+                                                     or modelscan.handle_internal(self, "POST", path)):
             return
         if imagebuilder.handle(self, "POST", path, url.query, ADMIN_ROLES):
             return
@@ -8939,6 +8944,8 @@ class Handler(BaseHTTPRequestHandler):
         if dr.handle(self, "POST", path, url.query):
             return
         if lockdown.handle(self, "POST", path, url.query):
+            return
+        if modelscan.handle(self, "POST", path, url.query):
             return
         if safe.handle(self, "POST", path, url.query) or safe.handle_libraries(self, "POST", path, url.query):
             return
@@ -9417,6 +9424,9 @@ def main():
                lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), workspace_info,
                shared=safe_shared_workspaces, workspaces=safe_owner_workspaces)
     safe.start()
+    modelscan.setup(log, KUBE, lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES))
+    safe.LIBRARY_HOOKS.update(added=modelscan.added, deleted=modelscan.deleted, decorate=modelscan.decorate)
+    modelscan.start()
     if imagebuilder.ENABLED:
         # the apt indices for the package check, ready before anyone opens the builder
         threading.Thread(target=lambda: imagebuilder.APT.load(), daemon=True).start()

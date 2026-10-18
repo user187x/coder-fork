@@ -9,12 +9,18 @@
 #                   to their other workspaces): linked as it is
 # How it started (mode, from the platform service then): "mount" with the volume; "source"; "shared" or "offline"
 # (the owner's source workspace was not running) without one - the drive comes with the next start.
-# main.tf renders this with templatefile(): link, mode and mount are the template's values (no shell braces here).
+# It also installs the `cloud-drive` command (~/.local/bin/cloud-drive): the Cloud Drive mounted into folders of the
+# workspace (`cloud-drive mount ~/project/data`), files of the same name resolved as the owner chooses; the watcher
+# brings those mounts up to date every 10 seconds (`cloud-drive sync`).
+# main.tf renders this with templatefile(): link, mode, mount and cli are the template's values (no shell braces here).
 LINK='${link}'
 MODE='${mode}'
 MOUNT='${mount}'
 STATE=/etc/platform/cloud-drive
 PIDFILE=/tmp/cloud-drive-watch.pid
+CLI="$HOME/.local/bin/cloud-drive"
+
+mkdir -p "$HOME/.local/bin" && echo '${cli}' | base64 -d >"$CLI.new" && chmod 0755 "$CLI.new" && mv "$CLI.new" "$CLI"
 
 case "$MODE" in
 shared) echo "Cloud Drive: none here - this workspace is shared with others, and the Cloud Drive is its owner's alone" ;;
@@ -55,6 +61,13 @@ sync_link
 if [ -f "$PIDFILE" ]; then
  kill "$(cat "$PIDFILE")" 2>/dev/null || true
 fi
-LINK="$LINK" MOUNT="$MOUNT" STATE="$STATE" setsid bash -c "$(declare -f sync_link)"'
- while sleep 1; do sync_link; done' </dev/null >>/tmp/cloud-drive.log 2>&1 &
+LINK="$LINK" MOUNT="$MOUNT" STATE="$STATE" CLI="$CLI" setsid bash -c "$(declare -f sync_link)"'
+ n=0
+ while sleep 1; do
+  sync_link
+  n=$((n + 1))
+  if [ $((n % 10)) -eq 0 ] && [ -s "$HOME/.config/cloud-drive/mounts.json" ]; then
+   "$CLI" sync >/dev/null || true
+  fi
+ done' </dev/null >>/tmp/cloud-drive.log 2>&1 &
 echo $! >"$PIDFILE"

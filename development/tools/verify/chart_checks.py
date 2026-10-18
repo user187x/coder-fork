@@ -365,13 +365,62 @@ def main():
         re.search(r'argocd.argoproj.io/sync-wave: "(\d+)"', r[r.find("kind: APIService"):] if "kind: APIService" in r else "")
     check("Argo CD: the bootstrap and template push run before metrics-server (its health cannot hold them up)",
           len(waves) == 2 and (not ms or max(waves.values()) < int(ms.group(1))), "%s, metrics-server %s" % (waves, ms.group(1) if ms else "-"))
+    left = sorted(set(re.findall(r'\{\{ *include "platform\.[\w]+"[^}]*\}\}', r)))
+    check("every values string is rendered (no {{ include ... }} left in the manifests: ca.values lists its section)",
+          not left, left[:3])
     check("telemetry and update check off", "CODER_TELEMETRY_ENABLE" not in r or re.search(r"CODER_TELEMETRY_ENABLE\s*\n\s*value: \"?false", r),
           "")
     tf_dir = os.path.join(chart, "charts/coder-workspace/files")
     scripts = sorted(glob.glob(os.path.join(tf_dir, "scripts", "*.sh")))
-    tf = {n: open(os.path.join(tf_dir, n)).read() for n in ("main.tf", "certificates.tf", "agent-audit.tf")}
-    refs = sorted({m for n in ("main.tf", "certificates.tf") for m in re.findall(r'file\("\$\{path\.module\}/scripts/([^"]+)"', tf[n])})
-    shipped = re.findall(r"^  ([\w.-]+\.sh): \|$", r, re.M)
+    tf = {n: open(os.path.join(tf_dir, n)).read() for n in ("main.tf", "agent-audit.tf")}
+    refs = sorted({m for m in re.findall(r'file\("\$\{path\.module\}/scripts/([^"]+)"', tf["main.tf"])})
+    # the base template (the UBUNTU prototype): one main.tf, its platform sections marked for the template decorator
+    check("template: consolidated - no certificates.tf, no lockdown-start.sh (lockdown.sh's start mode)",
+          not os.path.exists(os.path.join(tf_dir, "certificates.tf"))
+          and not os.path.exists(os.path.join(tf_dir, "scripts", "lockdown-start.sh"))
+          and "set -- start" in tf["main.tf"] and 'if [ "$1" = start ]' in open(os.path.join(tf_dir, "scripts",
+                                                                                          "lockdown.sh")).read(), "")
+    marks, opened, bad_marks = [], None, []
+    for i, line in enumerate(tf["main.tf"].split("\n"), 1):
+        t = line.strip()
+        if t.startswith("# platform:begin "):
+            if opened:
+                bad_marks.append(i)
+            opened = t.split()[-1]
+            marks.append(opened)
+        elif t.startswith("# platform:end "):
+            if opened != t.split()[-1]:
+                bad_marks.append(i)
+            opened = None
+    check("template: the platform's sections (certificates, Lock Down, Cloud Drive, metrics, code-server HA) marked for the decorator",
+          not bad_marks and not opened and set(marks) == {"certificates", "lockdown", "cloud-drive", "metrics", "code-server-ha"},
+          "features %s, unbalanced at lines %s" % (sorted(set(marks)), bad_marks))
+    check("template: the Desktop, File Browser and Terminal apps are the template's choice (variables)",
+          all(re.search(r'variable "%s" \{\s*type\s*=\s*bool' % v, tf["main.tf"]) for v in ("desktop", "file_browser",
+                                                                                          "terminal"))
+          and "count        = var.desktop ? 1 : 0" in tf["main.tf"] and "web_terminal = var.terminal" in tf["main.tf"],
+          "")
+    left = subprocess.run(["git", "-C", os.path.dirname(os.path.dirname(chart)), "grep", "-il", "marimo", "--",
+                           ".", ":!development/reference", ":!development/tools/airgap-e2e/*.out", ":!CHANGELOG.md",
+                           ":!docs/READINESS.md", ":!development/tools/verify/chart_checks.py"],
+                          capture_output=True, text=True).stdout.split()
+    check("marimo is gone (code, templates, images, docs; history and reference exports aside)", not left, left[:5])
+    # code-server HA (templates/code-server-ha.yaml, files/ui-updates/csha.py)
+    ui_img = re.search(r"image: (ghcr\.io/user187x/coder-ui-updates:code-[0-9a-f]+)", r)
+    op = re.search(r"name: coder-code-server-replicator\n(?:.*\n){0,40}?\s+command: \[python3, /app/csha\.py, operator\]", r)
+    check("code-server HA: the code-server-replicator runs the platform service's code, as Coder's database's owner",
+          op and "CSHA_DB" in r and re.search(r"name: CSHA_DB\s*\n\s*valueFrom: \{secretKeyRef: \{name: coder-db-app, key: uri\}\}", r),
+          "")
+    check("code-server HA: the relay role is CloudNativePG's (managed role from its basic-auth Secret), and the template "
+          "push gives the relay the platform service's image",
+          re.search(r"managed:\s*\n\s*roles:\s*\n\s*- name: code_server_relay", r)
+          and re.search(r"name: coder-code-server-ha-relay\n(?:.*\n){0,12}?type: kubernetes\.io/basic-auth", r)
+          and ui_img and ('--variable code_server_ha_image="%s"' % ui_img.group(1)) in r, "")
+    check("code-server HA: the template's section (a relay where code-server would be; the startup script starts none)",
+          "# platform:begin code-server-ha" in tf["main.tf"] and '"/app/csha.py", "front"' in tf["main.tf"]
+          and "CODER_CODE_SERVER_HA" in tf["main.tf"]
+          and "CODER_CODE_SERVER_HA" in open(os.path.join(tf_dir, "scripts", "startup.sh")).read(), "")
+    shipped = re.findall(r"^  ([\w.-]+\.(?:sh|py)): \|$", r, re.M)
     check("template: every script the .tf files read is in files/scripts/ and in the push's ConfigMap",
           refs and all(os.path.isfile(os.path.join(tf_dir, "scripts", s)) and s in shipped for s in refs),
           "read: %s; shipped: %s" % (refs, shipped))

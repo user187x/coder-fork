@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+Coder `2.0.0-platform.65` (fork `474bc71e0`), workspace image `coder-workspace:1.8.6`, dataflow image
+`coder-workspace-dataflow:1.1.1`, AI image `coder-workspace-ai:1.0.1`, model scanner `coder-garak:0.17.1-2`.
+
+* **The model library's security scan (garak):** every model added waits in a hold, mounted nowhere, until a scan Job
+  (`ghcr.io/user187x/coder-garak`: garak 0.17.1 with its detector models and probe data, CPU PyTorch, llama.cpp's
+  `llama-server` - offline) has checked its file and run garak's probes against it; graded A-F from garak's DEFCON
+  levels, it is released at the release grade or better, else an admin releases it, rescans or deletes it. The report
+  as an image's: severities, OWASP LLM categories, failing prompts and answers, the file's checks, garak's own files.
+  Profiles Quick / Standard / Thorough; a newer scanner image (imported in the Images view) updates garak and its
+  probes; the newest garak release shown where PyPI is reached. `development/tools/build-garak-image.sh`.
+* **The Cloud Drive in a folder:** Mount (the window's view, or `cloud-drive mount PATH` in a workspace) links it into
+  any folder beside its own files; a file of the same name halts it - Keep both (`data-(cloud_drive).csv`) or
+  Overwrite (all, or each occurrence asked: yes / no, `[Y/n]`); unmounting puts overwritten files back.
+* **The base template and the decorator:** one `main.tf` (the certificate's install in it; Lock Down's start in
+  `lockdown.sh`), its platform sections marked; Coder's template decorator injects them into every template that
+  lacks them when it is provisioned. Create new template: the base without a choice shown, the Desktop, File Browser
+  and Terminal each in or out, the new template's own logic only. Source Code: Materialized and Global files; the
+  editor's Materialized tab.
+* **marimo removed** from the template, the workspace image (1.8.6: 1.3 GB, was 1.9 GB) and everything else.
+* **code-server HA:** the code-server-replicator, the relays, the schema `code_server_ha` in Coder's database
+  (`codeServerHA`, a template's `code_server_ha`).
+* **The network pill** slides for as long as the page is open and asks the platform service again when live
+  readings stall. **The Cloud Drive** button shows how full it is. **Certificates:** Create SSH Key, Upload PFX.
+* Earlier on this line (platform.61-63): Super Intelligence removed; Admin Controls; images on nodes scanned; the
+  Cloud Drive's encryption and source; Accounts bulk actions and group chat; disaster recovery.
+
 ## 1.39.1 – 2026-10-15
 
 Coder `2.0.0-platform.45` (fork `21d206361`), workspace image `coder-workspace:1.8.5` (unchanged), dataflow image

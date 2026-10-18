@@ -9,7 +9,7 @@
 #     no update check, no model catalogue download, no language-server downloads, no sharing, no default plugins.
 # Built by ../tools/build-ai-image.sh, which downloads both beforehand (pinned, checked against their SHA-256): the
 # build needs no network.
-ARG BASE=ghcr.io/user187x/coder-workspace:1.8.5
+ARG BASE=ghcr.io/user187x/coder-workspace:1.8.6
 FROM ${BASE}
 ARG LMSTUDIO_VERSION=0.4.26-4
 ARG OPENCODE_VERSION=1.18.34

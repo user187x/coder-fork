@@ -82,7 +82,7 @@ s, tpls = api("/api/v2/templates", token=admin)
 names = [t["name"] for t in tpls] if s == 200 else []
 check("template ubuntu-vnc-desktop was pushed", "ubuntu-vnc-desktop" in names, str(names))
 s, b, _ = get(CODER + "/__coder-ui/healthz"); check("platform service /__coder-ui/ through the Gateway", s == 200, str(s))
-s, b, _ = get(CODER + "/__icons/marimo.svg"); check("icon server /__icons/ through the Gateway", s == 200 and b"<svg" in b, str(s))
+s, b, _ = get(CODER + "/__icons/cloud-drive.svg"); check("icon server /__icons/ through the Gateway", s == 200 and b"<svg" in b, str(s))
 s, b, _ = get(CODER + "/__banner/banner.json")
 banner = json.loads(b) if s == 200 else {}
 check("banner service /__banner/ through the Gateway", s == 200, str(s))
@@ -110,7 +110,7 @@ if "ubuntu-vnc-desktop" in names:
         check("workspace build succeeded", status == "succeeded", status + (" " + w["latest_build"]["job"].get("error", "") if status == "failed" else ""))
         check("workspace agent connected to Coder", agent.get("status") == "connected", str(agent.get("status")))
         # Every app with a health check must become healthy with no internet (code-server, File Browser, the
-        # desktop, marimo): they all come from the workspace image. Up to 10 minutes for the startup script.
+        # desktop): they all come from the workspace image. Up to 10 minutes for the startup script.
         deadline, a = time.time() + 600, {}
         while time.time() < deadline:
             s, w = api("/api/v2/workspaces/" + ws["id"], token=admin)
@@ -124,7 +124,7 @@ if "ubuntu-vnc-desktop" in names:
         print("INFO agent lifecycle: %s; apps: %s" % (a.get("lifecycle_state"),
               ", ".join("%s=%s" % kv for kv in sorted(apps.items()))))
         check("workspace startup finished (lifecycle ready)", a.get("lifecycle_state") == "ready", str(a.get("lifecycle_state")))
-        for slug in ("code-server", "filebrowser", "novnc", "marimo"):
+        for slug in ("code-server", "filebrowser", "novnc"):
             if slug in apps:
                 check("workspace app %s healthy with no internet" % slug, apps[slug] == "healthy", str(apps[slug]))
         # The apps answer through Coder's path-based proxy (what the dashboard opens).

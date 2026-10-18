@@ -60,9 +60,9 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
-| `ghcr.io_user187x_coder-workspace_1.8.5.tar.gz` | `ghcr.io/user187x/coder-workspace:1.8.5` | 1.9 GB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, marimo + packages, default ~/.bashrc and desktop background (development/workspace-image) |
-| `ghcr.io_user187x_coder-workspace-dataflow_1.1.0.tar.gz` | `ghcr.io/user187x/coder-workspace-dataflow:1.1.0` | 3.7 GB | workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), Apache Airflow 3.3.2 (development/workspace-image-dataflow) |
-| `ghcr.io_user187x_coder-workspace-ai_1.0.0.tar.gz` | `ghcr.io/user187x/coder-workspace-ai:1.0.0` | 3.1 GB | workspace pods (ubuntu-lmstudio, ubuntu-opencode): the workspace image + LM Studio 0.4.26 (the desktop app, its server and lms; internal business use only - never on a public registry or release) and OpenCode 1.18.34 (development/workspace-image-ai) |
+| `ghcr.io_user187x_coder-workspace_1.8.6.tar.gz` | `ghcr.io/user187x/coder-workspace:1.8.6` | 1.3 GB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc and desktop background (development/workspace-image) |
+| `ghcr.io_user187x_coder-workspace-dataflow_1.1.1.tar.gz` | `ghcr.io/user187x/coder-workspace-dataflow:1.1.1` | 3.0 GB | workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), Apache Airflow 3.3.2 (development/workspace-image-dataflow) |
+| `ghcr.io_user187x_coder-workspace-ai_1.0.1.tar.gz` | `ghcr.io/user187x/coder-workspace-ai:1.0.1` | 2.4 GB | workspace pods (ubuntu-lmstudio, ubuntu-opencode): the workspace image + LM Studio 0.4.26 (the desktop app, its server and lms; internal business use only - never on a public registry or release) and OpenCode 1.18.34 (development/workspace-image-ai) |
 
 ### `cloud-drive/`
 

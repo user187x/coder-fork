@@ -29,8 +29,6 @@ SOFTWARE = [
      r"^(\d[\w.]*)"),
     ("File Browser", "Files in the browser (the File Browser app)", "Apps", ["filebrowser", "version"],
      r"v(\d[\w.]*)"),
-    ("marimo", "Python notebooks (the marimo app), with a data stack, offline", "Apps",
-     ["/opt/marimo/bin/marimo", "--version"], r"(\d[\w.]*)"),
     ("Firefox", "The desktop's web browser (Mozilla's build)", "Apps", ["firefox", "--version"], r"Firefox (\d[\w.]*)"),
     ("k9s", "Kubernetes in the terminal", "Kubernetes", ["k9s", "version", "-s"], r"Version\s+v?(\d[\w.]*)"),
     ("kubectl", "The Kubernetes command line", "Kubernetes", ["kubectl", "version", "--client"],
@@ -85,12 +83,6 @@ def main():
     manual = set(run(["apt-mark", "showmanual"]).split())
     added = sorted(n for n in now if n not in base)
     asked = [n for n in added if n in manual and n not in base_manual]
-    # marimo's packages, as `pip list` would give them (the environment has no pip of its own: the image removes it)
-    pip = json.loads(run(["/opt/marimo/bin/python", "-c",
-                          "import importlib.metadata as m, json; print(json.dumps(sorted("
-                          "({'name': d.metadata['Name'], 'version': d.version} for d in m.distributions()),"
-                          " key=lambda x: x['name'].lower())))"]) or "[]")
-
     json.dump({
         "schema": 1,
         "base": base_image,
@@ -102,9 +94,6 @@ def main():
             "upgraded": sum(1 for n in now if n in base and base[n] != now[n]),
             "installed": len(now),
         },
-        "python": {"environment": "/opt/marimo",
-                   "packages": sorted(({"name": p["name"], "version": p["version"]} for p in pip),
-                                      key=lambda p: p["name"].lower())},
     }, sys.stdout, indent=1)
     sys.stdout.write("\n")
 

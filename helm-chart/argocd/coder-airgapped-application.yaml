@@ -153,6 +153,12 @@ spec:
     name: coder-user-storage-minio-tls
     jsonPointers:
     - /data
+  # code-server HA's relay login (a password made on the first sync).
+  - kind: Secret
+    name: coder-code-server-ha-relay
+    jsonPointers:
+    - /stringData
+    - /data
   # The banner service stores what admins publish in this ConfigMap at runtime.
   - kind: ConfigMap
     name: coder-banner-state

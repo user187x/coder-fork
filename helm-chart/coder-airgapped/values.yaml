@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.63 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.65 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.63-airgap
+      tag: 2.0.0-platform.65-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -354,6 +354,48 @@ imageBuilder:
     Components: main universe restricted multiverse
 
 # ---------------------------------------------------------------------------------------------------------------
+# code-server high availability (templates/code-server-ha.yaml, files/ui-updates/csha.py). A template turns it on for
+# its workspaces (its code_server_ha variable; off by default): their code-server no longer runs inside the workspace
+# but as a global singleton - one instance per workspace across every cluster that shares Coder's database - which the
+# code-server-replicator of each cluster keeps (replaced when it fails; taken over by another connected, healthy
+# cluster when the workspace's own stops answering), reached through a relay in the workspace's pod; every bit of its
+# state in Coder's database (schema code_server_ha).
+# ---------------------------------------------------------------------------------------------------------------
+codeServerHA:
+  enabled: true
+  # This cluster's name among those that share Coder's database (each runs this chart with a name of its own).
+  cluster: primary
+  # How another cluster's workspaces reach this cluster's code-server instances (a pattern of {service}, {namespace},
+  # {workspace} and {port}: a multi-cluster Service name, a gateway's TCP route). Empty: this cluster takes over no
+  # other cluster's workspaces.
+  endpointExternal: ""
+  # How long an instance's lease lasts unrenewed; another cluster waits as long again before it takes over.
+  leaseSeconds: 30
+  # The operator's replicas in this cluster: one works, the others wait (a lock in PostgreSQL).
+  replicas: 2
+
+# ---------------------------------------------------------------------------------------------------------------
+# The Model Library's security gate (Templates > Images > Model library): every model added to the library is scanned
+# with garak (NVIDIA's LLM vulnerability scanner) in a Job before workspaces can use it; until then it waits in a hold
+# mounted nowhere (files/ui-updates/modelscan.py). The scanner image carries garak, its detector models and probe data,
+# and llama.cpp's llama-server, which serves the model to garak: it runs offline (development/garak-image). Needs the
+# Cloud Drive's storage (global.userStorage). Admins choose the scan profile, the grade a model needs to be released,
+# and a newer scanner image (imported in the Images view) in the dashboard.
+# ---------------------------------------------------------------------------------------------------------------
+modelScanner:
+  enabled: true
+  image: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-garak:0.17.1-2") }}'
+  # Each scan Job's CPU limit (llama.cpp runs the model on CPUs), its memory beyond the model's own size (llama.cpp's
+  # context for the parallel prompts, garak and its detector models), and how many of garak's prompts it answers at
+  # once.
+  cpu: "4"
+  memoryGiB: 6
+  parallel: 4
+  # Where the newest garak release is looked up, to show it next to the scanner's (PyPI's JSON API for garak; in an
+  # air-gapped network your PyPI mirror's, or "off").
+  pypiUrl: https://pypi.org/pypi/garak/json
+
+# ---------------------------------------------------------------------------------------------------------------
 # The Cloud Drive (global.userStorage.enabled): each account's own storage, a prefix users/<user id>/ in one S3 bucket. The
 # platform service makes every account's volume (a PersistentVolume of the CSI driver below, its claim coder-safe-<id>)
 # and serves the Workspaces page's Cloud Drive; every workspace of the account mounts it (ReadWriteMany). The files are on the
@@ -409,7 +451,7 @@ uiUpdates:
   # (+ its database) and regctl (development/image-tools), which the Images view lints, formats and scans with -
   # tagged with the code's hash (development/tools/build-ui-image.sh builds and pins it). The chart carries no code:
   # Helm keeps each release in a Secret of at most 1 MiB.
-  image: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-ebfb5afcfd01") }}'
+  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-9af1da51edc0") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'
@@ -503,7 +545,12 @@ coder-workspace:
   cliImage: '{{ include "platform.image" (list . (printf "%s:%s" .Values.global.coderImages.fork.repo .Values.global.coderImages.fork.tag)) }}'
   loginImage: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   # The workspace image (development/workspace-image): desktop, JetBrains Mono Nerd Font and tmux preinstalled.
-  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.8.5") }}'
+  # code-server HA (codeServerHA above): the relay a template's workspaces run when it turns code_server_ha on - the
+  # platform service's image - and the Secret with the CA of Coder's database, which the relay checks.
+  codeServerHA:
+    image: *platformServiceImage
+    dbCaSecret: '{{ .Values.global.database.name }}-ca'
+  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.8.6") }}'
   imagePullSecrets: []
   secrets:
     tlsCa: '{{ .Values.global.secretNames.tlsCa }}'
@@ -512,13 +559,13 @@ coder-workspace:
     name: ubuntu-vnc-desktop
     displayName: UBUNTU      # where the template has none (one set in the dashboard is kept)
     icon: /icon/ubuntu.svg
-  # The same workspace with Apache NiFi and Apache Airflow in place of code-server and marimo, on its own image.
+  # The same workspace with Apache NiFi and Apache Airflow in place of code-server, on its own image.
   dataflowTemplate:
     enabled: true
     name: ubuntu-dataflow
     displayName: UBUNTU DATAFLOW
     icon: /icon/ubuntu.svg
-  dataflowImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-dataflow:1.1.0") }}'
+  dataflowImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-dataflow:1.1.1") }}'
   # The AI templates: LM Studio (its window on the desktop, its server) and OpenCode on it, on the AI workspace image
   # (internal use only: LM Studio's terms).
   aiTemplates:
@@ -531,7 +578,7 @@ coder-workspace:
       name: ubuntu-opencode
       displayName: UBUNTU OPENCODE
       icon: /__icons/opencode.svg
-  aiImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-ai:1.0.0") }}'
+  aiImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-ai:1.0.1") }}'
 
   icons:
     host: ""

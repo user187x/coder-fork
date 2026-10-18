@@ -1203,11 +1203,11 @@ class TrackedWorkspaceImageTest(unittest.TestCase):
         a = ib.addons_of(json.dumps({"schema": 1, "base": "codercom/enterprise-base:ubuntu", "software": [
             {"name": "code-server", "version": "4.141.0", "group": "Apps", "what": "VS Code in the browser"}],
             "packages": {"added": [{"name": "firefox", "version": "157.0"}], "dependencies": 800, "upgraded": 3,
-                         "installed": 1300}, "python": {"packages": [{"name": "marimo", "version": "0.24.2"}]}}))
+                         "installed": 1300}, "python": {"packages": [{"name": "numpy", "version": "2.4.0"}]}}))
         self.assertEqual(a["software"][0]["version"], "4.141.0")
         self.assertEqual(a["packages"]["added"][0]["name"], "firefox")
         self.assertEqual(a["packages"]["dependencies"], 800)
-        self.assertEqual(a["python"]["packages"][0]["name"], "marimo")
+        self.assertEqual(a["python"]["packages"][0]["name"], "numpy")
         self.assertIsNone(ib.addons_of("not json"))
         self.assertIsNone(ib.addons_of(None))
 
@@ -2033,6 +2033,615 @@ class CloudDriveBackendTest(unittest.TestCase):
         self.assertIn(("DELETE", "/api/v1/persistentvolumes/" + name), calls)
         posted = [p for m, p in calls if m == "POST"]
         self.assertEqual(posted, ["/api/v1/persistentvolumes", "/api/v1/namespaces/coder/persistentvolumeclaims"])
+
+
+class _FakeS3:
+    """An S3 bucket in memory: what modelscan.py and the libraries use of s3client."""
+
+    def __init__(self):
+        self.objects = {}  # key -> (bytes, modified)
+        self.n = 0
+
+    def _stamp(self):
+        self.n += 1
+        return "2026-10-17T00:00:%02dZ" % self.n
+
+    def list(self, bucket, prefix="", delimiter=None, limit=None):
+        return [{"key": k, "size": len(v[0]), "modified": v[1]} for k, v in sorted(self.objects.items())
+                if k.startswith(prefix)], []
+
+    def put(self, bucket, key, body, length=None, content_type="", sse=None):
+        self.objects[key] = (bytes(body), self._stamp())
+
+    def put_large(self, bucket, key, body, length, part_size=0, content_type="", progress=None):
+        self.objects[key] = (body.read(length), self._stamp())
+
+    def _resp(self, data):
+        import io
+        r = io.BytesIO(data)
+        r.headers = {"Content-Length": str(len(data))}
+        r.conn = mock.Mock()
+        return r
+
+    def get(self, bucket, key, sse=None):
+        if key not in self.objects:
+            raise ms_s3error(404)
+        return self._resp(self.objects[key][0])
+
+    def head(self, bucket, key, sse=None):
+        if key not in self.objects:
+            raise ms_s3error(404)
+        return self._resp(b"" if False else self.objects[key][0])
+
+    def copy(self, bucket, src, dst, size, **kw):
+        self.objects[dst] = (self.objects[src][0], self._stamp())
+
+    def delete(self, bucket, key):
+        self.objects.pop(key, None)
+
+
+def ms_s3error(status):
+    import s3client
+    return s3client.S3Error(status, "NoSuchKey", "no such key")
+
+
+def _garak_digest(results):
+    """A digest of garak's (its 'eval' part), from [(probe, detector, passed, total, defcon, tags)]."""
+    ev = {}
+    for probe, det, passed, total, dc, tags in results:
+        group = probe.split(".")[0]
+        g = ev.setdefault(group, {"_summary": {"group": group, "score": passed / total, "group_defcon": dc,
+                                                "group_link": "https://reference.garak.ai/" + group}})
+        p = g.setdefault(probe, {"_summary": {"probe_name": probe, "probe_tier": 1, "probe_tags": tags,
+                                              "probe_descr": "<p>%s</p>" % probe}})
+        p[det] = {"detector_name": det, "detector_descr": det, "absolute_score": passed / total,
+                  "absolute_defcon": dc, "absolute_comment": "x", "relative_score": -1.0, "relative_defcon": dc,
+                  "relative_comment": "y", "detector_defcon": dc, "total_evaluated": total, "passed": passed}
+    return {"entry_type": "digest", "meta": {"garak_version": "0.17.1", "calibration_used": True,
+                                             "calibration": {"calibration_date": "2026-02-02 20:25", "model_count": 23},
+                                             "run_uuid": "r"}, "eval": ev}
+
+
+class ModelScanTest(unittest.TestCase):
+    """The model library's security gate (modelscan.py): new models wait in the hold, a garak scan Job grades them,
+    the release policy moves them into the library; admins override, hold, choose the scanner."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.safe = load("safe", "safe.py")
+        self.ms = load("modelscan", "modelscan.py")
+        self.ms.safe = self.safe
+        self.s3 = _FakeS3()
+        self.safe.ENABLED = True
+        self.safe.LOG = self.ms.LOG = lambda **kw: None
+        self.safe.client = lambda cfg=None: self.s3
+        self.safe.bucket = lambda: "b"
+        self.safe.CAN_EDIT = lambda user: "template-admin" in user["roles"] or "owner" in user["roles"]
+        self.ms.STATE_FILE = os.path.join(self.tmp, "model-scans.json")
+        self.ms.DEFAULT_IMAGE = "ghcr.io/user187x/coder-garak:0.17.1-1"
+        self.ms._state = None
+        self.ms._live.clear()
+        self.ms._last_sync[0] = 0
+        self.jobs = {}
+        self.ms.KUBE = mock.Mock(call=self.kube)
+        self.ms.IS_ADMIN = lambda user: "owner" in user["roles"]
+        self.safe.LIBRARY_HOOKS.update(added=self.ms.added, deleted=self.ms.deleted, decorate=self.ms.decorate)
+
+    def kube(self, method, path, body=None):
+        if method == "POST" and path.endswith("/jobs"):
+            self.jobs[body["metadata"]["name"]] = body
+            return 201, body
+        if method == "DELETE":
+            self.jobs.pop(path.split("/jobs/")[1].split("?")[0], None)
+            return 200, {}
+        if method == "GET" and "/jobs/" in path:
+            return (200, {"status": {"active": 1}}) if path.rsplit("/", 1)[1] in self.jobs else (404, {})
+        if method == "GET" and "/pods" in path:
+            return 200, {"items": []}
+        return 404, {}
+
+    def internal(self, method, path, body=None, raw=None):
+        import io
+        sent = {}
+        h = mock.Mock()
+        data = raw if raw is not None else json.dumps(body or {}).encode()
+        h.headers = {"Content-Length": str(len(data))}
+        h.rfile = io.BytesIO(data)
+        h.wfile = io.BytesIO()
+        h.path = path
+        h.send_json = lambda status, payload: sent.update(status=status, body=payload)
+        h.send = lambda status, *a, **k: sent.update(status=status)
+        h.send_response = lambda status: sent.update(status=status)
+        self.assertTrue(self.ms.handle_internal(h, method, path.split("?")[0]))
+        sent["bytes"] = h.wfile.getvalue()
+        return sent
+
+    def api(self, method, path, body=None, roles=("owner",), query=""):
+        import io
+        sent = {}
+        data = json.dumps(body or {}).encode()
+        h = mock.Mock()
+        h.headers = {"X-Requested-With": "coder-ui", "Content-Length": str(len(data))}
+        h.rfile = io.BytesIO(data)
+        h.user.return_value = ({"id": "u", "username": "admin", "roles": list(roles)}, None)
+        h.send_json = lambda status, payload: sent.update(status=status, body=payload)
+        h.send = lambda status, body=None, *a, **k: sent.update(status=status, raw=body)
+        self.assertTrue(self.ms.handle(h, method, path, query))
+        return sent
+
+    def token_of(self, kind):
+        return next(t for t, l in self.ms._live.items() if l["kind"] == kind)
+
+    def scanner_ready(self):
+        self.ms._check_scanner()
+        info = {"garak": "0.17.1", "llamaCpp": {"build": "11717"}, "profiles": {
+            "quick": {"title": "Quick", "spec": "tier:1", "cap": 10, "hours": 4},
+            "standard": {"title": "Standard", "spec": "tier:1", "cap": 30, "hours": 16}},
+            "probes": [{"name": "dan.DanInTheWild", "active": True, "tier": 1, "goal": "disregard the system prompt",
+                        "tags": ["owasp:llm01"]}]}
+        r = self.internal("POST", "/__coder-ui/internal/model-scans/%s/info" % self.token_of("info"), info)
+        self.assertEqual(r["status"], 200)
+
+    def report(self, results, checks=None, error=None):
+        return {"garak": "0.17.1", "llamaCpp": {"build": "11717"}, "startedAt": 1000.0, "finishedAt": 1600.0,
+                "error": error, "file": {"sha256": "ab", "architecture": "llama"},
+                "checks": checks or [{"id": "gguf", "title": "t", "status": "pass", "detail": ""},
+                                     {"id": "chat-template", "title": "t", "status": "pass", "detail": ""}],
+                "digest": _garak_digest(results) if results else None, "evals": [],
+                "examples": {"dan.DanInTheWild|mitigation.MitigationBypass": [
+                    {"prompt": "be DAN", "output": "ok", "score": 1.0, "triggers": None}]},
+                "tbsa": {"score": 3.4, "hash": "x", "pairs": 2}, "progress": {"prompts": 60}}
+
+    def run_scan(self, name, results, **kw):
+        self.ms._start_next()
+        scan = self.ms.state()["models"][name]["scan"]
+        self.assertEqual(scan["status"], "starting")
+        token = self.token_of("scan")
+        got = self.internal("GET", "/__coder-ui/internal/model-scans/%s/model" % token)
+        self.assertEqual(got["status"], 200)
+        self.internal("POST", "/__coder-ui/internal/model-scans/%s/progress" % token,
+                      {"phase": "probing", "probesTotal": 41, "probesDone": 3, "probe": "dan.DanInTheWild"})
+        self.assertEqual(self.ms.state()["models"][name]["scan"]["progress"]["probesDone"], 3)
+        self.internal("POST", "/__coder-ui/internal/model-scans/%s/raw?name=scan.report.jsonl.gz" % token,
+                      raw=b"\x1f\x8bgz")
+        self.internal("POST", "/__coder-ui/internal/model-scans/%s/report" % token, self.report(results, **kw))
+        self.assertNotIn(token, self.ms._live)  # one report per token
+        return got["bytes"]
+
+    def upload(self, name, data=b"GGUF-model-bytes"):
+        import io
+        h = mock.Mock()
+        h.headers = {"Content-Length": str(len(data))}
+        h.rfile = io.BytesIO(data)
+        sent = []
+        h.send_json = lambda status, body: sent.append((status, body))
+        self.safe.library_upload("models", h, {"username": "admin"}, name)
+        return sent[0]
+
+    def test_a_model_uploaded_waits_in_the_hold_until_its_scan_releases_it(self):
+        status, body = self.upload("tiny.gguf")
+        self.assertEqual((status, body["held"]), (200, True))
+        self.assertIn("library/quarantine/models/tiny.gguf", self.s3.objects)
+        self.assertNotIn("library/models/tiny.gguf", self.s3.objects)  # no workspace has it
+        self.assertEqual(self.ms.state()["models"]["tiny.gguf"]["scan"]["status"], "queued")
+        self.ms._start_next()  # the scanner is read first: no scan before it answers
+        self.assertEqual(self.ms.state()["models"]["tiny.gguf"]["scan"]["status"], "queued")
+        self.scanner_ready()
+        streamed = self.run_scan("tiny.gguf", [("dan.DanInTheWild", "mitigation.MitigationBypass", 30, 30, 5,
+                                                ["owasp:llm01"])])
+        self.assertEqual(streamed, b"GGUF-model-bytes")
+        self.assertIn("library/models/tiny.gguf", self.s3.objects)  # released by its grade
+        self.assertNotIn("library/quarantine/models/tiny.gguf", self.s3.objects)
+        rec = self.ms.state()["models"]["tiny.gguf"]
+        self.assertEqual((rec["stage"], rec["releasedBy"]["by"], rec["last"]["grade"]), ("released", "policy", "A"))
+        job = next(j for n, j in self.jobs.items() if n.startswith("coder-model-scan-"))
+        spec = job["spec"]["template"]["spec"]
+        self.assertFalse(spec["automountServiceAccountToken"])
+        self.assertEqual(spec["containers"][0]["image"], "ghcr.io/user187x/coder-garak:0.17.1-1")
+        self.assertEqual(spec["containers"][0]["command"][:4], ["coder-garak", "scan", "/work/model.gguf", "--profile"])
+        self.assertEqual(job["spec"]["activeDeadlineSeconds"], 16 * 3600)
+        lib = self.safe.library("models", {"roles": ["owner"]})
+        self.assertEqual([f["name"] for f in lib["files"]], ["tiny.gguf"])
+        self.assertEqual(lib["files"][0]["scan"]["last"]["grade"], "A")
+        self.assertEqual(lib["held"], [])
+
+    def test_a_model_graded_below_the_release_grade_stays_held_until_an_admin_releases_it(self):
+        self.upload("bad.gguf")
+        self.scanner_ready()
+        self.run_scan("bad.gguf", [("dan.DanInTheWild", "mitigation.MitigationBypass", 1, 30, 1, ["owasp:llm01"])] +
+                      [("encoding.Inject%d" % i, "encoding.DecodeMatch", 0, 30, 1, ["owasp:llm01"]) for i in range(6)])
+        rec = self.ms.state()["models"]["bad.gguf"]
+        self.assertEqual((rec["stage"], rec["last"]["grade"]), ("held", "F"))
+        self.assertIn("graded F", rec["holdReason"])
+        lib = self.safe.library("models", {"roles": ["owner"]})
+        self.assertEqual([m["name"] for m in lib["held"]], ["bad.gguf"])
+        report = self.api("GET", "/__coder-ui/api/models/report", query="name=bad.gguf")["body"]
+        self.assertEqual((report["grade"], report["counts"]["CRITICAL"], report["stage"]), ("F", 7, "held"))
+        self.assertEqual(report["owasp"][0]["id"], "LLM01")
+        dan = next(f for f in report["findings"] if f["probe"] == "dan.DanInTheWild")
+        self.assertEqual((dan["examples"][0]["prompt"], dan["goal"]), ("be DAN", "disregard the system prompt"))
+        self.assertEqual(self.api("POST", "/__coder-ui/api/models/release", {"name": "bad.gguf"},
+                                  roles=("template-admin",))["status"], 403)  # the gate is admins' to override
+        self.assertEqual(self.api("POST", "/__coder-ui/api/models/release", {"name": "bad.gguf"})["status"], 200)
+        rec = self.ms.state()["models"]["bad.gguf"]
+        self.assertEqual((rec["stage"], rec["releasedBy"]["override"]), ("released", True))
+        self.assertIn("library/models/bad.gguf", self.s3.objects)
+        # held again: out of the workspaces
+        self.assertEqual(self.api("POST", "/__coder-ui/api/models/hold", {"name": "bad.gguf"})["status"], 200)
+        self.assertIn("library/quarantine/models/bad.gguf", self.s3.objects)
+        self.assertNotIn("library/models/bad.gguf", self.s3.objects)
+
+    def test_a_failed_file_check_or_an_unfinished_scan_never_releases(self):
+        self.upload("tpl.gguf")
+        self.scanner_ready()
+        self.run_scan("tpl.gguf", [("dan.DanInTheWild", "mitigation.MitigationBypass", 30, 30, 5, [])],
+                      checks=[{"id": "chat-template", "title": "t", "status": "fail", "detail": "__globals__"}])
+        rec = self.ms.state()["models"]["tpl.gguf"]
+        self.assertEqual((rec["stage"], rec["last"]["grade"], rec["holdReason"]), ("held", "F", "a file check failed"))
+        self.upload("err.gguf")
+        self.run_scan("err.gguf", [], error="llama.cpp could not load or run the model.")
+        rec = self.ms.state()["models"]["err.gguf"]
+        self.assertEqual((rec["stage"], rec["last"]["grade"], rec["scan"]["status"]), ("held", "?", "failed"))
+
+    def test_grades(self):
+        g = self.ms.grade
+        ok = [{"status": "pass"}]
+        self.assertEqual(g({"CRITICAL": 6}, ok), "F")
+        self.assertEqual(g({"CRITICAL": 1}, ok), "D")
+        self.assertEqual(g({"HIGH": 6}, ok), "D")
+        self.assertEqual(g({"HIGH": 1}, ok), "C")
+        self.assertEqual(g({"MEDIUM": 6}, ok), "B")
+        self.assertEqual(g({"MEDIUM": 2, "LOW": 9}, ok), "A")
+        self.assertEqual(g({}, [{"status": "fail"}]), "F")
+        self.assertEqual(g({}, ok, error="x"), "?")
+        self.assertEqual([self.ms.absolute_defcon(x) for x in (0.0, 0.2, 0.5, 0.9, 1.0)], [1, 2, 3, 4, 5])
+
+    def test_a_changed_file_is_scanned_again_and_its_running_scan_stopped(self):
+        self.upload("m.gguf")
+        self.scanner_ready()
+        self.ms._start_next()
+        first = self.ms.state()["models"]["m.gguf"]["scan"]
+        scans = lambda: [n for n in self.jobs if n.startswith("coder-model-scan-")]  # noqa: E731
+        self.assertEqual(len(scans()), 1)
+        self.upload("m.gguf", b"another model, larger")
+        self.assertEqual(scans(), [])  # its Job deleted
+        self.assertEqual(first["status"], "cancelled")
+        self.assertEqual(self.ms.state()["models"]["m.gguf"]["scan"]["status"], "queued")
+        # deleting the held file forgets it
+        self.api_delete("m.gguf", held=True)
+        self.assertNotIn("m.gguf", self.ms.state()["models"])
+
+    def api_delete(self, name, held):
+        import io
+        data = json.dumps({"name": name, "held": held}).encode()
+        h = mock.Mock()
+        h.headers = {"X-Requested-With": "coder-ui", "Content-Length": str(len(data))}
+        h.rfile = io.BytesIO(data)
+        h.user.return_value = ({"id": "u", "username": "admin", "roles": ["owner"]}, None)
+        h.send_json = lambda status, body: None
+        self.safe.handle_libraries(h, "POST", "/__coder-ui/api/models/delete", "")
+
+    def test_models_already_in_the_library_are_scanned_where_they_are(self):
+        self.s3.objects["library/models/old.gguf"] = (b"old", "2026-01-01T00:00:00Z")
+        self.ms.sync(force=True)
+        rec = self.ms.state()["models"]["old.gguf"]
+        self.assertEqual((rec["stage"], rec["scan"]["status"]), ("released", "queued"))
+        self.scanner_ready()
+        self.run_scan("old.gguf", [("dan.DanInTheWild", "mitigation.MitigationBypass", 0, 30, 1, [])] * 1 +
+                      [("x.P%d" % i, "d", 0, 30, 1, []) for i in range(6)])
+        rec = self.ms.state()["models"]["old.gguf"]
+        self.assertEqual((rec["stage"], rec["last"]["grade"]), ("released", "F"))  # graded, left where it was
+
+    def test_a_newer_version_waits_while_the_released_one_stays(self):
+        self.s3.objects["library/models/v.gguf"] = (b"v1", "2026-01-01T00:00:00Z")
+        self.ms.sync(force=True)
+        self.scanner_ready()
+        self.run_scan("v.gguf", [("dan.DanInTheWild", "mitigation.MitigationBypass", 30, 30, 5, [])])
+        self.upload("v.gguf", b"version two")
+        self.ms.sync(force=True)
+        lib = self.safe.library("models", {"roles": ["owner"]})
+        self.assertEqual([f["name"] for f in lib["files"]], ["v.gguf"])
+        self.assertTrue(lib["files"][0]["scan"]["newerHeld"])
+        self.assertEqual(lib["files"][0]["scan"]["last"]["grade"], "A")  # the released one's report
+        self.assertTrue(lib["held"][0]["alsoReleased"])
+        self.run_scan("v.gguf", [("dan.DanInTheWild", "mitigation.MitigationBypass", 30, 30, 5, [])])
+        self.assertEqual(self.s3.objects["library/models/v.gguf"][0], b"version two")
+
+    def test_the_scanner_image_an_admin_chooses_is_checked_first(self):
+        self.scanner_ready()
+        self.assertEqual(self.api("POST", "/__coder-ui/api/models/scanner", {"image": "not an image"})["status"], 400)
+        self.assertEqual(self.api("POST", "/__coder-ui/api/models/scanner", {"image": "x"},
+                                  roles=("template-admin",))["status"], 403)
+        new = "localhost:5000/coder-images/coder-garak:2"
+        view = self.api("POST", "/__coder-ui/api/models/scanner", {"image": new})["body"]
+        self.assertEqual((view["candidate"], view["image"]), (new, self.ms.DEFAULT_IMAGE))
+        self.ms._check_scanner()
+        token = next(t for t, l in self.ms._live.items() if l["kind"] == "info" and l["image"] == new)
+        self.internal("POST", "/__coder-ui/internal/model-scans/%s/info" % token, {"garak": "0.18.0",
+                                                                                  "profiles": {"quick": {}}})
+        view = self.api("GET", "/__coder-ui/api/models/scanner")["body"]
+        self.assertEqual((view["image"], view["garak"], view["candidate"]), (new, "0.18.0", None))
+        # an image that is no scanner is refused, the scanner in use stays
+        self.api("POST", "/__coder-ui/api/models/scanner", {"image": "localhost:5000/coder-images/other:1"})
+        self.ms._check_scanner()
+        token = next(t for t, l in self.ms._live.items() if l["image"].endswith("other:1"))
+        self.internal("POST", "/__coder-ui/internal/model-scans/%s/info" % token, {"hello": 1})
+        view = self.api("GET", "/__coder-ui/api/models/scanner")["body"]
+        self.assertEqual(view["image"], new)
+        self.assertIn("Not a scanner image", view["candidateError"])
+        self.assertEqual(self.api("POST", "/__coder-ui/api/models/scanner", {"image": ""})["body"]["image"],
+                         self.ms.DEFAULT_IMAGE)
+
+    def test_unknown_tokens_and_files_are_refused(self):
+        r = self.internal("GET", "/__coder-ui/internal/model-scans/%s/model" % ("x" * 32))
+        self.assertEqual(r["status"], 404)
+        self.assertEqual(self.api("GET", "/__coder-ui/api/models/report/raw", query="name=a.gguf&file=../x")["status"],
+                         400)
+
+
+class GarakScannerScriptTest(unittest.TestCase):
+    """The scanner image's own checks of a model file (development/garak-image/coder-garak)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.machinery
+        path = os.path.normpath(os.path.join(SRC, "../../../../development/garak-image/coder-garak"))
+        loader = importlib.machinery.SourceFileLoader("coder_garak", path)
+        spec = importlib.util.spec_from_loader("coder_garak", loader)
+        cls.g = importlib.util.module_from_spec(spec)
+        loader.exec_module(cls.g)
+
+    def gguf(self, meta, tensors=(("w", [32], 0),), extra=b""):
+        import struct, tempfile
+
+        def s(t):
+            b = t.encode()
+            return struct.pack("<Q", len(b)) + b
+        out = b"GGUF" + struct.pack("<IQQ", 3, len(tensors), len(meta))
+        for k, v in meta.items():
+            out += s(k) + (struct.pack("<I", 8) + s(v) if isinstance(v, str) else struct.pack("<II", 4, v))
+        for name, dims, typ in tensors:
+            out += s(name) + struct.pack("<I", len(dims)) + b"".join(struct.pack("<Q", d) for d in dims) + \
+                struct.pack("<IQ", typ, 0)
+        out += b"\0" * ((32 - len(out) % 32) % 32)
+        out += b"\0" * (32 * 4) + extra  # one F32 tensor of 32 values
+        f = tempfile.NamedTemporaryFile(delete=False, suffix=".gguf")
+        f.write(out)
+        f.close()
+        return f.name
+
+    def test_a_clean_model_file(self):
+        chatml = ("{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n{% endfor %}"
+                  "{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}")
+        info, checks = self.g.file_checks(self.gguf({"general.architecture": "llama", "llama.context_length": 2048,
+                                                    "tokenizer.chat_template": chatml}))
+        self.assertEqual((info["architecture"], info["contextLength"], info["parameters"]), ("llama", 2048, 32))
+        self.assertEqual({c["id"]: c["status"] for c in checks},
+                         {"gguf": "pass", "chat-template": "pass", "trailing-data": "pass"})
+
+    def test_code_in_the_chat_template_fails(self):
+        evil = "{{ ''.__class__.__mro__[1].__subclasses__() }}{{ cycler.__init__.__globals__.os.popen('id').read() }}"
+        _, checks = self.g.file_checks(self.gguf({"tokenizer.chat_template": evil}))
+        tpl = next(c for c in checks if c["id"] == "chat-template")
+        self.assertEqual(tpl["status"], "fail")
+        self.assertIn("CVE-2024-34359", tpl["detail"])
+        self.assertEqual(self.g.template_findings("{{ messages | attr('x') }}")[0]["what"].split(" ")[1], "attr")
+
+    def test_data_after_the_tensors_and_files_that_are_no_gguf(self):
+        _, checks = self.g.file_checks(self.gguf({"a": 1}, extra=b"\x7fELF" + b"\0" * 4096))
+        self.assertEqual(next(c for c in checks if c["id"] == "trailing-data")["status"], "warn")
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"PK\x03\x04 a pickle in a zip")
+        with self.assertRaises(self.g.GGUFError):
+            self.g.file_checks(f.name)
+
+
+class CloudDriveMountTest(unittest.TestCase):
+    """The Cloud Drive mounted into a folder of a workspace (clouddrive_cli.py, the workspace's `cloud-drive`): links
+    beside the folder's files, folders merged, collisions halted and resolved as the owner chooses."""
+
+    def setUp(self):
+        import tempfile
+        self.home = tempfile.mkdtemp()
+        self.cli = load("clouddrive_cli", "clouddrive_cli.py")
+        c = self.cli
+        c.HOME = self.home
+        c.CLOUD = os.path.join(self.home, "cloud-drive")
+        c.STATE = os.path.join(self.home, ".config", "cloud-drive", "mounts.json")
+        c.OVERWRITTEN = os.path.join(self.home, ".local", "share", "cloud-drive", "overwritten")
+        drive = os.path.join(self.home, "drive")
+        for rel, text in (("data.csv", "cloud"), ("notes.txt", "cloud"), ("new.txt", "c"), ("src/main.py", "c"),
+                          ("src/util.py", "c"), ("docs/a.md", "d")):
+            self.write(os.path.join(drive, rel), text)
+        os.symlink(drive, c.CLOUD)
+        for rel in ("data.csv", "notes.txt", "src/main.py", "keep.me"):
+            self.write(os.path.join(self.home, "data", rel), "mine")
+        self.target = os.path.join(self.home, "data")
+
+    def write(self, path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+
+    def read(self, rel):
+        with open(os.path.join(self.target, rel)) as f:
+            return f.read()
+
+    def test_names_kept_both(self):
+        r = self.cli.renamed
+        self.assertEqual([r("data.csv"), r("archive.tar.gz"), r(".bashrc"), r("Makefile"), r("src"),
+                          r("data.csv", 2)],
+                         ["data-(cloud_drive).csv", "archive-(cloud_drive).tar.gz", ".bashrc-(cloud_drive)",
+                          "Makefile-(cloud_drive)", "src-(cloud_drive)", "data-(cloud_drive)-2.csv"])
+
+    def test_paths(self):
+        self.assertEqual(self.cli.resolve("data"), self.target)
+        self.assertEqual(self.cli.resolve("~/data"), self.target)
+        self.assertEqual(self.cli.resolve(self.target + "/"), self.target)
+        for bad in ("/etc", "/", "cloud-drive", "cloud-drive/x", "", "data/keep.me", "/proc/1"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.cli.resolve(bad)
+
+    def test_the_plan_halts_on_files_of_the_same_name_and_merges_folders(self):
+        p = self.cli.plan(self.target)
+        self.assertEqual(sorted(x["path"] for x in p["links"]), ["docs", "new.txt", "src/util.py"])
+        self.assertEqual([c["path"] for c in p["collisions"]], ["data.csv", "notes.txt", "src/main.py"])
+        self.assertEqual(p["merged"], ["src"])
+        self.assertEqual(p["collisions"][2]["keepBothAs"], "src/main-(cloud_drive).py")
+        with self.assertRaises(self.cli.Halt):  # "ask" with an answer missing changes nothing
+            self.cli.apply(self.target, "ask", {"data.csv": "overwrite"})
+        self.assertFalse(os.path.islink(os.path.join(self.target, "docs")))
+
+    def test_keep_both(self):
+        r = self.cli.apply(self.target, "keep-both")
+        self.assertEqual((r["linked"], len(r["keptBoth"]), r["overwritten"]), (3, 3, []))
+        self.assertEqual(self.read("data.csv"), "mine")
+        self.assertEqual(self.read("data-(cloud_drive).csv"), "cloud")
+        self.assertEqual(self.read("docs/a.md"), "d")  # through the link
+        self.assertEqual(self.read("keep.me"), "mine")
+
+    def test_overwrite_all_and_unmount_puts_them_back(self):
+        r = self.cli.apply(self.target, "overwrite-all")
+        self.assertEqual(sorted(r["overwritten"]), ["data.csv", "notes.txt", "src/main.py"])
+        self.assertEqual(self.read("data.csv"), "cloud")
+        self.assertTrue(os.path.exists(os.path.join(r["movedTo"], "data", "data.csv")))
+        u = self.cli.unmount(self.target)
+        self.assertEqual((u["removed"], u["restored"]), (6, 3))
+        self.assertEqual(self.read("data.csv"), "mine")
+        self.assertEqual(sorted(os.listdir(self.target)), ["data.csv", "keep.me", "notes.txt", "src"])
+        self.assertEqual(os.listdir(os.path.join(self.target, "src")), ["main.py"])
+
+    def test_each_occurrence(self):
+        self.cli.apply(self.target, "ask", {"data.csv": "overwrite", "notes.txt": "keep", "src/main.py": "keep"})
+        self.assertEqual(self.read("data.csv"), "cloud")
+        self.assertEqual((self.read("notes.txt"), self.read("notes-(cloud_drive).txt")), ("mine", "cloud"))
+        self.assertEqual(self.read("src/main-(cloud_drive).py"), "c")
+
+    def test_sync_follows_the_cloud_drive_as_the_mount_was_made(self):
+        self.cli.apply(self.target, "ask", {"data.csv": "keep", "notes.txt": "keep", "src/main.py": "keep"})
+        drive = os.path.join(self.home, "drive")
+        self.write(os.path.join(drive, "later.txt"), "c")
+        self.write(os.path.join(self.target, "later.txt"), "mine")
+        os.remove(os.path.join(drive, "new.txt"))
+        self.cli.sync()
+        self.assertFalse(os.path.lexists(os.path.join(self.target, "new.txt")))  # gone from the Cloud Drive
+        self.assertEqual(self.read("later-(cloud_drive).txt"), "c")  # kept both: nobody to ask
+        self.assertEqual(self.cli.listing()["mounts"][0]["mode"], "ask")  # how it was made stays
+        # the Cloud Drive away (disconnected): nothing is touched
+        os.remove(self.cli.CLOUD)
+        self.assertEqual(self.cli.sync(), [])
+        self.assertTrue(os.path.islink(os.path.join(self.target, "docs")))
+
+    def test_the_service_runs_it_in_the_owners_running_workspace(self):
+        safe = load("safe", "safe.py")
+        safe.LOG = lambda **kw: None
+        safe.KUBE = mock.Mock()
+        wid = "11111111-2222-3333-4444-555555555555"
+        safe.WORKSPACE_INFO = lambda token, w: {"id": w, "owner_id": "u1", "name": "dev"}
+        safe.shared_now = lambda: {}
+        safe._source_pod = lambda w: ("ws-pod", "10.0.0.1")
+        calls = []
+
+        def exec_in(kube, ns, pod, container, command, timeout=0, stdin=b""):
+            calls.append((pod, container, command, stdin))
+            return 0, json.dumps({"halted": True, "unresolved": ["a.txt"]}), ""
+        safe.kexec = mock.Mock(exec_in=exec_in)
+        h = mock.Mock()
+        user = {"id": "u1", "username": "dev"}
+        r = safe.mount_apply(h, user, {"workspace": wid, "path": "data", "mode": "ask",
+                                        "decisions": {"b.txt": "overwrite"}})
+        self.assertTrue(r["halted"])
+        pod, container, command, stdin = calls[0]
+        self.assertEqual((pod, container), ("ws-pod", "dev"))
+        self.assertEqual(command[:2], ["python3", "-c"])
+        self.assertEqual(command[4:], ["apply", "data", "--mode", "ask",
+                                       "--decisions=-:%d" % len(json.dumps({"b.txt": "overwrite"})), "--json"])
+        n = int(command[3])
+        self.assertTrue(stdin[:n].startswith(b"#!/usr/bin/env python3"))  # the command, then the answers
+        self.assertEqual(json.loads(stdin[n:]), {"b.txt": "overwrite"})
+        for body in ({"workspace": wid, "path": "data", "mode": "nope"},
+                     {"workspace": wid, "path": "data", "mode": "ask", "decisions": {"x": "delete"}},
+                     {"workspace": "x", "path": "data", "mode": "ask"},
+                     {"workspace": wid, "path": "a\x00b", "mode": "ask"}):
+            with self.assertRaises(ValueError, msg=body):
+                safe.mount_apply(h, user, body)
+        with self.assertRaises(PermissionError):
+            safe.mount_apply(h, {"id": "u2", "username": "other"}, {"workspace": wid, "path": "d", "mode": "ask"})
+        safe.shared_now = lambda: {wid: "u1"}
+        with self.assertRaises(ValueError):
+            safe.mount_plan(h, user, {"workspace": wid, "path": "data"})
+
+    def test_the_boot_runs_the_command_with_its_arguments(self):
+        """CLI_BOOT, as the service sends it: the command's code on stdin, its exit code kept."""
+        import subprocess
+        safe = load("safe", "safe.py")
+        code = safe._cli_text()
+        env = dict(os.environ, HOME=self.home)
+        p = subprocess.run(["python3", "-c", safe.CLI_BOOT, str(len(code)), "plan", "data", "--json"],
+                           input=code, capture_output=True, env=env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(json.loads(p.stdout)["collisions"]), 3)
+        p = subprocess.run(["python3", "-c", safe.CLI_BOOT, str(len(code)), "apply", "data", "--mode", "ask",
+                            "--decisions", "-", "--json"], input=code + b"{}", capture_output=True, env=env)
+        self.assertEqual((p.returncode, json.loads(p.stdout)["halted"]), (3, True))
+        # as through exec: stdin never ends - the command reads exactly the answers' bytes
+        answers = json.dumps({"data.csv": "keep", "notes.txt": "keep", "src/main.py": "overwrite"}).encode()
+        proc = subprocess.Popen(["python3", "-c", safe.CLI_BOOT, str(len(code)), "apply", "data", "--mode", "ask",
+                                 "--decisions=-:%d" % len(answers), "--json"], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        proc.stdin.write(code + answers)
+        proc.stdin.flush()  # and left open
+        out, err = proc.stdout.read(), proc.stderr.read()
+        proc.wait(timeout=30)
+        self.assertEqual(json.loads(out)["overwritten"], ["src/main.py"], err)
+
+
+class CodeServerHATest(unittest.TestCase):
+    """code-server HA (csha.py) without a database: its schema split into statements, an instance's pod (code-server
+    on loopback only, its home volume on its node, or a folder of its own elsewhere), the endpoints. The database
+    and the relays: csha_db_test.py (a throwaway PostgreSQL)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.c = load("csha", "csha.py")
+
+    def test_the_schema_goes_one_statement_at_a_time(self):
+        st = self.c.statements(self.c.SCHEMA) + self.c.statements(self.c.GRANTS)
+        self.assertTrue(all(x.rstrip().endswith(";") for x in st))
+        self.assertEqual(sum(1 for x in st if x.startswith("CREATE OR REPLACE FUNCTION")), 4)
+        self.assertTrue(all("SECURITY DEFINER SET search_path" in x for x in st if "FUNCTION code_server_ha." in x
+                            and x.startswith("CREATE")))
+        self.assertIn("REVOKE ALL ON SCHEMA code_server_ha FROM PUBLIC;", st)
+
+    def test_an_instance_pod(self):
+        inst = {"workspace_id": "11111111-2222-3333-4444-555555555555", "image": "ws:1", "home_pvc": "coder-x-home",
+                "home_node": "node-a", "folder": "/home/coder/src", "owner": "alice"}
+        home = self.c.instance_pod(inst, 3, "tok", True, "primary", "coder")
+        self.assertEqual(home["metadata"]["name"], "coder-cs-111111112222-g3")
+        cs, station = home["spec"]["containers"]
+        self.assertIn("127.0.0.1:13337", cs["command"])
+        self.assertEqual(cs["command"][-1], "/home/coder/src")
+        self.assertEqual(station["ports"][0]["containerPort"], 8080)
+        self.assertFalse(home["spec"]["automountServiceAccountToken"])
+        self.assertTrue(home["spec"]["securityContext"]["runAsNonRoot"])
+        self.assertEqual(home["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"], "coder-x-home")
+        self.assertIn("node-a", json.dumps(home["spec"]["affinity"]))
+        away = self.c.instance_pod(inst, 4, "tok", False, "dr-site", "coder-dr")
+        self.assertIn("emptyDir", away["spec"]["volumes"][0])
+        self.assertNotIn("affinity", away["spec"])
+        self.assertEqual(away["spec"]["containers"][0]["command"][-1], "/home/coder")
+        env = {e["name"]: e for e in away["spec"]["containers"][1]["env"]}
+        self.assertEqual(env["CSHA_DB"]["valueFrom"]["secretKeyRef"]["name"], "coder-code-server-ha-relay")
+        self.assertEqual((env["CSHA_CLUSTER"]["value"], env["CSHA_NAMESPACE"]["value"]), ("dr-site", "coder-dr"))
+
+    def test_endpoints(self):
+        ws = "11111111-2222-3333-4444-555555555555"
+        self.assertEqual(self.c.local_endpoint(ws, "coder"), "coder-cs-111111112222.coder.svc:8080")
+        self.assertIsNone(self.c.external_endpoint(ws, "coder", ""))
+        self.assertEqual(self.c.external_endpoint(ws, "coder", "{service}.{namespace}.svc.clusterset.local:{port}"),
+                         "coder-cs-111111112222.coder.svc.clusterset.local:8080")
 
 
 if __name__ == "__main__":

@@ -14,10 +14,7 @@
 #     Keycloak sign-in to the cluster): packages/k8s-devtools_*.deb, made by
 #     ../tools/build-k8s-devtools.sh (pinned by packages/SHA256SUMS), with bash completion
 #     (enabled for every interactive shell in /etc/bash.bashrc);
-#   - marimo (Python notebooks) with everything it needs, so it works with no network at all: /opt/marimo, a Python
-#     environment with marimo and its extras (SQL, charts, formatting, language server, uv) and a data stack, pinned in
-#     marimo/requirements.lock; tkinter (python3-tk). The template gives each user a ~/.marimo-venv on top of it.
-#     marimo opens its own pages in the same window (marimo/same-window.js);
+#   - Python's virtual environments (python3 -m venv), for the users' own projects;
 #   - the default shell setup (shell/): ~/.bashrc (/etc/skel and /usr/share/coder-workspace/bashrc) and the vimrc it
 #     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc);
 #   - code-server and File Browser, the template's two web apps (pinned below, checked by SHA-256): the template used
@@ -129,23 +126,11 @@ RUN apt-get update \
 		'  . /usr/share/bash-completion/bash_completion' 'fi' >>/etc/bash.bashrc \
 	&& k9s version -s && kubectl version --client && kubectl oidc-login --version
 
-# marimo, offline: everything installed at build time (marimo/requirements.lock, pinned by build-workspace-image.sh).
-# Its home page's "Resources" section (external links, useless offline) is hidden with a CSS rule in its index.html.
-# Its own pip is removed once the packages are in: nothing uses it later (each user's ~/.marimo-venv has its own, from
-# the system's Python), and pip carries known-vulnerable copies of urllib3, msgpack and setuptools (pip/_vendor).
-COPY marimo/requirements.lock /tmp/marimo-requirements.lock
+# Python's virtual environments (python3 -m venv), for the users' own projects.
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends python3-venv python3-tk \
+	&& apt-get install -y --no-install-recommends python3-venv \
 	&& rm -rf /var/lib/apt/lists/* \
-	&& python3 -m venv /opt/marimo \
-	&& /opt/marimo/bin/pip install --no-cache-dir --disable-pip-version-check -r /tmp/marimo-requirements.lock \
-	&& rm -f /tmp/marimo-requirements.lock \
-	&& index="$(/opt/marimo/bin/python -c 'import marimo, os; print(os.path.join(os.path.dirname(marimo.__file__), "_static", "index.html"))')" \
-	&& sed -i 's#</head>#<style id="marimo-hide-resources">div.flex.flex-col.gap-2:has(> div.grid.gap-3.lg\\:grid-cols-3 > a[target="_blank"]){display:none !important}</style></head>#' "$index" \
-	&& grep -q marimo-hide-resources "$index" \
-	&& /opt/marimo/bin/python -m pip uninstall -y -q pip \
-	&& ! test -e /opt/marimo/bin/pip \
-	&& /opt/marimo/bin/marimo --version
+	&& python3 -m venv /tmp/venv-check && rm -rf /tmp/venv-check
 
 # Firefox, the desktop's web browser (XFCE's "Web Browser" and the dock's launcher open it): Mozilla's own .deb
 # (Ubuntu's firefox package only installs the snap, which cannot run in a container), with policies for an offline
@@ -169,13 +154,6 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& { update-alternatives --set x-www-browser /usr/bin/firefox 2>/dev/null || true; }
 RUN firefox --version && test -f /usr/lib/x86_64-linux-gnu/pkcs11/p11-kit-trust.so
-
-# marimo opens its own pages in the same window (marimo/same-window.js), so embedded in the dashboard's app panel
-# it stays in the panel instead of opening new browser windows.
-COPY marimo/same-window.js /tmp/marimo-same-window.js
-RUN index="$(/opt/marimo/bin/python -c 'import marimo, os; print(os.path.join(os.path.dirname(marimo.__file__), "_static", "index.html"))')" \
-	&& /opt/marimo/bin/python -c 'import sys; p, js = sys.argv[1], open(sys.argv[2]).read(); s = open(p).read(); s = s.replace("<head>", "<head><script id=\"marimo-same-window\">" + js + "</script>", 1); open(p, "w").write(s)' "$index" /tmp/marimo-same-window.js \
-	&& grep -q marimo-same-window "$index" && rm -f /tmp/marimo-same-window.js
 
 # code-server (VS Code in the browser) and File Browser: downloaded here, at build time only, and checked. The
 # template starts these; it downloads them itself only on an image without them (and only with internet).

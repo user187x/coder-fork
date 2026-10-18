@@ -4,11 +4,11 @@
 # and Airflow start and answer with no network at all. NiFi's archive is downloaded once (kept in
 # ../workspace-image-dataflow/nifi-<version>-bin.zip, not in git) and checked against Apache's SHA-512; Airflow is
 # pinned with Airflow's own constraints for the image's Python.
-#   ./build-dataflow-image.sh [TAG]       default 1.1.0
+#   ./build-dataflow-image.sh [TAG]       default 1.1.1
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"
 ctx="${dev}/workspace-image-dataflow"
-tag="${1:-1.1.0}"; img="ghcr.io/user187x/coder-workspace-dataflow:${tag}"
+tag="${1:-1.1.1}"; img="ghcr.io/user187x/coder-workspace-dataflow:${tag}"
 nifi="$(sed -n 's/^ARG NIFI_VERSION=//p' "${ctx}/Dockerfile")"
 airflow="$(sed -n 's/^ARG AIRFLOW_VERSION=//p' "${ctx}/Dockerfile")"
 base="$(sed -n 's/^ARG BASE=//p' "${ctx}/Dockerfile")"

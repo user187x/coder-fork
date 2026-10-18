@@ -56,18 +56,38 @@ variable "cluster_admin_roles" {
   default     = "owner"
 }
 
-# Which apps the workspace has: "developer" (ubuntu-vnc-desktop: code-server, marimo), "dataflow" (ubuntu-dataflow:
+# Which apps the workspace has: "developer" (ubuntu-vnc-desktop: code-server), "dataflow" (ubuntu-dataflow:
 # Apache NiFi, Apache Airflow), or one of the AI templates on the AI workspace image: "lmstudio" (ubuntu-lmstudio:
 # LM Studio on the desktop, code-server) and "opencode" (ubuntu-opencode: the OpenCode agent, code-server; LM Studio
 # serving its models). Everything else is the same. The chart pushes this template once per set (templates/job.yaml).
 variable "app_set" {
   type        = string
-  description = "developer (code-server, marimo), dataflow (Apache NiFi, Apache Airflow), lmstudio (LM Studio) or opencode (OpenCode on LM Studio)."
+  description = "developer (code-server), dataflow (Apache NiFi, Apache Airflow), lmstudio (LM Studio) or opencode (OpenCode on LM Studio)."
   default     = "developer"
   validation {
     condition     = contains(["developer", "dataflow", "lmstudio", "opencode"], var.app_set)
     error_message = "app_set must be developer, dataflow, lmstudio or opencode."
   }
+}
+
+# The apps a template made in Templates > Create new template has (its Desktop, File Browser and Terminal choices):
+# the desktop (noVNC, and its X session), File Browser, and the dashboard's web terminal.
+variable "desktop" {
+  type        = bool
+  description = "The Desktop app: the workspace's desktop in the browser (noVNC)."
+  default     = true
+}
+
+variable "file_browser" {
+  type        = bool
+  description = "The File Browser app."
+  default     = true
+}
+
+variable "terminal" {
+  type        = bool
+  description = "The web terminal."
+  default     = true
 }
 
 # The Gateway that serves Coder (the dataflow template's NiFi route attaches to it), and Coder's Service behind it.
@@ -333,12 +353,67 @@ locals {
     toset([for r in split(",", var.cluster_admin_roles) : trimspace(r) if trimspace(r) != ""]),
   )) > 0
   cluster_kubeconfig = "/home/coder/.kube/coder-cluster.yaml"
+  # The host the workspace's agent reaches Coder on (Lock Down's Network keeps it; the dataflow template's NiFi route).
+  coder_host = regex("^[a-z]+://([^/:]+)", data.coder_workspace.me.access_url)[0]
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The platform's sections (# platform:begin NAME ... # platform:end NAME): what every workspace of the platform has -
+# the owner's certificate, Lock Down, the Cloud Drive, the metrics. Coder's template decorator (the fork's
+# coderd/templatedecorator) takes them from this template, the platform's base, and injects each into any template that
+# lacks it, at the same place (top level, the agent, the pod, the agent's container), when it is built: a template made
+# in Create new template has none of them in its own code, and Source Code > Materialized shows them injected.
+# ---------------------------------------------------------------------------------------------------------------------
+
+# platform:begin metrics
+locals {
   # The metrics' functions (the agent's metadata below).
-  metadata_sh = file("${path.module}/scripts/metadata.sh")
+  platform_metadata_sh = file("${path.module}/scripts/metadata.sh")
+}
+# platform:end metrics
+
+# platform:begin lockdown
+locals {
   # Lock Down (an admin's jail for this workspace: Network, Sudo or both): the script the pod's init container runs
-  # at start, and the host the workspace's agent reaches Coder on (Network keeps it).
-  lockdown_sh = file("${path.module}/scripts/lockdown.sh")
-  coder_host  = regex("^[a-z]+://([^/:]+)", data.coder_workspace.me.access_url)[0]
+  # at start (Network) and the agent runs at start (Sudo; login waits for it).
+  platform_lockdown_sh = file("${path.module}/scripts/lockdown.sh")
+}
+
+# Lock Down, at start: Sudo (Network is the pod's init container, below). Login waits for it.
+resource "coder_script" "lockdown" {
+  agent_id           = coder_agent.main.id
+  display_name       = "Lock Down"
+  icon               = "/__icons/lockdown.svg" # files/icons/lockdown.svg, served by templates/icons.yaml
+  run_on_start       = true
+  start_blocks_login = true
+  script             = "#!/bin/sh\nset -- start 'file:/etc/coder-lockdown/${data.coder_workspace.me.id}'\n${local.platform_lockdown_sh}"
+}
+# platform:end lockdown
+
+# platform:begin certificates
+# Installs the owner's PKCS#12 certificate into the workspace as ~/.cert/<owner>.p12, where <owner> is the Coder
+# username (for user jdoe: /home/coder/.cert/jdoe.p12). Nothing else is left in ~/.cert.
+# Where the certificate comes from: each user uploads theirs in Coder > Settings > Certificates. The page stores the
+# file as one of the user's own Coder secrets (base64, because secret values are text), with the file path
+# ~/.cert/.<owner>.p12.b64. When a workspace starts, Coder's agent writes the owner's secrets (and only the owner's) to
+# those paths, directory 0700 and files 0600, before any startup script runs. This script decodes it to
+# ~/.cert/<owner>.p12 (0600) and removes the encoded copy. An upload saved under another name (by an earlier version
+# of the page, or before the user was renamed) is installed under the owner's name all the same. When the owner
+# deletes the certificate in Coder, it is removed from ~/.cert on the next start (only a file this script installed).
+resource "coder_script" "user_certificates" {
+  agent_id           = coder_agent.main.id
+  display_name       = "Certificates"
+  icon               = "/__icons/certificate.svg" # files/icons/certificate.svg, served by templates/icons.yaml
+  run_on_start       = true
+  start_blocks_login = true # nobody gets a shell before the certificate is in place
+  script = templatefile("${path.module}/scripts/certificates.sh", {
+    owner_name = data.coder_workspace_owner.me.name
+  })
+}
+# platform:end certificates
+
+# platform:begin cloud-drive
+locals {
   # The Cloud Drive's volume, out of the way: user_storage_path links to it while the owner keeps the workspace
   # connected (coder_script.cloud_drive).
   cloud_drive_mount = "/mnt/cloud-drive"
@@ -366,6 +441,53 @@ data "kubernetes_config_map_v1" "cloud_drive" {
   }
 }
 
+# The Cloud Drive, at start and then live: user_storage_path links to its volume while the pod's annotation
+# platform.coder/cloud-drive says "on" (the owner connects and disconnects the workspace on the Workspaces page).
+resource "coder_script" "cloud_drive" {
+  count              = var.user_storage ? 1 : 0
+  agent_id           = coder_agent.main.id
+  display_name       = "Cloud Drive"
+  icon               = "/__icons/cloud-drive.svg" # files/icons/cloud-drive.svg, served by templates/icons.yaml
+  run_on_start       = true
+  start_blocks_login = true
+  script = templatefile("${path.module}/scripts/cloud-drive.sh", {
+    link = var.user_storage_path
+    mode = local.cloud_drive_mode
+    # the volume, where this workspace has one ("on"); the source's folder comes in the annotation (source:<folder>)
+    mount = local.cloud_drive_claim != "" ? local.cloud_drive_mount : ""
+    # the `cloud-drive` command: the Cloud Drive mounted into folders of the workspace (scripts/cloud-drive-cli.py)
+    cli = base64encode(file("${path.module}/scripts/cloud-drive-cli.py"))
+  })
+}
+# platform:end cloud-drive
+
+# platform:begin code-server-ha
+# code-server as a global singleton (the chart's codeServerHA): not in the workspace, but one instance per workspace
+# across every cluster that shares Coder's database, kept by the code-server-replicator; a relay in this pod
+# (127.0.0.1:13337, where code-server's app looks) takes its connections there. Off unless a template turns it on.
+variable "code_server_ha" {
+  type        = bool
+  description = "code-server as a global singleton kept by the code-server-replicator (high availability), not in the workspace."
+  default     = false
+}
+
+variable "code_server_ha_image" {
+  type        = string
+  description = "The relay's image (the chart's platform service image); empty: no high availability."
+  default     = ""
+}
+
+variable "code_server_ha_db_ca_secret" {
+  type        = string
+  description = "The Secret with the CA of Coder's database (the relay checks it)."
+  default     = "coder-db-ca"
+}
+
+locals {
+  code_server_ha = var.code_server_ha && var.code_server_ha_image != ""
+}
+# platform:end code-server-ha
+
 resource "coder_agent" "main" {
   os             = "linux"
   arch           = "amd64"
@@ -373,7 +495,7 @@ resource "coder_agent" "main" {
   dir = data.coder_parameter.start_directory.value
 
   display_apps {
-    web_terminal = true
+    web_terminal = var.terminal
     vscode       = false
     ssh_helper   = false
   }
@@ -398,8 +520,11 @@ resource "coder_agent" "main" {
     access_host            = replace(replace(data.coder_workspace.me.access_url, "https://", ""), "http://", "")
     start_directory        = data.coder_parameter.start_directory.value
     context_length         = local.context_length
+    desktop                = var.desktop
+    file_browser           = var.file_browser
   })
 
+  # platform:begin metrics
   # The metrics, in the same order in both of the dashboard's groups (the keys order them): CPU, RAM, Disk and Ø Load
   # (the load average) of the workspace, then of the node it runs on (the Cluster group: keys ending in "_host"). Each
   # but CPU is a function of scripts/metadata.sh, which explains it: the file runs with the function's name appended.
@@ -414,7 +539,7 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "RAM"
     key          = "1_ram_usage"
-    script       = "${local.metadata_sh}\nram"
+    script       = "${local.platform_metadata_sh}\nram"
     interval     = 10
     timeout      = 1
   }
@@ -422,7 +547,7 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "Disk"
     key          = "2_home_disk"
-    script       = "${local.metadata_sh}\ndisk"
+    script       = "${local.platform_metadata_sh}\ndisk"
     interval     = 60
     timeout      = 15
   }
@@ -430,7 +555,7 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "Ø Load"
     key          = "3_load"
-    script       = "${local.metadata_sh}\nload"
+    script       = "${local.platform_metadata_sh}\nload"
     interval     = 10
     timeout      = 3
   }
@@ -446,7 +571,7 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "RAM"
     key          = "5_mem_usage_host"
-    script       = "${local.metadata_sh}\nram_host"
+    script       = "${local.platform_metadata_sh}\nram_host"
     interval     = 10
     timeout      = 1
   }
@@ -454,7 +579,7 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "Disk"
     key          = "6_disk_host"
-    script       = "${local.metadata_sh}\ndisk_host"
+    script       = "${local.platform_metadata_sh}\ndisk_host"
     interval     = 60
     timeout      = 5
   }
@@ -462,7 +587,7 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "Ø Load"
     key          = "7_load_host"
-    script       = "${local.metadata_sh}\nload_host"
+    script       = "${local.platform_metadata_sh}\nload_host"
     interval     = 60
     timeout      = 1
   }
@@ -472,75 +597,16 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "Network"
     key          = "8_net_io"
-    script       = "${local.metadata_sh}\nnet"
+    script       = "${local.platform_metadata_sh}\nnet"
     interval     = 1
     timeout      = 1
   }
-}
-
-# Lock Down, at start: Sudo (Network is the pod's init container, below). Login waits for it.
-resource "coder_script" "lockdown" {
-  agent_id           = coder_agent.main.id
-  display_name       = "Lock Down"
-  icon               = "/__icons/lockdown.svg" # files/icons/lockdown.svg, served by templates/icons.yaml
-  run_on_start       = true
-  start_blocks_login = true
-  script = templatefile("${path.module}/scripts/lockdown-start.sh", {
-    workspace_id = data.coder_workspace.me.id
-  })
-}
-
-# The Cloud Drive, at start and then live: user_storage_path links to its volume while the pod's annotation
-# platform.coder/cloud-drive says "on" (the owner connects and disconnects the workspace on the Workspaces page).
-resource "coder_script" "cloud_drive" {
-  count              = var.user_storage ? 1 : 0
-  agent_id           = coder_agent.main.id
-  display_name       = "Cloud Drive"
-  icon               = "/__icons/cloud-drive.svg" # files/icons/cloud-drive.svg, served by templates/icons.yaml
-  run_on_start       = true
-  start_blocks_login = true
-  script = templatefile("${path.module}/scripts/cloud-drive.sh", {
-    link = var.user_storage_path
-    mode = local.cloud_drive_mode
-    # the volume, where this workspace has one ("on"); the source's folder comes in the annotation (source:<folder>)
-    mount = local.cloud_drive_claim != "" ? local.cloud_drive_mount : ""
-  })
-}
-
-resource "coder_app" "marimo" {
-  count        = var.app_set == "developer" ? 1 : 0
-  agent_id     = coder_agent.main.id
-  slug         = "marimo"
-  display_name = "marimo"
-  icon         = "/__icons/marimo.svg"   # files/icons/marimo.svg, served by templates/icons.yaml
-  # Path-based, like the other apps. marimo serves under the full app path (--base-url in the
-  # startup script), so the URL carries it too ("main" = agent name).
-  url          = "http://localhost:2718/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/marimo/"
-  subdomain    = false
-  share        = "owner"
-
-  healthcheck {
-    url       = "http://localhost:2718/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/marimo/health"
-    interval  = 5
-    threshold = 60
-  }
-}
-
-# The windows of marimo notebooks (tkinter), shown in their cells' output (coder_marimo_tk): not a button of its own.
-resource "coder_app" "marimo_windows" {
-  count        = var.app_set == "developer" ? 1 : 0
-  agent_id     = coder_agent.main.id
-  slug         = "marimo-windows"
-  display_name = "marimo windows"
-  icon         = "/__icons/marimo.svg"
-  url          = "http://localhost:6902"
-  subdomain    = false
-  share        = "owner"
-  hidden       = true
+  # platform:end metrics
 }
 
 # In ubuntu-lmstudio the desktop is LM Studio's window (the app starts there), so it is the LM Studio app.
 resource "coder_app" "novnc" {
+  count        = var.desktop ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "novnc"
   display_name = var.app_set == "lmstudio" ? "LM Studio" : "Desktop"
@@ -560,6 +626,7 @@ resource "coder_app" "novnc" {
 }
 
 resource "coder_app" "filebrowser" {
+  count        = var.file_browser ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "filebrowser"
   display_name = "File Browser"
@@ -604,7 +671,7 @@ resource "coder_app" "opencode" {
   share        = "owner"
 }
 
-# The dataflow template's apps, in place of code-server and marimo: path-based like the others, so they open in the
+# The dataflow template's apps, in place of code-server: path-based like the others, so they open in the
 # dashboard's panels (same origin). Started by the startup script. NiFi learns its path from the headers the cluster's
 # Gateway adds (the HTTPRoute nifi_route below).
 resource "coder_app" "nifi" {
@@ -791,11 +858,13 @@ resource "kubernetes_deployment_v1" "main" {
           "com.coder.user.id"          = data.coder_workspace_owner.me.id
           "com.coder.user.username"    = data.coder_workspace_owner.me.name
         }
+        # platform:begin cloud-drive
         # Connected to the owner's Cloud Drive from the start; the platform service sets "off" for a workspace the
         # owner disconnected (and back), and the pod reads it at /etc/platform/cloud-drive.
         # The source workspace (a folder of it is the owner's Cloud Drive) starts linking that folder.
         annotations = var.user_storage ? { "platform.coder/cloud-drive" = (local.cloud_drive_is_source
         ? "source:${try(local.cloud_drive_source.path, "")}" : "on") } : {}
+        # platform:end cloud-drive
       }
       spec {
         security_context {
@@ -826,6 +895,7 @@ resource "kubernetes_deployment_v1" "main" {
           }
         }
 
+        # platform:begin lockdown
         # Lock Down, at start: Network, before anything in the workspace runs. The admins' setting comes from the
         # ConfigMap coder-lockdown (the platform service keeps it; none yet: nothing is locked). Root with NET_ADMIN
         # in the pod's network namespace, which the workspace container shares but cannot change (it has no
@@ -835,7 +905,7 @@ resource "kubernetes_deployment_v1" "main" {
           image             = local.workspace_image
           image_pull_policy = "IfNotPresent"
           command = [
-            "sh", "-c", local.lockdown_sh, "lockdown",
+            "sh", "-c", local.platform_lockdown_sh, "lockdown",
             "file:/etc/coder-lockdown/${data.coder_workspace.me.id}", local.coder_host, "",
           ]
           security_context {
@@ -851,6 +921,16 @@ resource "kubernetes_deployment_v1" "main" {
             read_only  = true
           }
         }
+
+        # Lock Down's settings, by workspace id (the platform service makes the ConfigMap at the first lock).
+        volume {
+          name = "lockdown"
+          config_map {
+            name     = "coder-lockdown"
+            optional = true
+          }
+        }
+        # platform:end lockdown
 
         container {
           name              = "dev"
@@ -898,12 +978,15 @@ resource "kubernetes_deployment_v1" "main" {
             mount_path = "/dev/shm"
             name       = "dshm"
           }
+          # platform:begin lockdown
           # Lock Down's setting (read-only): the start script reads it for Sudo.
           volume_mount {
             mount_path = "/etc/coder-lockdown"
             name       = "lockdown"
             read_only  = true
           }
+          # platform:end lockdown
+          # platform:begin cloud-drive
           # The owner's Cloud Drive: the same files in every one of their workspaces (and on the Workspaces page), at
           # user_storage_path while the workspace is connected (a link to this mount; coder_script.cloud_drive).
           dynamic "volume_mount" {
@@ -931,6 +1014,24 @@ resource "kubernetes_deployment_v1" "main" {
               read_only  = true
             }
           }
+          dynamic "env" {
+            for_each = var.user_storage ? [1] : []
+            content {
+              name  = "CODER_SAFE"
+              value = var.user_storage_path
+            }
+          }
+          # platform:end cloud-drive
+          # platform:begin code-server-ha
+          # code-server runs elsewhere (code-server HA): the startup script starts none here.
+          dynamic "env" {
+            for_each = local.code_server_ha ? [1] : []
+            content {
+              name  = "CODER_CODE_SERVER_HA"
+              value = "1"
+            }
+          }
+          # platform:end code-server-ha
           # The AI templates: the model library (Templates > Images), read-only: the same GGUF models in every AI
           # workspace (LM Studio lists them).
           dynamic "volume_mount" {
@@ -939,13 +1040,6 @@ resource "kubernetes_deployment_v1" "main" {
               mount_path = "/home/coder/models"
               name       = "models"
               read_only  = true
-            }
-          }
-          dynamic "env" {
-            for_each = var.user_storage ? [1] : []
-            content {
-              name  = "CODER_SAFE"
-              value = var.user_storage_path
             }
           }
         }
@@ -982,15 +1076,104 @@ resource "kubernetes_deployment_v1" "main" {
           empty_dir {}
         }
 
-        # Lock Down's settings, by workspace id (the platform service makes the ConfigMap at the first lock).
-        volume {
-          name = "lockdown"
-          config_map {
-            name     = "coder-lockdown"
-            optional = true
+        # platform:begin code-server-ha
+        # The relay (code-server HA): where code-server would listen, and it takes each connection to the workspace's
+        # active code-server instance, in this cluster or another.
+        dynamic "container" {
+          for_each = local.code_server_ha ? [1] : []
+          content {
+            name              = "code-server-relay"
+            image             = var.code_server_ha_image
+            image_pull_policy = "IfNotPresent"
+            command           = ["python3", "/app/csha.py", "front"]
+            security_context {
+              run_as_user                = 1000
+              allow_privilege_escalation = false
+              read_only_root_filesystem  = true
+              capabilities {
+                drop = ["ALL"]
+              }
+            }
+            env {
+              name  = "CSHA_WORKSPACE"
+              value = data.coder_workspace.me.id
+            }
+            # its proof: the agent's token (Coder's registry of agents)
+            env {
+              name  = "CSHA_AGENT_TOKEN"
+              value = coder_agent.main.token
+            }
+            env {
+              name  = "CSHA_NAMESPACE"
+              value = var.namespace
+            }
+            env {
+              name  = "CSHA_IMAGE"
+              value = local.workspace_image
+            }
+            env {
+              name = "CSHA_NODE"
+              value_from {
+                field_ref {
+                  field_path = "spec.nodeName"
+                }
+              }
+            }
+            env {
+              name = "CSHA_CLUSTER"
+              value_from {
+                config_map_key_ref {
+                  name     = "coder-code-server-ha"
+                  key      = "cluster"
+                  optional = true
+                }
+              }
+            }
+            env {
+              name = "CSHA_DB"
+              value_from {
+                secret_key_ref {
+                  name = "coder-code-server-ha-relay"
+                  key  = "uri"
+                }
+              }
+            }
+            env {
+              name  = "CSHA_DB_CA"
+              value = "/etc/coder-db-ca/ca.crt"
+            }
+            resources {
+              requests = {
+                cpu    = "10m"
+                memory = "32Mi"
+              }
+              limits = {
+                memory = "128Mi"
+              }
+            }
+            volume_mount {
+              name       = "coder-db-ca"
+              mount_path = "/etc/coder-db-ca"
+              read_only  = true
+            }
           }
         }
+        dynamic "volume" {
+          for_each = local.code_server_ha ? [1] : []
+          content {
+            name = "coder-db-ca"
+            secret {
+              secret_name = var.code_server_ha_db_ca_secret
+              items {
+                key  = "ca.crt"
+                path = "ca.crt"
+              }
+            }
+          }
+        }
+        # platform:end code-server-ha
 
+        # platform:begin cloud-drive
         # The owner's Cloud Drive: their S3 prefix, or their source workspace's folder, through the cluster's CSI driver
         # (ReadWriteMany: all their workspaces); none in a shared workspace or the source itself (local.cloud_drive_mode).
         dynamic "volume" {
@@ -1027,6 +1210,7 @@ resource "kubernetes_deployment_v1" "main" {
             }
           }
         }
+        # platform:end cloud-drive
 
         # The model library: one read-only volume for every AI workspace (the platform service makes it).
         dynamic "volume" {

@@ -6,13 +6,13 @@
 # and checked against the SHA-256 pinned here.
 # LM Studio's terms allow personal and internal business use only: the image is for the organization's own clusters
 # and is never pushed to a public registry or attached to a public release (build-bundle.sh --no-lmstudio).
-#   ./build-ai-image.sh [TAG]                     default 1.0.0
+#   ./build-ai-image.sh [TAG]                     default 1.0.1
 #   TEST_MODEL=/path/model.gguf ./build-ai-image.sh   also chats with that model, through LM Studio and through
 #                                                   OpenCode (a small one: e.g. Qwen2.5 0.5B Instruct, 32k context)
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"
 ctx="${dev}/workspace-image-ai"
-tag="${1:-1.0.0}"; img="ghcr.io/user187x/coder-workspace-ai:${tag}"
+tag="${1:-1.0.1}"; img="ghcr.io/user187x/coder-workspace-ai:${tag}"
 lmstudio="$(sed -n 's/^ARG LMSTUDIO_VERSION=//p' "${ctx}/Dockerfile")"
 opencode="$(sed -n 's/^ARG OPENCODE_VERSION=//p' "${ctx}/Dockerfile")"
 LMSTUDIO_SHA256=2c62a38a93ad03ca5daaef28804880be167566783ffafc173ce2e1cb10b7552e   # LM-Studio-0.4.26-4-x64.AppImage

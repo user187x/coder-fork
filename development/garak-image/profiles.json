@@ -1,0 +1,32 @@
+{
+ "quick": {
+  "title": "Quick",
+  "spec": "tier:1",
+  "cap": 10,
+  "generations": 1,
+  "context": 4096,
+  "maxTokens": 150,
+  "hours": 4,
+  "description": "garak's tier 1 probes (of most concern) with 10 prompts each: a first look. Too few prompts for garak's calibrated (relative) scores to be reliable."
+ },
+ "standard": {
+  "title": "Standard",
+  "spec": "tier:1",
+  "cap": 30,
+  "generations": 1,
+  "context": 4096,
+  "maxTokens": 150,
+  "hours": 16,
+  "description": "garak's tier 1 probes (of most concern) with up to 30 prompts each: enough for garak's calibrated scores. The default for models added to the library."
+ },
+ "thorough": {
+  "title": "Thorough",
+  "spec": "tier:2",
+  "cap": 128,
+  "generations": 3,
+  "context": 4096,
+  "maxTokens": 150,
+  "hours": 96,
+  "description": "garak's tier 1 and tier 2 probes (adds toxicity, malware, misleading claims, data replay and attack generation) with up to 128 prompts each, 3 answers per prompt: hours to days on CPUs."
+ }
+}

@@ -751,7 +751,7 @@ def dockerfile(spec, image_id, version, base_ref):
                                      "echo xfce > /etc/coder-image/desktop", "apt-get clean",
                                      "rm -rf /var/lib/apt/lists/*"]))
     elif spec["desktop"] == "none":
-        # The X server, noVNC and websockify stay: the template's private display for marimo's windows needs them.
+        # The X server, noVNC and websockify stay (small; with no desktop, the template starts nothing on them).
         lines.append(run("desktop", ["(apt-get purge -y --auto-remove 'xfce4*' 'libxfce4*' firefox 2>/dev/null || true)",
                                      "rm -f /usr/local/bin/coder-desktop-session", "mkdir -p /etc/coder-image",
                                      "echo none > /etc/coder-image/desktop", "rm -rf /var/lib/apt/lists/*"]))
