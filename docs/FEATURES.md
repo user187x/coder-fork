@@ -74,8 +74,9 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Cloud Drives shared between users: asked for in chat (a request card), shared read only or read and write by the owner, approved by an admin (both switches in Cloud Drive › Sharing), mounted at `~/cloud-drive-shared/<owner>` from the next start | fork, service, chart | vitest, unit, live |
 | A shared Cloud Drive open at once in the Cloud Drive window (its drive switcher; read only: no Upload, New folder or Delete, writes refused by the service); the Sharing view names the workspaces a restart brings the shares to | fork, service | vitest, unit, live |
 | The Accounts table's cables: each active share a Cloud Drive cable from the owner's row (its socket) to the row of whom it is shared with (a plug; green prongs read and write, blue read only), pointed at: who and how, both rows marked | fork | vitest, live |
+| The Cloud Drives shared with you, above your Cloud Drive button: a dotted cloud each (its owner's avatar inside; green dots and prongs read and write, blue read only), plugged into it by a cable; pointed at, a HUD (owner, access, files, size, the newest); clicked, the window opens on it; an ended share's cloud unplugs, reels in and fades | fork, service | vitest, unit, live |
 | Workspaces list: an outdated workspace's update icon pulses in the workspace page's orange | fork | vitest |
-| File Browser is FileBrowser Quantum (the provided release binary), under the app's path, on 127.0.0.1, no sign-in of its own | image, chart | image build check, live |
+| File Browser is FileBrowser Quantum (the provided release binary), under the app's path, on 127.0.0.1, no sign-in of its own; every Cloud Drive here a source of its own in its sidebar (yours, and each shared with you: read only unless shared read and write), restarted as the drive is connected or disconnected | image, chart | image build check, chart check, live |
 
 ## 4. Templates and images
 
@@ -85,6 +86,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Export as ZIP: the template's Terraform, scripts and other files and every icon it uses (the Embed tab and Share menu removed) | fork | vitest, verify UI |
 | Templates › Images: an image builder in the cluster (BuildKit rootless): base, apt packages (checked as you type), uploaded .deb files, installations, removals, hardening, XFCE/GNOME/no desktop, dotfiles; review and Dockerfile; builds with progress | fork, service | step 9 |
 | Every build scanned offline: trivy (vulnerabilities, secrets), users/sudo/setuid checks, FIPS readiness; reports say what graded them | service | step 9 |
+| The Images view's registry (`coder-registry`) built from source with Go's and its modules' fixes, as a regular user: no critical, high or medium finding; the images running pods use count as on their node (a node reports only its 50 largest) | image, service | build check, unit, live |
 | Security data kept current in an air gap: load trivy's databases and FIPS rules from a file made outside (`build-security-data.sh`), dated, rescans | service | verify |
 | Built images downloadable, backed up to S3 | service | verify |
 | A template renamed in the dashboard keeps getting the chart's updates | chart | verify |

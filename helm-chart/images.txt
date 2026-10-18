@@ -6,8 +6,8 @@
 # mirror-images.sh pulls the public ones by that digest (save) and pushes every image under its tag (push).
 
 [ui]            images/ui/             push      the user interface: Coder (the fork - the dashboard and its server), the platform service (coder-ui-updates) and the announcement service (coder-banner), what they run on, and their databases
-ghcr.io/user187x/coder-platform:2.0.0-platform.67-airgap  sha256:6ae419638f438833111c29875f30eefc3e92924bffb76532ff0d6e2e2e0adb30   coder (server); = the fork's platform.67 (1f50059bf) + Terraform provider mirror
-ghcr.io/user187x/coder-ui-updates:code-055d88709c15       sha256:56f1d5a9defb775c5297dab67fe21c30c3abf12162215f2db00baa66d5d61c8e   coder-ui-updates (the platform service) and the Images builder's scans: its code (helm-chart/coder-airgapped/files/ui-updates, development/tools/build-ui-image.sh) on coder-image-tools 1.0.0 - the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
+ghcr.io/user187x/coder-platform:2.0.0-platform.69-airgap  sha256:065e44f77a6cdea14dc9ad36dbf35e537276e83b3edc9b953d2af554b524fb75   coder (server); = the fork's platform.69 (766e97304) + Terraform provider mirror
+ghcr.io/user187x/coder-ui-updates:code-adc6b37ef820       sha256:bd5dafc8e07714262c3b8ca4310a6ff189895d8eac27dd5c31fda171ca0c61bc   coder-ui-updates (the platform service) and the Images builder's scans: its code (helm-chart/coder-airgapped/files/ui-updates, development/tools/build-ui-image.sh) on coder-image-tools 1.0.0 - the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
 docker.io/library/python:3.13-alpine                      sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a   coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor)
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage
 
@@ -24,7 +24,7 @@ cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-node-driver-registrar:v2.
 
 [image-builder] images/image-builder/  push      Templates > Images: the build Jobs (BuildKit), the registry built images are kept in, and the Model Library's security scanner (garak)
 docker.io/moby/buildkit:v0.33.0-rootless                  sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef   Images view: the build Jobs (BuildKit rootless)
-docker.io/library/registry:3.1.2                          sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8   Images view: coder-image-registry, where built images are kept
+ghcr.io/user187x/coder-registry:3.1.2-1                   sha256:18fa9d5d6a6fd299e6e421038eb41154833b4a86bcbfded96023db77eaa9b466   Images view: coder-image-registry, where built images are kept - distribution built from source with Go's and its modules' fixes, as a regular user (development/registry-image)
 ghcr.io/user187x/coder-garak:0.17.1-2                     sha256:f2cee0c7216a2847286f8696c8fba0983850f50c62d5d14e56550102843e4229   Images view: the Model Library's security scanner (modelScanner.image) - garak 0.17.1 (NVIDIA's LLM vulnerability scanner, Apache-2.0) with its detector models and probe data, CPU PyTorch, llama.cpp b11717's llama-server (development/garak-image)
 
 [cluster]       images/cluster/        push      what the chart adds to the cluster: metrics-server, where it has none

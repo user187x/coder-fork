@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.67 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.69 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.67-airgap
+      tag: 2.0.0-platform.69-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -326,7 +326,7 @@ imageBuilder:
   proxyImage: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
   registry:
     deploy: true
-    image: '{{ include "platform.image" (list . "docker.io/library/registry:3.1.2") }}'
+    image: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-registry:3.1.2-1") }}'
     size: 50Gi
     storageClass: ""
     localPort: 5000
@@ -451,7 +451,7 @@ uiUpdates:
   # (+ its database) and regctl (development/image-tools), which the Images view lints, formats and scans with -
   # tagged with the code's hash (development/tools/build-ui-image.sh builds and pins it). The chart carries no code:
   # Helm keeps each release in a Secret of at most 1 MiB.
-  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-055d88709c15") }}'
+  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-adc6b37ef820") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'

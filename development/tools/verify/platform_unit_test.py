@@ -1340,6 +1340,36 @@ class SafeTest(unittest.TestCase):
         self.assertFalse(self.safe.handle(h, "GET", "/__coder-ui/api/other", ""))
 
 
+class NodeImagesTest(unittest.TestCase):
+    """The images on the nodes (Templates > Images): a node reports only its largest images (nodeStatusMaxImages), so
+    a small image a running pod runs is still listed on that pod's node, and can be scanned there."""
+
+    def test_running_pods_images_count_as_on_their_node(self):
+        nodes = {"items": [{"metadata": {"name": "n1"}, "status": {"images": [
+            {"names": ["ghcr.io/o/big:1", "ghcr.io/o/big@sha256:aa"], "sizeBytes": 5000}]}}]}
+        pods = {"items": [
+            {"spec": {"nodeName": "n2"}, "status": {"containerStatuses": [
+                {"image": "ghcr.io/o/small:1", "imageID": "sha256:0123"}],  # loaded locally: only its ID
+                "initContainerStatuses": [{"image": "ghcr.io/o/small:1", "imageID": "sha256:0123"}]}},
+            {"spec": {"nodeName": "n1"}, "status": {"containerStatuses": [
+                {"image": "ghcr.io/o/big:1", "imageID": "ghcr.io/o/big@sha256:aa"},
+                {"image": "ghcr.io/o/small:1", "imageID": "ghcr.io/o/small@sha256:bb"}]}},
+            {"spec": {}, "status": {"containerStatuses": [{"image": "ghcr.io/o/unscheduled:1"}]}},
+        ]}
+        calls = lambda method, path, *a, **k: (200, nodes if path == "/api/v1/nodes" else pods)
+        with mock.patch.object(ib, "kube_call", calls):
+            found = ib.node_images()
+            groups = ib.node_image_groups()
+        self.assertEqual(found["ghcr.io/o/big:1"], {"sizeBytes": 5000, "nodes": ["n1"]})
+        self.assertEqual(sorted(found["ghcr.io/o/small:1"]["nodes"]), ["n1", "n2"])
+        self.assertEqual(found["ghcr.io/o/small@sha256:bb"], found["ghcr.io/o/small:1"])
+        self.assertNotIn("sha256:0123", found)
+        self.assertNotIn("ghcr.io/o/unscheduled:1", found)
+        self.assertEqual(len(groups), 2)  # each image once, all its names together
+        with mock.patch.object(ib, "kube_call", calls):
+            self.assertEqual(ib.scan_target("ghcr.io/o/small:1"), ("ghcr.io/o/small:1", "n1"))
+
+
 class ImageImportTest(unittest.TestCase):
     """Images brought in (imagebuilder.py: Import): references, names, archives, and what workspaces run."""
 
@@ -2786,3 +2816,38 @@ class CloudDrivePeersTest(unittest.TestCase):
         self.assertEqual(call(self.ANN, "GET", "list", drive), (403, []))
         p.save_settings(self.ADMIN, {"enabled": False})
         self.assertEqual(call(self.EVE, "GET", "list", drive), (403, []))
+
+    def test_shared_drive_glance_counts_its_files_for_whom_it_is_shared_with(self):
+        """The Workspaces page's cloud of a drive shared with the caller: its HUD reads how many files, how much and the
+        newest few (?drive=<owner id>, read access enough), its owner named; nothing once the share ends."""
+        p, safe = self.peers, self.safe
+        safe.ENABLED = True
+        p.save_settings(self.ADMIN, {"enabled": True, "adminApproval": False})
+        sid = p.request(self.ANN, {"owner": self.BOB["id"], "access": "read"})["share"]["id"]
+        p.answer(self.BOB, sid, {"accept": True})
+        root = "users/%s/" % self.BOB["id"]
+        objects = [{"key": root + "docs/", "size": 0, "modified": "2026-10-01T00:00:00.000Z"}] + [
+            {"key": root + "docs/f%d.txt" % i, "size": 100 * (i + 1), "modified": "2026-10-%02dT00:00:00.000Z" % (i + 1)}
+            for i in range(10)]
+        s3 = mock.Mock()
+        s3.list = lambda bkt, prefix="", delimiter=None, limit=None: (
+            [o for o in objects if o["key"].startswith(prefix)], [])
+
+        def call(user, query):
+            sent = []
+            h = mock.Mock()
+            h.headers = {}
+            h.user = lambda: (user, None)
+            h.send_json = lambda status, body: sent.append((status, body))
+            with mock.patch.object(safe, "drive_of", lambda uid: (s3, "b", "users/%s/" % uid, None)):
+                safe.handle(h, "GET", "/__coder-ui/api/safe/glance", query)
+            return sent[0]
+
+        status, body = call(self.ANN, "drive=" + self.BOB["id"])
+        self.assertEqual(status, 200)
+        self.assertEqual((body["files"], body["usedBytes"]), (10, sum(100 * (i + 1) for i in range(10))))
+        self.assertEqual([f["path"] for f in body["newest"]], ["docs/f%d.txt" % i for i in range(9, 1, -1)])
+        self.assertEqual(body["owner"], {"id": self.BOB["id"], "username": self.BOB["username"], "name": ""})
+        self.assertEqual(call(self.EVE, "drive=" + self.BOB["id"])[0], 403)  # not shared with eve
+        p.end(self.BOB, sid)
+        self.assertEqual(call(self.ANN, "drive=" + self.BOB["id"])[0], 403)

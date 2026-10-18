@@ -609,6 +609,9 @@ resource "coder_agent" "main" {
     context_length         = local.context_length
     desktop                = var.desktop
     file_browser           = var.file_browser
+    cloud_drive_link       = var.user_storage ? var.user_storage_path : ""
+    # coder-filebrowser: File Browser started with every Cloud Drive here as a source of its own
+    filebrowser = base64encode(file("${path.module}/scripts/filebrowser.sh"))
   })
 
   # platform:begin metrics

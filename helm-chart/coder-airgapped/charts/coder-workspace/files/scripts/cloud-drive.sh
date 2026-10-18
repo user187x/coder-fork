@@ -42,6 +42,7 @@ sync_link() {
  if [ -z "$target" ]; then
   if [ -L "$LINK" ]; then
    rm -f "$LINK" && echo "Cloud Drive: not here ($LINK removed)"
+   files_again
   fi
   return 0
  fi
@@ -58,6 +59,15 @@ sync_link() {
   mv "$LINK" "$aside" && echo "Cloud Drive: the folder $LINK had files: moved to $aside"
  fi
  ln -s "$target" "$LINK" && echo "Cloud Drive: $LINK -> $target"
+ files_again
+}
+
+# File Browser shows each Cloud Drive here as a source of its own (scripts/filebrowser.sh): started again when they
+# change (nothing if it does not run, or nothing changed for it).
+files_again() {
+ if [ -x "$HOME/.local/bin/coder-filebrowser" ]; then
+  "$HOME/.local/bin/coder-filebrowser" restart || true
+ fi
 }
 
 sync_link
@@ -76,12 +86,13 @@ done
 if [ -d "$SHARED" ] && [ -z "$(ls -A "$SHARED")" ]; then
  rmdir "$SHARED"
 fi
+files_again
 
 # A watcher from an earlier start (the agent restarted) gives way to this one.
 if [ -f "$PIDFILE" ]; then
  kill "$(cat "$PIDFILE")" 2>/dev/null || true
 fi
-LINK="$LINK" MOUNT="$MOUNT" STATE="$STATE" CLI="$CLI" setsid bash -c "$(declare -f sync_link)"'
+LINK="$LINK" MOUNT="$MOUNT" STATE="$STATE" CLI="$CLI" setsid bash -c "$(declare -f sync_link files_again)"'
  n=0
  while sleep 1; do
   sync_link

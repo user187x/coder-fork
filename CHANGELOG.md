@@ -2,9 +2,30 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.67` (fork `1f50059bf`), workspace image `coder-workspace:1.8.7`, dataflow image
+Coder `2.0.0-platform.69` (fork `766e97304`), workspace image `coder-workspace:1.8.7`, dataflow image
 `coder-workspace-dataflow:1.1.2`, AI image `coder-workspace-ai:2.0.0`, Obsidian image `coder-workspace-obsidian:1.0.0`,
-model scanner `coder-garak:0.17.1-2`.
+model scanner `coder-garak:0.17.1-2`, image registry `coder-registry:3.1.2-1`.
+
+* **The Cloud Drives shared with you float above yours** (platform.68-69): on the Workspaces page, a dotted cloud above
+  the Cloud Drive button for each drive shared with you, its owner's avatar inside, tethered by a cable to a socket on
+  the button (green dots and prongs read and write, blue read only). It drifts in and plugs in; when the share ends its
+  plug pops out, the cable reels in and the cloud fades away. Pointed at, a HUD: whose it is, your access, how many
+  files and how much, the newest of them; clicked, the Cloud Drive window opens on it (`GET /api/safe/glance`).
+* **File Browser opens the Cloud Drives:** `~/cloud-drive` and `~/cloud-drive-shared/<owner>` are links to volumes
+  mounted out of the way, and FileBrowser Quantum opens no link out of its folder (it answered 403: "permission
+  denied", or an empty folder). Each Cloud Drive is now a source of its own in File Browser's sidebar - yours, and each
+  one shared with you, read only unless shared read and write - and the links it cannot open are hidden in the home.
+  Connecting or disconnecting the workspace's drive restarts File Browser with it (`coder-filebrowser`,
+  `scripts/filebrowser.sh`); a workspace has it from its next start on the new templates.
+* **The Images view's registry scores an A:** `coder-image-registry` runs `ghcr.io/user187x/coder-registry:3.1.2-1`,
+  Docker's registry 3.1.2 built from its source with Go 1.26.9 and the fixed `golang.org/x/net`, `x/crypto` and
+  OpenTelemetry exporters, on Alpine 3.24 with its fixes, its default user 1000 (the chart ran it as 1000 already):
+  `registry:3.1.2` scored a D (4 high, 8 medium, the root user); this has only GO-2026-5932 (x/crypto's unmaintained
+  openpgp package, no fix). `development/registry-image`, `development/tools/build-registry-image.sh`.
+* **Images on the nodes include the small ones:** a node reports only its 50 largest images (the kubelet's
+  nodeStatusMaxImages), so the images its running pods run are listed and scannable too.
+
+Before (platform.66-67):
 
 * **Unsloth Studio replaces LM Studio:** the AI image 2.0.0 carries Unsloth Studio (AGPL-3.0) - its desktop app (the
   provided `unsloth.AppImage`) and its server, installed at build time by the app's own installer (CUDA PyTorch,

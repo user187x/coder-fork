@@ -514,13 +514,26 @@ def main():
           unguarded or "%d fallbacks" % len(downloads))
     startup = open(os.path.join(tf_dir, "scripts", "startup.sh")).read() if os.path.isfile(
         os.path.join(tf_dir, "scripts", "startup.sh")) else ""
+    fb_path = os.path.join(tf_dir, "scripts", "filebrowser.sh")
+    fb = open(fb_path).read() if os.path.isfile(fb_path) else ""
     check("template: File Browser is FileBrowser Quantum, under the app's path, on 127.0.0.1, no sign-in of its own",
-          "FileBrowser Quantum" in startup and 'baseURL: "$APPS/filebrowser/"' in startup
-          and "listen: 127.0.0.1" in startup and "noauth: true" in startup
-          and "disableUpdateCheck: true" in startup
+          "FileBrowser Quantum" in startup and '"$HOME/.local/bin/coder-filebrowser" start' in startup
+          and 'base="$APPS/filebrowser/"' in fb and 'listen: "127.0.0.1"' in fb and "noauth: true" in fb
+          and "disableUpdateCheck: true" in fb
+          and 'filebrowser = base64encode(file("${path.module}/scripts/filebrowser.sh"))' in tf["main.tf"]
           and "/apps/filebrowser/health" in tf["main.tf"]
           # Coder strips the app's path and joins the rest to the URL's path: the URL must carry the path back
           and 'url          = "http://localhost:13339/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/filebrowser/"' in tf["main.tf"], "")
+    # Quantum opens no link out of a source's folder (403): the Cloud Drives (links to /mnt/...) are sources of their
+    # own, read only where shared read only, their links hidden in the Start folder; the watcher restarts it as the
+    # drive is connected or disconnected.
+    cd_sh = open(os.path.join(tf_dir, "scripts", "cloud-drive.sh")).read()
+    check("template: File Browser shows every Cloud Drive here as a source of its own (read only where shared so)",
+          "CLOUD_DRIVE_LINK" in fb and '"$HOME/cloud-drive-shared"' in fb and "readOnly" in fb
+          and "rule filePath" in fb and "rule folderPath" in fb and "sidebarLinks" in fb
+          and '"$HOME/.local/bin/coder-filebrowser" restart' in cd_sh
+          and 'declare -f sync_link files_again' in cd_sh
+          and "cloud_drive_link       = var.user_storage ? var.user_storage_path" in tf["main.tf"], "")
     check("template: the workspace image is substituted (not codercom/enterprise-base)",
           "codercom/enterprise-base" not in r, "")
     ws_img = re.search(r'workspaceImage: .*?"(ghcr\.io/user187x/coder-workspace:[^"]+)"', vals).group(1)

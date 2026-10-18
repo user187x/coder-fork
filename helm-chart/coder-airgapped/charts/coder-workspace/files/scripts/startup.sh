@@ -17,12 +17,13 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
-APP_SET='${app_set}'           # developer (code-server), dataflow (NiFi, Airflow), unsloth or opencode (AI), obsidian
-DESKTOP='${desktop}'           # true: the desktop (noVNC's Desktop app)
-FILE_BROWSER='${file_browser}' # true: File Browser
-AI_CONTEXT='${context_length}' # the AI templates' Context length parameter: the tokens OpenCode loads a model with
-ACCESS_HOST='${access_host}'   # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
-START_DIR='${start_directory}' # the Start folder parameter: where the terminal and File Browser open
+APP_SET='${app_set}'                   # developer (code-server), dataflow (NiFi, Airflow), unsloth or opencode (AI), obsidian
+DESKTOP='${desktop}'                   # true: the desktop (noVNC's Desktop app)
+FILE_BROWSER='${file_browser}'         # true: File Browser
+AI_CONTEXT='${context_length}'         # the AI templates' Context length parameter: the tokens OpenCode loads a model with
+ACCESS_HOST='${access_host}'           # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
+START_DIR='${start_directory}'         # the Start folder parameter: where the terminal and File Browser open
+CLOUD_DRIVE_LINK='${cloud_drive_link}' # where the owner's Cloud Drive is linked (none without it)
 # Path-based apps are proxied under this prefix ("main" = the agent's name).
 APPS="/@$OWNER_NAME/$WORKSPACE_NAME.main/apps"
 # One line per step, for the workspace page's Logs panel (the agent keeps this script's output, with the time).
@@ -237,55 +238,25 @@ elif [ "$APP_SET" != dataflow ] && [ "$APP_SET" != obsidian ]; then
 fi
 
 # 3. File Browser (when the template has it): FileBrowser Quantum, the workspace image's (an image without it gets
-# none: there is nothing to download it from without internet). Path-based apps are proxied with their full
-# /@user/workspace.agent/apps/<slug> prefix intact, so it serves under that path (http.baseURL) or its assets 404 (an
-# endless spinner); on 127.0.0.1 only, no sign-in of its own (Coder's app proxy lets only the owner in), no update
-# check. Its settings are written at every start (the Start folder may have changed); its database stays in the home.
-# An image built on an older workspace image still has the former File Browser: started with its own flags.
-# The agent name ("main") is hardcoded: referencing coder_agent.main here would be a cycle.
+# none: there is nothing to download it from without internet), started by coder-filebrowser (scripts/filebrowser.sh):
+# under the app's path, on 127.0.0.1 only, no sign-in of its own; the Start folder, and each Cloud Drive here as a
+# source of its own (Quantum opens no link out of a source's folder; the Cloud Drive's watcher restarts it as the drive
+# is connected or disconnected). Its settings are written at every start (the Start folder may have changed); its
+# database stays in the home. An image built on an older workspace image still has the former File Browser: started
+# with its own flags.
 if [ "$FILE_BROWSER" != true ]; then
  log "File Browser: not in this template"
 elif ! command -v filebrowser >/dev/null; then
  log "File Browser: not in this image: skipped"
+elif filebrowser version 2>/dev/null | grep -q "FileBrowser Quantum"; then
+ mkdir -p "$HOME/.config/filebrowser-quantum" "$HOME/.local/bin"
+ printf 'APPS=%q\nSTART_DIR=%q\nCLOUD_DRIVE_LINK=%q\n' "$APPS" "$START_DIR" "$CLOUD_DRIVE_LINK" \
+  >"$HOME/.config/filebrowser-quantum/env"
+ echo '${filebrowser}' | base64 -d >"$HOME/.local/bin/coder-filebrowser.new"
+ chmod 0755 "$HOME/.local/bin/coder-filebrowser.new" && mv "$HOME/.local/bin/coder-filebrowser.new" "$HOME/.local/bin/coder-filebrowser"
+ log "$("$HOME/.local/bin/coder-filebrowser" start)"
 elif pgrep -x filebrowser >/dev/null; then
  log "File Browser: running already"
-elif filebrowser version 2>/dev/null | grep -q "FileBrowser Quantum"; then
- fb_dir="$HOME/.config/filebrowser-quantum"
- mkdir -p "$fb_dir"
- cat >"$fb_dir/config.yaml" <<FB
-http:
-  listen: 127.0.0.1
-  port: 13339
-  baseURL: "$APPS/filebrowser/"
-  trustProxyHeaders: true
-server:
-  disableUpdateCheck: true
-  database:
-    path: "$fb_dir/filebrowser.sqlite"
-  cacheDir: /tmp/filebrowser-cache
-  sources:
-    - path: "$START_DIR"
-      name: "$(basename "$START_DIR")"
-      config:
-        defaultEnabled: true
-        defaultPermissions:
-          view: true
-          download: true
-          modify: true
-          create: true
-          delete: true
-auth:
-  methods:
-    noauth: true
-userDefaults:
-  listing:
-    showHidden: true
-  account:
-    disableUpdateNotifications: true
-FB
- # the whole subshell redirected (exec: it becomes File Browser), so nothing keeps the script's output open
- (cd "$fb_dir" && exec filebrowser -c "$fb_dir/config.yaml" --no-input) </dev/null >/tmp/filebrowser.log 2>&1 &
- log "File Browser (Quantum): started in $START_DIR (log: /tmp/filebrowser.log)"
 else
  filebrowser --noauth --root "$START_DIR" --port 13339 \
   --baseurl "$APPS/filebrowser" \

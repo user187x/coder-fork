@@ -77,7 +77,7 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
 | `docker.io_moby_buildkit_v0.33.0-rootless.tar.gz` | `docker.io/moby/buildkit:v0.33.0-rootless` | 123 MB | Images view: the build Jobs (BuildKit rootless) |
-| `docker.io_library_registry_3.1.2.tar.gz` | `docker.io/library/registry:3.1.2` | 20 MB | Images view: coder-image-registry, where built images are kept |
+| `ghcr.io_user187x_coder-registry_3.1.2-1.tar.gz` | `ghcr.io/user187x/coder-registry:3.1.2-1` | 22 MB | Images view: coder-image-registry, where built images are kept - Docker's registry 3.1.2 built from source with Go 1.26.9 and fixed modules, as a regular user (`development/registry-image`) |
 
 ### `cluster/`
 

@@ -15,6 +15,8 @@ account a PersistentVolume (Retain: removing it never removes files) and its cla
   GET  /__coder-ui/api/safe                   the caller's safe: used, quota, where it is mounted
   GET  /__coder-ui/api/safe/list?path=a/b     a folder of it: folders and files (each file route also takes
                                               &drive=<owner id>: a Cloud Drive shared with the caller, drivepeers)
+  GET  /__coder-ui/api/safe/glance           it at a glance: how many files, how much, the newest (the Workspaces
+                                              page's HUD of a drive shared with the caller: &drive=<owner id>)
   GET  /__coder-ui/api/safe/download?path=    a file, as an attachment
   PUT  /__coder-ui/api/safe/upload?path=      a file (the body; Content-Length), within the quota
   POST /__coder-ui/api/safe/folder {path}     a new folder
@@ -1663,6 +1665,25 @@ def listing(user, path):
     return {"path": path, "folders": [{"name": f} for f in folders], "files": files}
 
 
+GLANCE_NEWEST = 8
+
+
+def glance(user, owner=None):
+    """A Cloud Drive at a glance (the HUD of a drive shared with the caller): how many files, how much they take, and
+    the newest few, from one listing of the whole drive (which also refreshes its usage). owner: the drive's owner's
+    account ({id, username, name}) when it is shared with the caller."""
+    s3, bkt, root, _ = drive_of(user["id"])
+    objects, _ = s3.list(bkt, prefix=root)
+    files = [o for o in objects if not o["key"].endswith("/")]
+    used = sum(o["size"] for o in objects)
+    with _lock:
+        _usage[user["id"]] = (time.time(), used, len(files))
+    newest = sorted(files, key=lambda o: o["modified"] or "", reverse=True)[:GLANCE_NEWEST]
+    return {"files": len(files), "usedBytes": used,
+            "newest": [{"path": o["key"][len(root):], "size": o["size"], "modified": o["modified"]} for o in newest],
+            "owner": {k: (owner or {}).get(k) for k in ("id", "username", "name")} if owner else None}
+
+
 def upload_csrf_ok(h):
     """Writes come from the dashboard itself: its header, and the browser's same-origin markers."""
     if h.headers.get(CSRF_HEADER[0]) != CSRF_HEADER[1]:
@@ -2029,8 +2050,8 @@ def mount_remove(h, user, body):
 
 
 # The routes that read or write a Cloud Drive's files: a shared one's too (?drive=).
-FILE_ROUTES = {BASE + "/api/safe/list", BASE + "/api/safe/download", BASE + "/api/safe/upload",
-               BASE + "/api/safe/folder", BASE + "/api/safe/delete"}
+FILE_ROUTES = {BASE + "/api/safe/list", BASE + "/api/safe/glance", BASE + "/api/safe/download",
+               BASE + "/api/safe/upload", BASE + "/api/safe/folder", BASE + "/api/safe/delete"}
 
 
 def handle(h, method, path, query):
@@ -2063,6 +2084,9 @@ def handle(h, method, path, query):
             h.send_json(200, summary(user))
         elif method == "GET" and path == BASE + "/api/safe/list":
             h.send_json(200, listing(user, q.get("path", "")))
+        elif method == "GET" and path == BASE + "/api/safe/glance":
+            h.send_json(200, glance(user, (drivepeers.USER_BY_ID and drivepeers.USER_BY_ID(user["id"]) or
+                                           {"id": user["id"]}) if shared else None))
         elif method == "GET" and path == BASE + "/api/safe/download":
             download(h, user, q.get("path", ""))
         elif method == "PUT" and path == BASE + "/api/safe/upload":

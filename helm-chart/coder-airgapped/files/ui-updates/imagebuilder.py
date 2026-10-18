@@ -1541,7 +1541,9 @@ class Rescan(Build):
 
 def node_image_groups():
     """Every image the cluster's nodes hold (preloaded, loaded or pulled), each once with all its names there (a tag,
-    its digest) and the nodes that hold it: [{"names", "sizeBytes", "nodes"}]."""
+    its digest) and the nodes that hold it: [{"names", "sizeBytes", "nodes"}]. A node reports only its largest images
+    (the kubelet's nodeStatusMaxImages, 50 by default), so the images its running pods run are added too (their size
+    unknown: 0): a small image a pod runs is on that pod's node all the same."""
     status, nodes = kube_call("GET", "/api/v1/nodes")
     groups = {}
     for node in (nodes.get("items") or []) if status == 200 and isinstance(nodes, dict) else []:
@@ -1553,6 +1555,26 @@ def node_image_groups():
             g = groups.setdefault(names, {"names": list(names), "sizeBytes": img.get("sizeBytes") or 0, "nodes": []})
             if name not in g["nodes"]:
                 g["nodes"].append(name)
+    by_name = {n: g for g in groups.values() for n in g["names"]}
+    status, pods = kube_call("GET", "/api/v1/pods?fieldSelector=" + urllib.parse.quote("status.phase=Running"))
+    for pod in (pods.get("items") or []) if status == 200 and isinstance(pods, dict) else []:
+        node = (pod.get("spec") or {}).get("nodeName")
+        st = pod.get("status") or {}
+        for c in (st.get("containerStatuses") or []) + (st.get("initContainerStatuses") or []):
+            ref = c.get("image") or ""
+            # its digest too, when the runtime knows it by one (a locally loaded image has only its ID)
+            names = [n for n in (ref, c.get("imageID") or "") if n and not n.startswith("sha256:")]
+            if not node or not names:
+                continue
+            g = next((by_name[n] for n in names if n in by_name), None)
+            if g is None:
+                g = groups.setdefault(tuple(sorted(names)), {"names": sorted(names), "sizeBytes": 0, "nodes": []})
+            for n in names:
+                if n not in g["names"]:
+                    g["names"].append(n)
+                by_name[n] = g
+            if node not in g["nodes"]:
+                g["nodes"].append(node)
     return list(groups.values())
 
 
