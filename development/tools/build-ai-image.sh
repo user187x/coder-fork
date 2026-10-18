@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the workspace image of the AI templates (ubuntu-unsloth, ubuntu-opencode),
+# Builds the workspace image of the AI template (ubuntu-opencode),
 # ghcr.io/user187x/coder-workspace-ai:<TAG> (../workspace-image-ai: the ubuntu-vnc-desktop image + Unsloth Studio +
 # OpenCode), and checks with no network at all that Unsloth's app starts on a desktop and its server answers, that a
 # workspace's ~/.unsloth only links to the image's install, and that OpenCode runs on it. The Unsloth desktop app is
@@ -7,14 +7,14 @@
 # the SHA-256 pinned here; the build installs Unsloth Studio's server with the installer that AppImage carries (it
 # downloads its Python packages, llama.cpp and Node). OpenCode's release archive is downloaded once (kept in
 # ../workspace-image-ai/, not in git) and checked too.
-#   ./build-ai-image.sh [TAG]                     default 2.0.0
+#   ./build-ai-image.sh [TAG]                     default 2.0.1
 #   ./build-ai-image.sh TAG --cpu                 PyTorch and llama.cpp for the CPU only (a much smaller image)
 #   TEST_MODEL=/path/model.gguf ./build-ai-image.sh   the model the check chats with (default: the garak image's
 #                                                   SmolLM2-135M from ~/.cache/coder-airgapped/garak, when there)
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
 ctx="${dev}/workspace-image-ai"
-tag="${1:-2.0.0}"; img="ghcr.io/user187x/coder-workspace-ai:${tag}"
+tag="${1:-2.0.1}"; img="ghcr.io/user187x/coder-workspace-ai:${tag}"
 cpu=false; [[ "${2:-}" == "--cpu" ]] && cpu=true
 opencode="$(sed -n 's/^ARG OPENCODE_VERSION=//p' "${ctx}/Dockerfile")"
 UNSLOTH_APPIMAGE_SHA256=37b3736f6cea9bf75bff386fafb3ae3e1572f3767e00706783d3e96ac4156c2b   # unsloth.AppImage

@@ -22,17 +22,13 @@
 #                                           coder); no third-party chart or image unless it changed (helm-chart/layer-support)
 # Lints and renders the chart first. Public image archives that are missing are fetched with `mirror-images.sh save`
 # (needs internet; --no-save fails instead). Our image archives must exist (tools/build-*.sh).
-#   ./build-bundle.sh [--no-save] [--no-slim] [--no-split] [--layer-base VERSION | --no-layer] [--no-obsidian]
+#   ./build-bundle.sh [--no-save] [--no-slim] [--no-split] [--layer-base VERSION | --no-layer]
 # --no-slim: not the slim tarball (not a release asset; it holds every image of ours, the dataflow one among them).
-# --no-obsidian: no Obsidian in any of the tarballs - Obsidian is a private package, for the organization's own clusters,
-#   so a bundle that leaves the organization (a public release) must not carry it: the Obsidian image's archive and
-#   its images.txt line are left out, and the Obsidian template is off in the chart's values and in every packaged
-#   chart. (The AI image's Unsloth Studio is AGPL-3.0 and ships; LM Studio, which it replaced, did not.)
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; top="$(cd "${here}/../.." && pwd)"
 bundle="${top}/helm-chart"; chart="${bundle}/coder-airgapped"; dist="${top}/dist"
 version=$(sed -n 's/^version: *//p' "${chart}/Chart.yaml"); name="coder-airgapped-${version}"
-save=1 slim=1 split=1 layer_base="" private=1
+save=1 slim=1 split=1 layer_base=""
 while (($#)); do
 	case "$1" in
 	--no-save) save=0 ;;
@@ -40,7 +36,6 @@ while (($#)); do
 	--no-split) split=0 ;;
 	--layer-base) layer_base="${2:?--layer-base VERSION}"; shift ;;
 	--no-layer) layer_base=none ;;
-	--no-obsidian) private=0 ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 	shift
@@ -63,40 +58,11 @@ done
 mirror verify | tail -n 1
 
 zip=$(command -v pigz || echo gzip); mkdir -p "$dist"
-ob_image=$(awk '!/^#/ && $1 ~ /^ghcr\.io\/user187x\/coder-workspace-obsidian:/ {print $1; exit}' "${bundle}/images.txt")
-ob_archive=$(mirror path "$ob_image")
-ob_off() { # VALUES OUT: the Obsidian template off
-	python3 - "$1" "$2" <<'PY'
-import re, sys
-s = open(sys.argv[1]).read()
-s, n = re.subn(r"(\n  obsidianTemplate:\n(?:    #.*\n)*    enabled: )true", r"\1false", s)
-if n != 1:
-    sys.exit("obsidianTemplate.enabled not found in " + sys.argv[1])
-open(sys.argv[2], "w").write(s)
-PY
-}
-
-# --no-obsidian: the files that change, staged under nolms/ (put in place of the originals, which are excluded).
-nolms_dir="${dist}/.no-private-${version}" nolms=() nolms_src=()
-rm -rf "$nolms_dir"
-if ((!private)); then
-	mkdir -p "${nolms_dir}/nolms/coder-airgapped" "${nolms_dir}/nolms/$(dirname "$ob_archive")"
-	ob_off "${chart}/values.yaml" "${nolms_dir}/nolms/coder-airgapped/values.yaml"
-	grep -vF "${ob_image} " "${bundle}/images.txt" >"${nolms_dir}/nolms/images.txt"
-	grep -vF "  $(basename "$ob_archive")" "${bundle}/$(dirname "$ob_archive")/SHA256SUMS" \
-		>"${nolms_dir}/nolms/$(dirname "$ob_archive")/SHA256SUMS"
-	nolms=(--exclude="helm-chart/${ob_archive}" --exclude='helm-chart/images.txt'
-		--exclude="helm-chart/$(dirname "$ob_archive")/SHA256SUMS" --exclude='helm-chart/coder-airgapped/values.yaml')
-	nolms_src=(-C "$nolms_dir" nolms)
-	echo "--no-obsidian: without the Obsidian image, the Obsidian template off"
-fi
-
-# charts/: every chart of ours packaged - from a copy with the Obsidian template off for --no-obsidian - with the index of
-# a Helm repository and their checksums (git ignores the folder; every tarball ships it)
+# charts/: every chart of ours packaged (from a copy without __pycache__), with the index of a Helm repository and their
+# checksums (git ignores the folder; every tarball ships it)
 charts="${bundle}/charts"; rm -rf "$charts"; mkdir -p "$charts"
 src_chart=$(mktemp -d)/coder-airgapped; cp -r "$chart" "$src_chart"
 find "$src_chart" -name __pycache__ -type d -prune -exec rm -rf {} +
-((private)) || ob_off "${chart}/values.yaml" "${src_chart}/values.yaml"
 helm package "$src_chart" -d "$charts" | sed "s|.*saved it to: ${bundle}/|packaged |"
 CHART_DIR="$src_chart" mirror decorator-charts "$charts" | sed "s|^${bundle}/|packaged |"
 rm -rf "$(dirname "$src_chart")"
@@ -106,7 +72,7 @@ helm repo index "$charts"
 tarball() { # OUT [tar options...]: the bundle's tree as coder-airgapped-<version>/, but what the options leave out
 	local out="$1"; shift
 	tar -I "$zip" -C "$top" -cf "${dist}/${out}.part" --exclude='*.part' --exclude='__pycache__' --exclude='helm-chart/.deploy' \
-		--exclude='helm-chart/LAYER.json' "$@" "${nolms[@]}" --transform "s|^helm-chart|${name}|;s|^nolms|${name}|" helm-chart "${nolms_src[@]}"
+		--exclude='helm-chart/LAYER.json' "$@" --transform "s|^helm-chart|${name}|" helm-chart
 	mv "${dist}/${out}.part" "${dist}/${out}"; (cd "$dist" && sha256sum "$out" >"${out}.sha256")
 	echo "wrote dist/${out} ($(du -h "${dist}/${out}" | cut -f1))"
 }
@@ -122,8 +88,7 @@ if ((slim)); then tarball "${name}-slim.tar.gz" "${public[@]}"; fi
 # The parts: the bundle without images, then one tarball per images/ folder (its archives and SHA256SUMS)
 if ((split)); then
 	rm -f "${dist}/${name}"-charts.tar.gz* "${dist}/${name}"-images-*.tar.gz*
-	tarball "${name}-charts.tar.gz" --exclude='helm-chart/images/*/*.tar.gz' --exclude='helm-chart/images/*/SHA256SUMS' \
-		--exclude='nolms/images'
+	tarball "${name}-charts.tar.gz" --exclude='helm-chart/images/*/*.tar.gz' --exclude='helm-chart/images/*/SHA256SUMS'
 	assets="${dist}/${name}-ASSETS.txt"
 	{
 		echo "coder-airgapped ${version}: the release in parts. Unpack them all into one directory: together they are"
@@ -136,8 +101,7 @@ if ((split)); then
 		ls "$d"*.tar.gz >/dev/null 2>&1 || continue
 		desc=$(awk -v p="[${part}]" '$1 == p {for (i = 4; i <= NF; i++) printf "%s%s", $i, (i < NF ? " " : ""); exit}' "${bundle}/images.txt")
 		# only this folder: every other path and file left out
-		tar -I "$zip" -C "$top" -cf "${dist}/${out}.part" "${nolms[@]}" --transform "s|^helm-chart|${name}|;s|^nolms|${name}|" \
-			"helm-chart/images/${part}" $([[ ! -d "${nolms_dir}/nolms/images/${part}" ]] || echo -C "$nolms_dir" "nolms/images/${part}")
+		tar -I "$zip" -C "$top" -cf "${dist}/${out}.part" --transform "s|^helm-chart|${name}|" "helm-chart/images/${part}"
 		mv "${dist}/${out}.part" "${dist}/${out}"; (cd "$dist" && sha256sum "$out" >"${out}.sha256")
 		echo "wrote dist/${out} ($(du -h "${dist}/${out}" | cut -f1))"
 		printf '%-58s %s (%s)\n' "$out" "images/${part}/: ${desc}" "$(du -h "${dist}/${out}" | cut -f1)" >>"$assets"
@@ -147,20 +111,17 @@ fi
 
 # The layer: the chart and installers, without any image archive or third-party chart; then LAYER.json and the
 # images (and prerequisites) changed since the base, staged under the same paths.
-[[ -n "$layer_base" && "$layer_base" != none ]] || { echo "no layer bundle (no earlier release to build it on)"; rm -rf "$nolms_dir"; exit 0; }
+[[ -n "$layer_base" && "$layer_base" != none ]] || { echo "no layer bundle (no earlier release to build it on)"; exit 0; }
 # (staged as layer-files/: the excludes below match names before --transform, so they leave the staged files alone)
 staging="${dist}/.layer-${version}"; rm -rf "$staging"; mkdir -p "${staging}/layer-files"
-# (--no-obsidian: the Obsidian image left out of the layer too)
-LAYER_SKIP_IMAGES=$( ((private)) || echo '^ghcr\.io/user187x/coder-workspace-obsidian:') \
-	"${bundle}/layer-support" build "$layer_base" "${staging}/layer-files"
+"${bundle}/layer-support" build "$layer_base" "${staging}/layer-files"
 while read -r f; do
 	mkdir -p "${staging}/layer-files/prereqs"; cp "${bundle}/prereqs/${f}" "${staging}/layer-files/prereqs/"
 done < <(python3 -c 'import json,sys; [print(f) for f in json.load(open(sys.argv[1]))["prereqs"]]' "${staging}/layer-files/LAYER.json")
 out="${name}-layer.tar.gz"
 tar -I "$zip" -cf "${dist}/${out}.part" --exclude='*.part' --exclude='__pycache__' --exclude='helm-chart/.deploy' \
 	--exclude='helm-chart/images/*/*.tar.gz' --exclude='helm-chart/images/*/SHA256SUMS' --exclude='helm-chart/prereqs/*' \
-	"${nolms[@]}" --transform "s|^helm-chart|${name}|;s|^layer-files|${name}|;s|^nolms|${name}|" -C "$top" helm-chart \
-	-C "$staging" layer-files "${nolms_src[@]}"
+	--transform "s|^helm-chart|${name}|;s|^layer-files|${name}|" -C "$top" helm-chart -C "$staging" layer-files
 mv "${dist}/${out}.part" "${dist}/${out}"; (cd "$dist" && sha256sum "$out" >"${out}.sha256")
-rm -rf "$staging" "$nolms_dir"
+rm -rf "$staging"
 echo "wrote dist/${out} ($(du -h "${dist}/${out}" | cut -f1)), the layer on ${layer_base}"

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Builds the workspace image ghcr.io/user187x/coder-workspace:<TAG> (../workspace-image: enterprise-base + desktop,
-# Firefox, JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc,
+# Builds the workspace image ghcr.io/user187x/coder-workspace:<TAG> (../workspace-image: enterprise-base + desktop
+# with its two themes (Classic, Serenade), Chromium, Terminator, Firefox, JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc,
 # code-server, FileBrowser Quantum) and saves it into the delivery bundle (helm-chart/images/custom/), replacing the
-# previous one (needs internet). FileBrowser Quantum is its release binary for linux-amd64, kept untracked at the
-# repository's root as filebrowser-quantum (or FILEBROWSER_QUANTUM=<file>): https://github.com/gtsteffaniak/filebrowser/
-# releases/download/v2.0.1-stable/linux-amd64-filebrowser (the Dockerfile checks its SHA-256).
+# previous one (needs internet). FileBrowser Quantum is a binary for linux-amd64, kept untracked at the repository's
+# root as filebrowser-quantum (or FILEBROWSER_QUANTUM=<file>); the Dockerfile checks its SHA-256 and version. Since
+# 1.9.2 it is the workspace's own build of 2.1.2 (version 2.1.2-coder.1, a FileBrowser update for symlinked folders:
+# gtsteffaniak/filebrowser v2.1.2 with its patches, built as its release is - static, frontend embedded, not packed).
 # Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.8.7
+#   ./build-workspace-image.sh [TAG]       default 1.9.2
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.8.7}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.9.2}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 quantum="${FILEBROWSER_QUANTUM:-${top}/filebrowser-quantum}"
 [ -f "$quantum" ] || { echo "FileBrowser Quantum's binary is missing: $quantum (see the top of this script)" >&2; exit 1; }
 # the binary alone as a build context of its own (not the repository)
@@ -35,7 +36,15 @@ docker run --rm --entrypoint sh "$img" -c '
 	HOME=$(mktemp -d) sh -c "k9s version -s >/dev/null && test -f \$HOME/.config/k9s/config.yaml"
 	grep -q xfce-cp-dark.svg /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml && test -f /usr/share/backgrounds/xfce/xfce-cp-dark.svg
 	dpkg-query -W -f "\${Version}\n" firefox | grep -qv snap && firefox --version
-	grep -qx WebBrowser=firefox /etc/xdg/xfce4/helpers.rc && grep -q "use_compositing\" type=\"bool\" value=\"false" /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
+	grep -qx WebBrowser=chromium /etc/xdg/xfce4/helpers.rc && grep -qx TerminalEmulator=terminator /etc/xdg/xfce4/helpers.rc
+	grep -q "use_compositing\" type=\"bool\" value=\"false" /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
+	# Chromium (not the snap), Terminator, and the Serenade theme: its programs, themes, icons, fonts and background
+	dpkg-query -W -f "\${Version}\n" chromium | grep -q xtradeb && chromium --version && dpkg-query -W terminator >/dev/null
+	for t in picom eww rofi coder-desktop-theme modutil; do command -v $t >/dev/null || { echo "missing: $t"; exit 1; }; done
+	test -d /usr/share/themes/Lavanda-Dark-Compact-Tokyonight && test -f /usr/share/themes/cirkles/xfwm4/themerc
+	test -f /usr/share/icons/Zafiro/index.theme && test -f /usr/share/backgrounds/coder-desktop/serenade.jpg && fc-list | grep -qi overpass
+	test -f /etc/xdg/autostart/coder-compositor.desktop && test -f /etc/chromium/policies/managed/coder-workspace.json
+	HOME=$(mktemp -d) sh -c "coder-desktop-theme apply serenade >/dev/null && test \"\$(coder-desktop-theme current)\" = serenade && test -f \$HOME/.config/picom.conf && grep -q xrender \$HOME/.config/picom.conf"
 	python3 -c "import json; d = json.load(open(\"/usr/share/coder-workspace/addons.json\")); assert d[\"software\"] and d[\"packages\"][\"added\"]"
 	python3 -m venv "$(mktemp -d)/v"
 	echo "image checks passed"'
@@ -44,6 +53,11 @@ docker run --rm --network none --shm-size 256m --entrypoint bash "$img" -c '
 	set -e; export HOME="$(mktemp -d)"; echo "<h1>ok</h1>" >"$HOME/t.html"
 	timeout 120 firefox --headless --screenshot "$HOME/s.png" "file://$HOME/t.html" >"$HOME/ff.log" 2>&1 || { cat "$HOME/ff.log"; exit 1; }
 	test -s "$HOME/s.png" && echo "firefox offline check passed"'
+# Chromium too (its sandbox off where the container allows no user namespaces, as in a workspace pod that does not).
+docker run --rm --network none --shm-size 256m --entrypoint bash "$img" -c '
+	set -e; export HOME="$(mktemp -d)"; echo "<h1>ok</h1>" >"$HOME/t.html"
+	timeout 120 chromium --headless --disable-gpu --screenshot="$HOME/s.png" "file://$HOME/t.html" >"$HOME/cr.log" 2>&1 || { cat "$HOME/cr.log"; exit 1; }
+	test -s "$HOME/s.png" && echo "chromium offline check passed"'
 # code-server and File Browser (Quantum, set up as the template does: under an app path, no sign-in) start and answer
 # with no network at all (the template's two web apps).
 docker run --rm --network none --entrypoint bash "$img" -c '
@@ -57,6 +71,17 @@ docker run --rm --network none --entrypoint bash "$img" -c '
 	curl -fs $fb/health >/dev/null || { cat fb.log; exit 1; }
 	curl -fs "$fb/api/resources?path=/sub&source=files" | grep -q a.txt || { cat fb.log; exit 1; }
 	echo "code-server and File Browser offline checks passed"'
+# File Browser follows a link out of its source into a folder it is told (symlinkTargets: the Cloud Drives open in
+# place), and only there: a link elsewhere stays refused.
+docker run --rm --network none --entrypoint bash "$img" -c '
+	set -e; export HOME="$(mktemp -d)"; cd "$HOME"; mkdir -p files drive/docs other && echo d >drive/docs/d.txt && echo o >other/o.txt
+	ln -s "$HOME/drive" files/cloud-drive && ln -s "$HOME/other" files/other
+	printf "{\"http\": {\"listen\": \"127.0.0.1\", \"port\": 13339, \"baseURL\": \"/\"}, \"server\": {\"disableUpdateCheck\": true, \"database\": {\"path\": \"%s/fb.sqlite\"}, \"sources\": [{\"path\": \"%s/files\", \"name\": \"files\", \"config\": {\"defaultEnabled\": true, \"symlinkTargets\": [\"%s/drive\"]}}]}, \"auth\": {\"methods\": {\"noauth\": true}}}\n" "$HOME" "$HOME" "$HOME" >fb.yaml
+	filebrowser -c fb.yaml --no-input >fb.log 2>&1 &
+	for i in $(seq 1 60); do curl -fs http://127.0.0.1:13339/health >/dev/null && break; sleep 0.5; done
+	curl -fs "http://127.0.0.1:13339/api/resources?path=/cloud-drive/docs&source=files" | grep -q d.txt || { cat fb.log; exit 1; }
+	test "$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:13339/api/resources?path=/other&source=files")" = 403
+	echo "File Browser symlinked folders check passed"'
 # its archive in the bundle, in its section's folder of images.txt (replacing the previous tag's)
 "${top}/helm-chart/mirror-images.sh" store "$img"
 echo "built $img; image ID $(docker image inspect --format '{{.Id}}' "$img")"

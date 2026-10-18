@@ -9,7 +9,7 @@ your network.
 | | Current release: [**v1.39.1**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
 | Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
-| Workspace image | `ghcr.io/user187x/coder-workspace:1.8.7` (desktop, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
+| Workspace image | `ghcr.io/user187x/coder-workspace:1.9.2` (desktop with two themes, Chromium, Terminator, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
 | Platform service | `ghcr.io/user187x/coder-ui-updates` (its code on `coder-image-tools:1.0.0`: BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
 | Bundle | 22 images pinned by digest, in one folder per part (`images/ui/`: the user interface - Coder, the platform service, their databases; `workspaces/`, `cloud-drive/`, ...), and every chart packaged (`charts/`, a Helm repository); `-slim`: only our images; the same release in parts: `-charts` (no images) and `-images-<part>` per folder, together the bundle; `-layer`: the update for a cluster at the previous release, only what changed (often a few MB); `-decorator-update`: an Argo CD decorator install's update, the Coder image and both charts (~300 MB) |
@@ -76,7 +76,7 @@ tar -xzf coder-airgapped-1.39.1-decorator-update.tar.gz && cd coder-airgapped-1.
 ```
 
 The ubuntu-dataflow template's image (Apache NiFi and Airflow) is not in it: the helper keeps that template off
-unless you give it the image (`--dataflow`); the AI templates likewise (`--ai`). See [DEPLOY.md](helm-chart/DEPLOY.md#updating-an-argo-cd-install-the-decorator-update).
+unless you give it the image (`--dataflow`); the AI template likewise (`--ai`). See [DEPLOY.md](helm-chart/DEPLOY.md#updating-an-argo-cd-install-the-decorator-update).
 
 **Argo CD, with the customization layer as a decorator.** The bundle also installs as two charts in one Argo CD
 Application (`argocd/`):
@@ -257,15 +257,13 @@ The full feature list, with where each piece lives and how it is tested, is
 ### Administration and monitoring
 
 - **HUD:** a live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users,
-  failures) and the Coder server's **System Uptime**; its totals on one line. The Settings menu shows the cluster's
+  failures) and the Coder server's **System Uptime**; its totals on one line. The Controls menu shows the cluster's
   CPU, memory and network traffic (last 15 minutes) at a glance.
 - **Workspace settings** on one page of cards (General, Parameters, Schedule, Sharing).
-- **Five workspace templates:** UBUNTU (code-server), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow), the AI
-  workspaces UBUNTU UNSLOTH (Unsloth Studio on the desktop: chat, fine-tuning on a GPU, its OpenAI-compatible server)
-  and UBUNTU OPENCODE (the OpenCode agent on the workspace's own Unsloth), with a shared **model library** (GGUF) in
-  Templates > Images, and UBUNTU OBSIDIAN (Obsidian on the desktop, the vault `~/Obsidian`); the same workspace
-  otherwise; everything offline. Obsidian is for internal use only: `build-bundle.sh --no-obsidian` leaves it out of a
-  bundle that leaves the organization.
+- **Three workspace templates:** UBUNTU (code-server), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow) and the AI
+  workspace UBUNTU OPENCODE (the OpenCode agent on the workspace's own Unsloth Studio, its window on the desktop),
+  with a shared **model library** (GGUF, each model scanned with garak before workspaces have it) in Templates >
+  Images; the same workspace otherwise; everything offline.
 - **Health, monitoring and security posture** views; network and persistence maps.
 - **Banners:** classification banners (e.g. UNCLASSIFIED), and an announcement banner with:
   - its message on an LCD screen set into the banner, over a background image (uploaded or a preset; animated GIFs
@@ -283,7 +281,7 @@ The full feature list, with where each piece lives and how it is tested, is
   active today, grey after 30 seconds without input; anyone can be invisible but to admins); chats kept 30 days by
   default (admins set it, and can purge them); admins see who talks to whom, and **Online Users**: everyone online
   now, live (active or idle, tabs, last input, running workspaces).
-- The **Settings** menu (Admin Controls and quick links), an arrangeable top bar, logo and avatars (uploaded, gallery,
+- The **Controls** menu (Settings and quick links), an arrangeable top bar, logo and avatars (uploaded, gallery,
   defaults).
 - **Agent Activity** (optional): every command run in a workspace, for review.
 - metrics-server installed where the cluster has none.

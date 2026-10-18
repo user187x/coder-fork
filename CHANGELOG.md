@@ -2,10 +2,56 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.69` (fork `766e97304`), workspace image `coder-workspace:1.8.7`, dataflow image
-`coder-workspace-dataflow:1.1.2`, AI image `coder-workspace-ai:2.0.0`, Obsidian image `coder-workspace-obsidian:1.0.0`,
-model scanner `coder-garak:0.17.1-2`, image registry `coder-registry:3.1.2-1`.
+Coder `2.0.0-platform.74` (fork `78563a90c`), workspace image `coder-workspace:1.9.2`, dataflow image
+`coder-workspace-dataflow:1.1.2`, AI image `coder-workspace-ai:2.0.0`, model scanner `coder-garak:0.17.1-2`, image
+registry `coder-registry:3.1.2-1`.
 
+* **UBUNTU UNSLOTH and UBUNTU OBSIDIAN removed:** the chart pushes neither any more (`aiTemplates.unsloth`,
+  `obsidianTemplate` and `obsidianImage` are gone, with their Jobs, icons and the template's `unsloth` and `obsidian`
+  app sets), the Obsidian image (`coder-workspace-obsidian`, `build-obsidian-image.sh`) is no longer built or bundled,
+  and `build-bundle.sh --no-obsidian` and the Argo CD helper's `--obsidian` are gone. UBUNTU OPENCODE stays, on the AI
+  image (its Unsloth server, Unsloth Studio's window on its desktop), with the model library and its garak scan. On a
+  deployment that has the removed templates, they stay in Coder as they are until an admin deletes them; the dev
+  cluster's are deleted, with UBUNTU-x (a template made in the builder).
+* **The Controls menu** (platform.74): the navbar's admin menu is now **Controls**, and its first item, the
+  deployment's settings (Admin Controls before), **Settings**.
+* **File Browser opens the Cloud Drives in place** (workspace image 1.9.2): the image's FileBrowser Quantum is its own
+  build of 2.1.2 (`2.1.2-coder.1`), a FileBrowser update for symlinked folders - a source may follow links into the
+  folders it is told (`symlinkTargets`, opt-in), and a symlinked folder is listed as a folder. The template's helper
+  (version 4) tells it the drives' folders, so `~/cloud-drive`, `~/cloud-drive-shared/...` and `cloud-drive mount`
+  links open where they are; the drives stay in the sidebar too. On an image from before it, the links stay hidden as
+  before (2.0.1 refuses the setting).
+* **File Browser's icon is FileBrowser Quantum's logo:** the template's own icons (`files/icons/`) now go into their
+  ConfigMap as `binaryData`, so any image ships byte for byte, a PNG as well as an SVG (`templates/icons.yaml`); the
+  chart checks that every icon comes through, is a type the platform service serves, is referenced where it exists,
+  and keeps the ConfigMap small. Existing workspaces show it once they update to the new template version.
+* **The Cloud Drive's leading cloud, its size line and its room** (platform.73): the Cloud Drive stays above the
+  table, flush with its right edge, its cables to the rows as before; inside it, the readout on one line and the
+  capacity bar on the next. Its leading cloud - a plus in it, glowing and pulsing, while something is shared with you
+  - opens a window listing what is shared, a card per owner (whose, what, your access, how many files and how much,
+  the newest; Open): the floating clouds above it are gone, as they did not scale. An entire Cloud Drive shared with
+  you read and write adds its capacity to yours - the readout counts it in, the bar gives it a striped part of its
+  own, in the shared colour, with "+N shared".
+* **Sharing files and folders, not only whole drives** (platform.70-73): Share on each file and folder of your Cloud
+  Drive, and Share drive, with whom you choose, read only or read and write (an admin approves it where admins approve shares; a chat
+  message tells them). Shared with you, the Cloud Drive window reaches only what is shared (a folder on the way lists
+  just those; checked by the service for every path, the shared folder or file itself not removable by you), and
+  your workspaces have each at `~/cloud-drive-shared/<owner>/<name>` from their next start - the owner's volume's
+  subPath, mounted on its own, a shared folder a source of its own in File Browser (`drivepeers.share`, `access_at`).
+  A drive shared only in parts has its card in the leading cloud's window, showing its first part, how many more, and
+  that part's own access. (platform.70 moved the Cloud Drive into the table's header, which broke its cables;
+  platform.71-72 put it back as platform.69 had it, and platform.73 brings back platform.70's inside of it.)
+* **Desktop themes - Serenade, or Classic** (workspace image 1.9.1-1.9.2, the Desktop theme parameter): Serenade, the
+  default, is Miserable_Xfce's (github.com/mehedirm6244/Miserable_Xfce, pinned): Tokyo Night colours, the Lavanda GTK
+  theme, cirkles window borders, Zafiro icons, its background, a floating dock (rofi, docklike, eww's sidebar and
+  System stats - without the widgets that need the internet) and picom's animations, rounded corners and shadows
+  (fdev31's fork, drawing without a GPU). Classic is the plain XFCE, lighter over a slow connection. The workspace
+  image's `coder-desktop-theme` puts the choice in the home at the next start, once (the user's own changes kept;
+  Serenade puts the earlier settings aside, Classic puts them back; 1.9.2's profile 2 gives the dock the theme's
+  coloured launchers).
+* **Chromium and Terminator by default:** Chromium (xtradeb's build: Ubuntu's is only the snap; offline policies like
+  Firefox's, trusting the cluster's CA through p11-kit; without its sandbox where a pod allows no user namespaces) is
+  the desktop's web browser, Terminator its terminal - for both themes, set once in each home. Firefox stays.
 * **The Cloud Drives shared with you float above yours** (platform.68-69): on the Workspaces page, a dotted cloud above
   the Cloud Drive button for each drive shared with you, its owner's avatar inside, tethered by a cable to a socket on
   the button (green dots and prongs read and write, blue read only). It drifts in and plugs in; when the share ends its
@@ -17,6 +63,13 @@ model scanner `coder-garak:0.17.1-2`, image registry `coder-registry:3.1.2-1`.
   one shared with you, read only unless shared read and write - and the links it cannot open are hidden in the home.
   Connecting or disconnecting the workspace's drive restarts File Browser with it (`coder-filebrowser`,
   `scripts/filebrowser.sh`); a workspace has it from its next start on the new templates.
+* **...every time, in every template:** File Browser's PID file was kept in the home, so after a restart it could name
+  another process (File Browser then never started, or the wrong process was stopped): it is per container now
+  (`/tmp`), and a process that exited is never taken for it. The helper also comes with the Cloud Drive's platform
+  section, so a template made in the template builder gets the current one at every build (the newer of it and the
+  template's own is kept), and the Cloud Drive's watcher checks every 10 seconds, taking over a File Browser an older
+  `startup.sh` started with this config. A drive whose storage does not answer is left out rather than waited on, and
+  the sidebar's links are set once File Browser answers (up to 5 minutes).
 * **The Images view's registry scores an A:** `coder-image-registry` runs `ghcr.io/user187x/coder-registry:3.1.2-1`,
   Docker's registry 3.1.2 built from its source with Go 1.26.9 and the fixed `golang.org/x/net`, `x/crypto` and
   OpenTelemetry exporters, on Alpine 3.24 with its fixes, its default user 1000 (the chart ran it as 1000 already):

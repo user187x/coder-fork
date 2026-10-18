@@ -9453,7 +9453,8 @@ def main():
                lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), workspace_info,
                shared=safe_shared_workspaces, workspaces=safe_owner_workspaces)
     drivepeers.setup(log, lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), safe_user,
-                     drive_chat_post, safe.publish_now)
+                     drive_chat_post, safe.publish_now, people=lambda: list(chat_people().values()),
+                     item=lambda owner, path: safe.item_kind(owner, path, fresh=True))
     safe.start()
     modelscan.setup(log, KUBE, lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES))
     safe.LIBRARY_HOOKS.update(added=modelscan.added, deleted=modelscan.deleted, decorate=modelscan.decorate)

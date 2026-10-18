@@ -33,14 +33,13 @@ __pycache__/
 # NiFi archive and Airflow constraints downloaded by tools/build-dataflow-image.sh
 /development/workspace-image-dataflow/nifi-*-bin.zip*
 /development/workspace-image-dataflow/airflow-constraints.txt
-# LM Studio's AppImage and OpenCode's release archive, downloaded by tools/build-ai-image.sh
+# OpenCode's release archive, downloaded by tools/build-ai-image.sh (and LM Studio's AppImage, from before: unused)
 /development/workspace-image-ai/LM-Studio-*.AppImage*
 /development/workspace-image-ai/opencode-*.tar.gz*
 # Third-party binaries the images are built from, kept untracked at the root (the build scripts check their SHA-256):
-# FileBrowser Quantum (build-workspace-image.sh), Unsloth's desktop app (build-ai-image.sh), Obsidian
-# (build-obsidian-image.sh); and their copies beside the Dockerfiles during a build
+# FileBrowser Quantum (build-workspace-image.sh), Unsloth's desktop app (build-ai-image.sh); and their copies beside
+# the Dockerfiles during a build. (Obsidian's package, from before: no image uses it, never in git.)
 /filebrowser-quantum
 /unsloth.AppImage
 /obsidian.deb
 /development/workspace-image-ai/unsloth.AppImage
-/development/workspace-image-obsidian/obsidian.deb

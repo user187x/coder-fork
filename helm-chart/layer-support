@@ -249,7 +249,7 @@ def cmd_build(base_version, staging):
     base_by_repo = {repository(img): img for _, img, _, _ in base if ours(img)}
     version = re.search(r"^version: *(\S+)", open(os.path.join(HERE, "coder-airgapped/Chart.yaml")).read(), re.M)[1]
     profile = os.environ.get("LAYER_PROFILE", "coder")
-    # Images left out altogether (build-bundle.sh --no-lmstudio: the AI image), by a regular expression.
+    # Images left out altogether (LAYER_SKIP_IMAGES), by a regular expression.
     skip = re.compile(os.environ["LAYER_SKIP_IMAGES"]) if os.environ.get("LAYER_SKIP_IMAGES") else None
     entries, sums = [], {}
     for group, image, digest, folder in current:

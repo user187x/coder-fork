@@ -17,7 +17,7 @@ public ones can be left out where your registry has them already.
 | `reference/` | Argo CD + Keycloak as the reference cluster runs them - not pushed unless asked (public) | 1.0 GB | no – reference only: `push REGISTRY reference` |
 
 The user interface is `ui/`: Coder itself (the fork – the dashboard and its server), the platform service
-(coder-ui-updates: Admin Controls, the Cloud Drive's API, chat, Health, ...) and the announcement service
+(coder-ui-updates: Controls › Settings, the Cloud Drive's API, chat, Health, ...) and the announcement service
 (coder-banner), the image they run on, and the database Coder and the platform service's logs keep their data in.
 
 The release is also published in parts: `coder-airgapped-<version>-charts.tar.gz` (everything but the images) and one
@@ -60,9 +60,9 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
-| `ghcr.io_user187x_coder-workspace_1.8.6.tar.gz` | `ghcr.io/user187x/coder-workspace:1.8.6` | 1.3 GB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker), Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc and desktop background (development/workspace-image) |
-| `ghcr.io_user187x_coder-workspace-dataflow_1.1.1.tar.gz` | `ghcr.io/user187x/coder-workspace-dataflow:1.1.1` | 3.0 GB | workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), Apache Airflow 3.3.2 (development/workspace-image-dataflow) |
-| `ghcr.io_user187x_coder-workspace-ai_1.0.1.tar.gz` | `ghcr.io/user187x/coder-workspace-ai:1.0.1` | 2.4 GB | workspace pods (ubuntu-lmstudio, ubuntu-opencode): the workspace image + LM Studio 0.4.26 (the desktop app, its server and lms; internal business use only - never on a public registry or release) and OpenCode 1.18.34 (development/workspace-image-ai) |
+| `ghcr.io_user187x_coder-workspace_1.9.2.tar.gz` | `ghcr.io/user187x/coder-workspace:1.9.2` | 1.6 GB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker) with its Classic and Serenade themes, Chromium (default), Terminator, Firefox, JetBrains Mono Nerd Font, tmux, CLI tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc and desktop background (development/workspace-image) |
+| `ghcr.io_user187x_coder-workspace-dataflow_1.1.2.tar.gz` | `ghcr.io/user187x/coder-workspace-dataflow:1.1.2` | 3.2 GB | workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), Apache Airflow 3.3.2 (development/workspace-image-dataflow) |
+| `ghcr.io_user187x_coder-workspace-ai_2.0.0.tar.gz` | `ghcr.io/user187x/coder-workspace-ai:2.0.0` | 7.2 GB | workspace pods (ubuntu-opencode): the workspace image + Unsloth Studio (its server: PyTorch for CUDA, llama.cpp; AGPL-3.0) and OpenCode 1.18.34 (development/workspace-image-ai) |
 
 ### `cloud-drive/`
 

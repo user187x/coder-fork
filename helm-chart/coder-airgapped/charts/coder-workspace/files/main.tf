@@ -57,17 +57,16 @@ variable "cluster_admin_roles" {
 }
 
 # Which apps the workspace has: "developer" (ubuntu-vnc-desktop: code-server), "dataflow" (ubuntu-dataflow:
-# Apache NiFi, Apache Airflow), one of the AI templates on the AI workspace image: "unsloth" (ubuntu-unsloth: Unsloth
-# Studio on the desktop, code-server) and "opencode" (ubuntu-opencode: the OpenCode agent, code-server; Unsloth serving
-# its models), or "obsidian" (ubuntu-obsidian: Obsidian on the desktop, on its own image). Everything else is the same.
-# The chart pushes this template once per set (templates/job.yaml).
+# Apache NiFi, Apache Airflow), or "opencode" (ubuntu-opencode, on the AI workspace image: the OpenCode agent,
+# code-server; the image's Unsloth serving its models). Everything else is the same. The chart pushes this template
+# once per set (templates/job.yaml).
 variable "app_set" {
   type        = string
-  description = "developer (code-server), dataflow (Apache NiFi, Apache Airflow), unsloth (Unsloth Studio), opencode (OpenCode on Unsloth) or obsidian (Obsidian)."
+  description = "developer (code-server), dataflow (Apache NiFi, Apache Airflow) or opencode (OpenCode on Unsloth)."
   default     = "developer"
   validation {
-    condition     = contains(["developer", "dataflow", "unsloth", "opencode", "obsidian"], var.app_set)
-    error_message = "app_set must be developer, dataflow, unsloth, opencode or obsidian."
+    condition     = contains(["developer", "dataflow", "opencode"], var.app_set)
+    error_message = "app_set must be developer, dataflow or opencode."
   }
 }
 
@@ -145,11 +144,9 @@ variable "images_registry" {
 }
 
 locals {
-  dataflow      = var.app_set == "dataflow"
-  # The AI templates: Unsloth Studio (its app on the desktop and its server) in both, OpenCode's app in ubuntu-opencode.
-  ai = contains(["unsloth", "opencode"], var.app_set)
-  # The Obsidian template: Obsidian is the desktop's app; no code-server.
-  obsidian      = var.app_set == "obsidian"
+  dataflow = var.app_set == "dataflow"
+  # The AI template (ubuntu-opencode): OpenCode's app, on the image's Unsloth server.
+  ai            = var.app_set == "opencode"
   default_image = var.workspace_image != "" ? var.workspace_image : "codercom/enterprise-base:ubuntu"
   # The Workspace image parameter's choice (data.coder_parameter.workspace_image), where the template offers one:
   # "template" - the template's own image, whatever it is at each start (so a template update brings its new image);
@@ -256,9 +253,9 @@ data "coder_parameter" "cpu" {
   display_name = "CPU"
   description  = "The number of CPU cores"
   # A language model on the CPU wants several.
-  default      = local.ai ? "4" : "2"
-  icon         = "/icon/memory.svg"
-  mutable      = true
+  default = local.ai ? "4" : "2"
+  icon    = "/icon/memory.svg"
+  mutable = true
   option {
     name  = "2 Cores"
     value = "2"
@@ -291,9 +288,9 @@ data "coder_parameter" "memory" {
   description  = "The amount of memory in GB"
   # NiFi (a 1 GB Java heap) and Airflow beside the desktop need more than the developer apps; a language model needs
   # its size and its context's (an 8B model at 4 bits: some 5 GB, and 1-4 GB more for a long context).
-  default      = local.ai ? "8" : local.dataflow ? "6" : "2"
-  icon         = "/__icons/memory.svg" # files/icons/memory.svg (a memory module), served by templates/icons.yaml
-  mutable      = true
+  default = local.ai ? "8" : local.dataflow ? "6" : "2"
+  icon    = "/__icons/memory.svg" # files/icons/memory.svg (a memory module), served by templates/icons.yaml
+  mutable = true
   option {
     name  = "2 GB"
     value = "2"
@@ -358,7 +355,32 @@ data "coder_parameter" "start_directory" {
   }
 }
 
-# The AI templates: how many tokens a model gets when OpenCode loads it in Unsloth (OpenCode's instructions alone take
+# The desktop's look (where the template has the Desktop app): Serenade, Miserable_Xfce's theme with its floating dock
+# and animations, or Classic, the plain XFCE - lighter on a slow connection, as the desktop reaches the browser over
+# VNC. The workspace image's coder-desktop-theme puts it in the home at the next start (the user's own changes kept
+# until the choice changes).
+data "coder_parameter" "desktop_theme" {
+  count        = var.desktop ? 1 : 0
+  name         = "desktop_theme"
+  display_name = "Desktop theme"
+  description  = "How the desktop looks. Serenade: a dark theme with a floating dock and animations. Classic: plain XFCE, lighter on a slow connection. Changed, it applies at the next start."
+  type         = "string"
+  default      = "serenade"
+  icon         = "/icon/desktop.svg"
+  mutable      = true
+  option {
+    name        = "Serenade"
+    value       = "serenade"
+    description = "Tokyo Night colours, a floating dock, rounded windows and animations"
+  }
+  option {
+    name        = "Classic"
+    value       = "classic"
+    description = "Plain XFCE without effects: the least to draw over a slow connection"
+  }
+}
+
+# The AI template (ubuntu-opencode): how many tokens a model gets when OpenCode loads it in Unsloth (OpenCode's instructions alone take
 # some 10 000; the Unsloth app sets its own per model). More context takes more memory.
 data "coder_parameter" "context_length" {
   count        = local.ai ? 1 : 0
@@ -386,7 +408,7 @@ data "coder_parameter" "context_length" {
   }
 }
 
-# The AI templates: NVIDIA GPUs for the workspace (nvidia.com/gpu, from the cluster's NVIDIA device plugin; Unsloth
+# The AI template (ubuntu-opencode): NVIDIA GPUs for the workspace (nvidia.com/gpu, from the cluster's NVIDIA device plugin; Unsloth
 # fine-tunes on them, and runs its models on them with llama.cpp's CUDA build). The workspace waits for a node that has
 # them free; none: the CPU (chat only; fine-tuning needs a GPU).
 data "coder_parameter" "gpus" {
@@ -510,12 +532,17 @@ locals {
   : local.cloud_drive_source == null || try(local.cloud_drive_source.running, false) ? "mount" : "offline")
   cloud_drive_claim = local.cloud_drive_mode != "mount" ? "" : (local.cloud_drive_source == null
   ? "coder-safe-${data.coder_workspace_owner.me.id}" : "coder-drive-src-${data.coder_workspace_owner.me.id}")
-  # The Cloud Drives other users shared with the owner (Cloud Drive > Sharing: asked for in chat, accepted by their
-  # owner, approved by an admin): [{owner, name, claim, readOnly}], each owner's volume, mounted at
-  # /mnt/cloud-drive-peers/<name> (read only unless shared read and write) and linked at ~/cloud-drive-shared/<name>;
-  # none in a workspace shared with others.
-  cloud_drive_peers = [for p in try(local.cloud_drive_state.peers[data.coder_workspace_owner.me.id], []) : p
+  # What other users shared with the owner (Cloud Drive > Sharing: asked for in chat and accepted, or shared by its
+  # owner; approved by an admin): [{id, owner, name, claim, readOnly, kind, path, item}] - an entire drive (kind
+  # "drive") mounted at /mnt/cloud-drive-peers/<name> and linked at ~/cloud-drive-shared/<name>; a folder or file of
+  # one (its volume's subPath) at /mnt/cloud-drive-items/<id>, linked at ~/cloud-drive-shared/<name>/<item>; read
+  # only unless shared read and write; none in a workspace shared with others.
+  cloud_drive_peers = [for p in try(local.cloud_drive_state.peers[data.coder_workspace_owner.me.id], []) : merge(
+    { id = "", kind = "drive", path = "", item = "" }, p)
   if local.cloud_drive_mode != "" && !local.cloud_drive_shared]
+  # One volume for each owner's volume (the kubelet takes a claim named twice in a pod as one volume, mounted the way
+  # the first says): read only when all that is shared of it is; each mount read only or not on its own.
+  cloud_drive_peer_volumes = { for p in local.cloud_drive_peers : "peer-${substr(md5(p.claim), 0, 16)}" => p... }
 }
 
 # The Cloud Drive's state, kept by the platform service (the chart's coder-workspace Role lets Coder's service account
@@ -545,6 +572,11 @@ resource "coder_script" "cloud_drive" {
     mount = local.cloud_drive_claim != "" ? local.cloud_drive_mount : ""
     # the `cloud-drive` command: the Cloud Drive mounted into folders of the workspace (scripts/cloud-drive-cli.py)
     cli = base64encode(file("${path.module}/scripts/cloud-drive-cli.py"))
+    # File Browser's helper, here too: every template gets the current one with this section (scripts/filebrowser.sh)
+    filebrowser = base64encode(file("${path.module}/scripts/filebrowser.sh"))
+    # the folders and files shared with the owner, for their links: [{id, owner, item}]
+    items = base64encode(jsonencode([for p in local.cloud_drive_peers : { id = p.id, owner = p.name, item = p.item }
+    if p.kind != "drive"]))
   })
 }
 # platform:end cloud-drive
@@ -577,8 +609,8 @@ locals {
 # platform:end code-server-ha
 
 resource "coder_agent" "main" {
-  os             = "linux"
-  arch           = "amd64"
+  os   = "linux"
+  arch = "amd64"
   # The terminal's and SSH sessions' starting directory (the Start folder parameter; the startup script makes it).
   dir = data.coder_parameter.start_directory.value
 
@@ -589,7 +621,7 @@ resource "coder_agent" "main" {
   }
 
   # Admins' terminals, k9s and apps find the cluster sign-in first, then their own ~/.kube/config.
-  # The AI templates: the Context length OpenCode loads a model with (coder-opencode, in the AI workspace image).
+  # The AI template: the Context length OpenCode loads a model with (coder-opencode, in the AI workspace image).
   env = merge(
     local.cluster_admin ? { KUBECONFIG = "${local.cluster_kubeconfig}:/home/coder/.kube/config" } : {},
     local.ai ? { CODER_AI_CONTEXT = local.context_length } : {},
@@ -608,6 +640,7 @@ resource "coder_agent" "main" {
     start_directory        = data.coder_parameter.start_directory.value
     context_length         = local.context_length
     desktop                = var.desktop
+    desktop_theme          = var.desktop ? data.coder_parameter.desktop_theme[0].value : "classic"
     file_browser           = var.file_browser
     cloud_drive_link       = var.user_storage ? var.user_storage_path : ""
     # coder-filebrowser: File Browser started with every Cloud Drive here as a source of its own
@@ -694,21 +727,18 @@ resource "coder_agent" "main" {
   # platform:end metrics
 }
 
-# In ubuntu-unsloth the desktop is Unsloth Studio's window, and in ubuntu-obsidian Obsidian's (the app starts there), so
-# it is that app.
 resource "coder_app" "novnc" {
   count        = var.desktop ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "novnc"
-  display_name = var.app_set == "unsloth" ? "Unsloth" : local.obsidian ? "Obsidian" : "Desktop"
-  # Coder's own icon (served by the dashboard; the noVNC logo was on the internet); the app's (files/icons/*.svg)
-  icon = (var.app_set == "unsloth" ? "/__icons/unsloth.svg" : local.obsidian ? "/__icons/obsidian.svg"
-  : "/icon/desktop.svg")
+  display_name = "Desktop"
+  # Coder's own icon (served by the dashboard; the noVNC logo was on the internet)
+  icon = "/icon/desktop.svg"
   # Path-based (no wildcard DNS/route needed). noVNC opens its websocket relative to the host
   # root, so pass the prefixed path explicitly ("main" = agent name, as in filebrowser above).
-  url          = "http://localhost:6901?autoconnect=true&resize=remote&compression=0&path=@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/novnc/websockify"
-  subdomain    = false
-  share        = "owner"
+  url       = "http://localhost:6901?autoconnect=true&resize=remote&compression=0&path=@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/novnc/websockify"
+  subdomain = false
+  share     = "owner"
 
   healthcheck {
     url       = "http://localhost:6901/"
@@ -725,7 +755,7 @@ resource "coder_app" "filebrowser" {
   agent_id     = coder_agent.main.id
   slug         = "filebrowser"
   display_name = "File Browser"
-  icon         = "/icon/folder.svg"
+  icon         = "/__icons/filebrowser-quantum.png" # files/icons/filebrowser-quantum.png, served by templates/icons.yaml
   url          = "http://localhost:13339/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/filebrowser/"
   subdomain    = false
   share        = "owner"
@@ -738,7 +768,7 @@ resource "coder_app" "filebrowser" {
 }
 
 resource "coder_app" "code-server" {
-  count        = local.dataflow || local.obsidian ? 0 : 1
+  count        = local.dataflow ? 0 : 1
   agent_id     = coder_agent.main.id
   slug         = "code-server"
   display_name = "code-server"
@@ -778,9 +808,9 @@ resource "coder_app" "nifi" {
   icon         = "/__icons/nifi.svg" # files/icons/nifi.svg, served by templates/icons.yaml
   # The root: Coder joins the app URL's path to every request, and NiFi serves at /nifi and /nifi-api (its root
   # redirects to its UI, under the app's path).
-  url          = "http://127.0.0.1:8080"
-  subdomain    = false
-  share        = "owner"
+  url       = "http://127.0.0.1:8080"
+  subdomain = false
+  share     = "owner"
 
   # The dashboard's panel shows the port and protocol it is checked on.
   healthcheck {
@@ -851,9 +881,9 @@ resource "coder_app" "airflow" {
   display_name = "Apache Airflow"
   icon         = "/icon/airflow.svg" # Coder's own icon
   # Airflow serves under the full app path (its base_url, in the startup script), so the URL carries it too.
-  url          = "http://localhost:8090/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow/"
-  subdomain    = false
-  share        = "owner"
+  url       = "http://localhost:8090/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow/"
+  subdomain = false
+  share     = "owner"
 
   healthcheck {
     url       = "http://localhost:8090/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow/api/v2/monitor/health"
@@ -1029,8 +1059,8 @@ resource "kubernetes_deployment_v1" "main" {
         # platform:end lockdown
 
         container {
-          name              = "dev"
-          image             = local.workspace_image
+          name  = "dev"
+          image = local.workspace_image
           # The workspace image is versioned (a new build gets a new tag), and offline there is nothing to pull from.
           image_pull_policy = "IfNotPresent"
           # No core dumps from the agent or anything it starts (terminals, the desktop, apps).
@@ -1058,7 +1088,7 @@ resource "kubernetes_deployment_v1" "main" {
               "cpu"    = "250m"
               "memory" = "512Mi"
             }
-            # The AI templates' GPUs (none: no such limit).
+            # The AI template's GPUs (none: no such limit).
             limits = merge({
               "cpu"    = "${data.coder_parameter.cpu.value}"
               "memory" = "${data.coder_parameter.memory.value}Gi"
@@ -1092,13 +1122,15 @@ resource "kubernetes_deployment_v1" "main" {
               name       = "safe"
             }
           }
-          # The Cloud Drives shared with the owner (local.cloud_drive_peers).
+          # What is shared with the owner (local.cloud_drive_peers): entire drives, folders and files of them.
           dynamic "volume_mount" {
             for_each = local.cloud_drive_peers
             content {
-              mount_path = "/mnt/cloud-drive-peers/${volume_mount.value.name}"
-              name       = "peer-drive-${volume_mount.key}"
-              read_only  = volume_mount.value.readOnly
+              mount_path = (volume_mount.value.kind == "drive" ? "/mnt/cloud-drive-peers/${volume_mount.value.name}"
+              : "/mnt/cloud-drive-items/${volume_mount.value.id}")
+              name      = "peer-${substr(md5(volume_mount.value.claim), 0, 16)}"
+              read_only = volume_mount.value.readOnly
+              sub_path  = volume_mount.value.path
             }
           }
           # Whether it is connected: the pod's annotation platform.coder/cloud-drive, kept current by the kubelet.
@@ -1137,7 +1169,7 @@ resource "kubernetes_deployment_v1" "main" {
             }
           }
           # platform:end code-server-ha
-          # The AI templates: the model library (Templates > Images), read-only: the same GGUF models in every AI
+          # The AI template: the model library (Templates > Images), read-only: the same GGUF models in every AI
           # workspace (Unsloth scans it).
           dynamic "volume_mount" {
             for_each = var.user_storage && local.ai ? [1] : []
@@ -1290,14 +1322,14 @@ resource "kubernetes_deployment_v1" "main" {
             }
           }
         }
-        # The Cloud Drives shared with the owner: their owners' volumes (local.cloud_drive_peers).
+        # What is shared with the owner: their owners' volumes, each once (local.cloud_drive_peer_volumes).
         dynamic "volume" {
-          for_each = local.cloud_drive_peers
+          for_each = local.cloud_drive_peer_volumes
           content {
-            name = "peer-drive-${volume.key}"
+            name = volume.key
             persistent_volume_claim {
-              claim_name = volume.value.claim
-              read_only  = volume.value.readOnly
+              claim_name = volume.value[0].claim
+              read_only  = alltrue([for p in volume.value : p.readOnly])
             }
           }
         }

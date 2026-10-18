@@ -2674,8 +2674,6 @@ class CodeServerHATest(unittest.TestCase):
                          "coder-cs-111111112222.coder.svc.clusterset.local:8080")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class CloudDrivePeersTest(unittest.TestCase):
@@ -2742,7 +2740,8 @@ class CloudDrivePeersTest(unittest.TestCase):
             p.approve(self.BOB, sid, {"approve": True})
         p.approve(self.ADMIN, sid, {"approve": True})
         self.assertEqual(self.safe.peer_mounts(), {self.ANN["id"]: [
-            {"owner": self.BOB["id"], "name": "bob", "claim": "coder-safe-" + self.BOB["id"], "readOnly": True}]})
+            {"id": sid, "owner": self.BOB["id"], "name": "bob", "claim": "coder-safe-" + self.BOB["id"],
+             "readOnly": True, "kind": "drive", "path": "", "item": ""}]})
         # the templates hear of it, and Ann's running workspace needs a restart to get it
         self.safe.publish_state({})
         self.assertEqual(json.loads(self.kube.state)["peers"][self.ANN["id"]][0]["claim"],
@@ -2789,9 +2788,9 @@ class CloudDrivePeersTest(unittest.TestCase):
         p.answer(self.BOB, read, {"accept": True})
         write = p.request(self.EVE, {"owner": self.BOB["id"], "access": "write"})["share"]["id"]
         p.answer(self.BOB, write, {"accept": True, "access": "write"})
-        self.assertEqual(p.access(self.ANN["id"], self.BOB["id"]), "read")
-        self.assertEqual(p.access(self.EVE["id"], self.BOB["id"]), "write")
-        self.assertIsNone(p.access(self.BOB["id"], self.ANN["id"]))
+        self.assertEqual(p.access_at(self.ANN["id"], self.BOB["id"], ""), "read")
+        self.assertEqual(p.access_at(self.EVE["id"], self.BOB["id"], "a/b"), "write")
+        self.assertIsNone(p.access_at(self.BOB["id"], self.ANN["id"], ""))
 
         def call(user, method, path, query):
             sent, seen = [], []
@@ -2816,6 +2815,93 @@ class CloudDrivePeersTest(unittest.TestCase):
         self.assertEqual(call(self.ANN, "GET", "list", drive), (403, []))
         p.save_settings(self.ADMIN, {"enabled": False})
         self.assertEqual(call(self.EVE, "GET", "list", drive), (403, []))
+
+    def test_owner_shares_a_folder_or_a_file_and_only_that_is_reached(self):
+        """The owner shares a folder (read only) and a file (read and write) of their drive: active at once (no admin
+        approval), mounted by subPath (only while there), and in the Cloud Drive window only those are reached - the
+        top lists just them, outside them nothing, a read-only folder takes no writes, and neither the shared folder
+        nor the shared file itself can be removed by the other user."""
+        p, safe = self.peers, self.safe
+        safe.ENABLED = True
+        p.save_settings(self.ADMIN, {"enabled": True, "adminApproval": False})
+        there = {"docs": "folder", "docs/plan.md": "file", "notes.txt": "file", "old.txt": "file"}
+        p.ITEM = lambda owner, path: there.get(path)
+        p.PEOPLE = lambda: [{"id": u["id"], "username": u["username"], "name": ""} for u in (self.ANN, self.BOB, self.EVE)]
+        self.assertEqual([x["username"] for x in p.people(self.BOB)["people"]], ["ann", "eve"])
+        folder = p.share(self.BOB, {"to": self.ANN["id"], "path": "docs/", "access": "read"})["share"]
+        self.assertEqual((folder["kind"], folder["path"], folder["state"], folder["by"]), ("folder", "docs", "active", "owner"))
+        self.assertIn("folder docs", self.chat[-1][2])
+        file = p.share(self.BOB, {"to": self.ANN["id"], "path": "notes.txt", "access": "write"})["share"]
+        gone = p.share(self.BOB, {"to": self.ANN["id"], "path": "old.txt", "access": "read"})["share"]
+        with self.assertRaises(ValueError):  # once
+            p.share(self.BOB, {"to": self.ANN["id"], "path": "docs", "access": "write"})
+        with self.assertRaises(ValueError):  # not there
+            p.share(self.BOB, {"to": self.ANN["id"], "path": "nothing", "access": "read"})
+        with self.assertRaises(ValueError):  # their own
+            p.share(self.BOB, {"to": self.BOB["id"], "path": "", "access": "read"})
+        whole = p.share(self.BOB, {"to": self.EVE["id"], "path": "", "access": "write"})["share"]
+        self.assertEqual(whole["kind"], "drive")
+        # widest access that reaches a path
+        self.assertEqual(p.access_at(self.ANN["id"], self.BOB["id"], "docs/a/b.txt"), "read")
+        self.assertEqual(p.access_at(self.ANN["id"], self.BOB["id"], "notes.txt"), "write")
+        self.assertIsNone(p.access_at(self.ANN["id"], self.BOB["id"], "notes.txt.bak"))
+        self.assertIsNone(p.access_at(self.ANN["id"], self.BOB["id"], ""))
+        # mounted by subPath, a file no longer there left out
+        del there["old.txt"]
+        with mock.patch.object(safe, "item_kind", lambda owner, path: there.get(path)):
+            mounts = safe.peer_mounts()
+        self.assertEqual(sorted((m["kind"], m["path"], m["item"], m["readOnly"]) for m in mounts[self.ANN["id"]]),
+                         [("file", "notes.txt", "notes.txt", False), ("folder", "docs", "docs", True)])
+        self.assertEqual([m["kind"] for m in mounts[self.EVE["id"]]], ["drive"])
+        self.assertEqual(safe.peer_mount_path(mounts[self.ANN["id"]][0]), "/mnt/cloud-drive-items/" + mounts[self.ANN["id"]][0]["id"])
+        self.assertEqual(safe.peer_mount_path(mounts[self.EVE["id"]][0]), "/mnt/cloud-drive-peers/bob")
+
+        real = {"": {"path": "", "folders": [{"name": "docs"}, {"name": "private"}],
+                     "files": [{"name": "notes.txt", "size": 3}, {"name": "secret.txt", "size": 9}]},
+                "docs": {"path": "docs", "folders": [], "files": [{"name": "plan.md", "size": 5}]}}
+
+        def call(user, method, path, query, body=None):
+            sent, done = [], []
+            h = mock.Mock()
+            h.headers = {"X-Requested-With": "coder-ui", "Origin": "https://c.example", "Host": "c.example"}
+            h.user = lambda: (user, None)
+            h.send_json = lambda status, out: sent.append((status, out))
+            with mock.patch.object(safe, "listing", lambda u, path: real[path]), \
+                    mock.patch.object(safe, "make_folder", lambda u, path: done.append(("folder", path)) or {"ok": True}), \
+                    mock.patch.object(safe, "delete", lambda u, path: done.append(("delete", path)) or {"ok": True}), \
+                    mock.patch.object(safe, "upload", lambda h, u, path: done.append(("upload", path)) or h.send_json(200, {})), \
+                    mock.patch.object(safe, "download", lambda h, u, path: done.append(("download", path)) or h.send_json(200, {})), \
+                    mock.patch.object(safe, "read_json", lambda h, limit=8192: body or {}):
+                safe.handle(h, method, "/__coder-ui/api/safe/" + path, query)
+            return sent[0][0], sent[0][1], done
+
+        drive = "drive=" + self.BOB["id"]
+        status, top, _ = call(self.ANN, "GET", "list", "path=&" + drive)
+        self.assertEqual(status, 200)
+        self.assertEqual((top["access"], top["folders"], top["files"]),
+                         (None, [{"name": "docs", "access": "read"}], [{"name": "notes.txt", "size": 3, "access": "write"}]))
+        status, docs, _ = call(self.ANN, "GET", "list", "path=docs&" + drive)
+        self.assertEqual((status, docs["access"], docs["files"]), (200, "read", [{"name": "plan.md", "size": 5}]))
+        self.assertEqual(call(self.ANN, "GET", "list", "path=private&" + drive)[0], 403)
+        self.assertEqual(call(self.ANN, "GET", "download", "path=secret.txt&" + drive)[0], 403)
+        self.assertEqual(call(self.ANN, "GET", "download", "path=docs/plan.md&" + drive)[2], [("download", "docs/plan.md")])
+        self.assertEqual(call(self.ANN, "POST", "folder", drive, {"path": "docs/new"})[0], 403)  # read only
+        self.assertEqual(call(self.ANN, "PUT", "upload", "path=notes.txt&" + drive)[2], [("upload", "notes.txt")])
+        self.assertEqual(call(self.ANN, "PUT", "upload", "path=new.txt&" + drive)[0], 403)  # beside the file: no
+        self.assertEqual(call(self.ANN, "POST", "delete", drive, {"path": "notes.txt"})[0], 403)  # the shared file
+        self.assertEqual(call(self.ANN, "GET", "glance", drive)[0], 403)  # not the entire drive
+        self.assertEqual(call(self.EVE, "POST", "delete", drive, {"path": "docs/"})[2], [("delete", "docs/")])  # all of it, write
+        # a running workspace that mounts exactly these needs no restart; one that mounts the drive does
+        pod = self.kube.pods[0]
+        pod["spec"]["containers"] = [{"name": "dev", "volumeMounts": [
+            {"name": "x", "mountPath": "/mnt/cloud-drive-items/" + folder["id"], "readOnly": True, "subPath": "docs"},
+            {"name": "x", "mountPath": "/mnt/cloud-drive-items/" + file["id"], "subPath": "notes.txt"}]}]
+        with mock.patch.object(safe, "item_kind", lambda owner, path: there.get(path)):
+            self.assertEqual(safe.stale_mounts(self.ANN["id"], None, set()), [])
+            p.end(self.ANN, file["id"])
+            self.assertEqual(safe.stale_mounts(self.ANN["id"], None, set()), [self.WS])
+        self.assertIn("notes.txt", self.chat[-1][2])
+        p.end(self.BOB, gone["id"])
 
     def test_shared_drive_glance_counts_its_files_for_whom_it_is_shared_with(self):
         """The Workspaces page's cloud of a drive shared with the caller: its HUD reads how many files, how much and the
@@ -2851,3 +2937,7 @@ class CloudDrivePeersTest(unittest.TestCase):
         self.assertEqual(call(self.EVE, "drive=" + self.BOB["id"])[0], 403)  # not shared with eve
         p.end(self.BOB, sid)
         self.assertEqual(call(self.ANN, "drive=" + self.BOB["id"])[0], 403)
+
+
+if __name__ == "__main__":
+    unittest.main()

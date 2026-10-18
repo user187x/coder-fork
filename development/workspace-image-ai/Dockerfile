@@ -1,4 +1,4 @@
-# The workspace image of the AI templates (ubuntu-unsloth and ubuntu-opencode): the ubuntu-vnc-desktop image
+# The workspace image of the AI template (ubuntu-opencode): the ubuntu-vnc-desktop image
 # (../workspace-image) and
 #   - Unsloth Studio (AGPL-3.0): local language models - chat with GGUF models through llama.cpp, fine-tuning on NVIDIA
 #     GPUs, datasets, exports - and its OpenAI-compatible API (127.0.0.1:8888/v1). Its desktop app (the unsloth.AppImage
@@ -15,7 +15,7 @@
 # Built by ../tools/build-ai-image.sh, which puts the AppImage and OpenCode's archive (pinned, checked against their
 # SHA-256) beside this file; the build downloads Unsloth Studio's Python packages, llama.cpp and Node (pinned by the
 # installer of that AppImage).
-ARG BASE=ghcr.io/user187x/coder-workspace:1.8.7
+ARG BASE=ghcr.io/user187x/coder-workspace:1.9.2
 FROM ${BASE}
 ARG OPENCODE_VERSION=1.18.34
 # PyTorch's wheel index and llama.cpp's backend: CUDA, whatever the build machine has (--build-arg ...=cpu for a

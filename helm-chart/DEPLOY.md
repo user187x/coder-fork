@@ -171,8 +171,8 @@ helm logged in as for the install; `HELM_PUSH_ARGS="--ca-file ca.crt"` for a pri
 applies it and asks Argo CD to refresh; Coder restarts on the new image with no gap. The ubuntu-dataflow template
 (Apache NiFi and Airflow) runs on its own image, which the update does not carry: the helper turns that template off
 (`coder-workspace.dataflowTemplate.enabled: false`) unless you give it the image (`--dataflow keep` when it is in
-your registry, `--dataflow <image>` for another). The AI templates (Unsloth, OpenCode) likewise: off unless you give
-it their image (`--ai keep` or `--ai <image>`). Back: restore the `.bak` file and apply it. The full bundle carries
+your registry, `--dataflow <image>` for another). The AI template (OpenCode on Unsloth) likewise: off unless you give
+it its image (`--ai keep` or `--ai <image>`). Back: restore the `.bak` file and apply it. The full bundle carries
 the same helper (`argocd/update-application.sh`).
 
 ---
@@ -311,7 +311,7 @@ You are the Coder admin (owner).
 **Change the password now:** your avatar › **Account** › **Security**. (Later syncs never reset it.)
 
 Everyone else clicks the **Keycloak logo** on the sign-in page and logs in with Keycloak; they get a normal account.
-The admin can make others admins in **Settings › Admin Controls › Users**. The banner starts empty – publish one at
+The admin can make others admins in **Controls › Settings › Users**. The banner starts empty – publish one at
 `https://coder.<your-domain>/__banner/admin`.
 
 Then give the image builder its base image (Templates › Images builds on the workspace image, from its own
@@ -497,31 +497,28 @@ volume (`imageBuilder.enabled`) and the platform service's permission to manage 
 > k9s/kubectl and the JetBrains Mono Nerd Font. Nothing is downloaded when a workspace starts (`coder-workspace:1.8.0`
 > and later).
 
-## AI workspaces: Unsloth Studio and OpenCode
+## AI workspaces: OpenCode on Unsloth
 
-Two more templates, on one image (`ghcr.io/user187x/coder-workspace-ai`: the workspace image + Unsloth Studio and
-OpenCode 1.18.34; `coder-workspace.aiTemplates`, on by default). Unsloth Studio replaced LM Studio: on a deployment that
-had **UBUNTU LM STUDIO**, the chart takes that template over as **UBUNTU UNSLOTH** (`ubuntu-lmstudio` renamed
-`ubuntu-unsloth`, its old default name and icon replaced), so its workspaces and history carry on; each is offered the
-update, and runs Unsloth from its next start after it.
+One more template, on its own image (`ghcr.io/user187x/coder-workspace-ai`: the workspace image + Unsloth Studio and
+OpenCode 1.18.34; `coder-workspace.aiTemplates`, on by default):
 
-* **UBUNTU UNSLOTH** (`ubuntu-unsloth`): its **Unsloth** app is the workspace's desktop with Unsloth Studio's window
-  on it (its desktop app, the provided `unsloth.AppImage`) - chat with GGUF models, fine-tune (on a GPU), datasets,
-  exports. `unsloth` in the terminal; code-server.
 * **UBUNTU OPENCODE** (`ubuntu-opencode`): its **OpenCode** app opens the OpenCode agent in a terminal in the Start
   folder, on the workspace's own Unsloth: `unsloth start opencode` loads the model loaded in Unsloth, else the first
   GGUF model of the model library or of the Cloud Drive, at the template's **Context length** (32K tokens by default;
   OpenCode needs at least 16K), gives OpenCode an API key of this Unsloth and starts it. code-server, and the desktop
-  with Unsloth.
+  with Unsloth Studio's window on it (chat with GGUF models, fine-tune on a GPU, datasets, exports; `unsloth` in the
+  terminal).
 
-Both run Unsloth's server on `127.0.0.1:8888` (its desktop app starts it; OpenAI-compatible at `/v1`, the workspace's
-own, behind its own API keys; Open Ports forwards it).
+It runs Unsloth's server on `127.0.0.1:8888` (its desktop app starts it; OpenAI-compatible at `/v1`, the workspace's
+own, behind its own API keys; Open Ports forwards it). The templates UBUNTU UNSLOTH (`ubuntu-unsloth`, which took over
+UBUNTU LM STUDIO) and UBUNTU OBSIDIAN (`ubuntu-obsidian`) are gone: the chart no longer pushes them, and on a
+deployment that has them they stay in Coder as they are until an admin deletes them (once their workspaces are gone).
 
 * **Models:** nothing comes with the bundle and nothing is downloaded: put GGUF files in the model library
   (Templates > Images > Model library; every AI workspace has them at `~/models`) or in your own Cloud Drive's
   `models` folder (`~/cloud-drive/models`); Unsloth scans both (`UNSLOTH_STUDIO_MODELS_DIRS`). A coding agent wants a
   model with a tool-call chat template, 7B or more (e.g. Qwen2.5-Coder 7B Instruct, 4-bit: about 5 GB).
-* **Resources:** the templates default to 4 CPU cores and 8 GB of memory (up to 16 cores and 32 GB). **GPUs** (0 by
+* **Resources:** the template defaults to 4 CPU cores and 8 GB of memory (up to 16 cores and 32 GB). **GPUs** (0 by
   default) asks for `nvidia.com/gpu` (nodes with the NVIDIA device plugin): Unsloth fine-tunes on them (CUDA 12.8,
   Turing and newer) and llama.cpp's CUDA build runs models on them; without one, chat runs on the CPU (llama.cpp's CPU
   backends) and fine-tuning is unavailable.
@@ -535,18 +532,6 @@ own, behind its own API keys; Open Ports forwards it).
   downloads its Python packages, llama.cpp and Node at build time) and checks it offline: the app and its server start,
   a chat through Unsloth's API, OpenCode on it. `--cpu` builds a much smaller CPU-only image (the default carries CUDA
   PyTorch: about 10 GB more).
-
-## Obsidian workspaces
-
-**UBUNTU OBSIDIAN** (`ubuntu-obsidian`, `coder-workspace.obsidianTemplate`, on by default), on its own image
-(`ghcr.io/user187x/coder-workspace-obsidian`: the workspace image + Obsidian 1.14.4, from the `obsidian.deb` kept
-untracked at the repository's root): its **Obsidian** app is the workspace's desktop with Obsidian's window, opened on
-the vault `~/Obsidian` (a folder of the workspace's home, made at the first start); File Browser and the terminal; no
-code-server. Obsidian runs without Chromium's sandbox (a pod has no user namespaces; its SUID helper is removed) and
-with its automatic updates off (no internet: the image is its version). Obsidian's own terms apply: the image is for the
-organization's own clusters, and a bundle that leaves the organization (a public release) is built with
-`development/tools/build-bundle.sh --no-obsidian` (no Obsidian image, the template off).
-`development/tools/build-obsidian-image.sh` builds it (the package pinned by SHA-256) and checks it offline.
 
 ## The model library's security scan (garak)
 

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The workspace's startup script (coder_agent.main in ../main.tf): the shell defaults, the cluster sign-in for admins,
 # the desktop and the apps (code-server, File Browser; in the ubuntu-dataflow template, Apache NiFi and Apache Airflow
-# in place of code-server; in the AI templates, ubuntu-unsloth and ubuntu-opencode, Unsloth Studio and its server too;
-# in ubuntu-obsidian, Obsidian in place of code-server). A
+# in place of code-server; in the AI template, ubuntu-opencode, Unsloth Studio and its server too). A
 # template made in Create new template may leave out the desktop or File Browser (its desktop and file_browser
 # variables). Runs at every start; each step is safe to repeat.
 # The .tf file renders this with templatefile(), so Terraform template syntax applies here: a shell variable in
@@ -17,10 +16,11 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
-APP_SET='${app_set}'                   # developer (code-server), dataflow (NiFi, Airflow), unsloth or opencode (AI), obsidian
+APP_SET='${app_set}'                   # developer (code-server), dataflow (NiFi, Airflow) or opencode (AI)
 DESKTOP='${desktop}'                   # true: the desktop (noVNC's Desktop app)
+DESKTOP_THEME='${desktop_theme}'       # the Desktop theme parameter: serenade or classic (coder-desktop-theme)
 FILE_BROWSER='${file_browser}'         # true: File Browser
-AI_CONTEXT='${context_length}'         # the AI templates' Context length parameter: the tokens OpenCode loads a model with
+AI_CONTEXT='${context_length}'         # the AI template's Context length parameter: the tokens OpenCode loads a model with
 ACCESS_HOST='${access_host}'           # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
 START_DIR='${start_directory}'         # the Start folder parameter: where the terminal and File Browser open
 CLOUD_DRIVE_LINK='${cloud_drive_link}' # where the owner's Cloud Drive is linked (none without it)
@@ -186,6 +186,10 @@ fi
 VNC_SOCK=/tmp/coder-vnc/rfb.sock
 mkdir -p /tmp/coder-vnc && chmod 700 /tmp/coder-vnc
 if [ "$IMAGE_DESKTOP" != none ] && ! pgrep -f "^Xtigervnc :1 " >/dev/null; then
+ # the Desktop theme, put in the home before XFCE reads it (a workspace image from before the themes has none)
+ if [ "$IMAGE_DESKTOP" = xfce ] && [ -x /usr/local/bin/coder-desktop-theme ]; then
+  log "$(/usr/local/bin/coder-desktop-theme apply "$DESKTOP_THEME" 2>&1 || true)"
+ fi
  rm -f "$VNC_SOCK" /tmp/.X1-lock /tmp/.X11-unix/X1
  touch ~/.Xauthority && chmod 600 ~/.Xauthority
  xauth -f ~/.Xauthority add :1 MIT-MAGIC-COOKIE-1 "$(mcookie)"
@@ -218,7 +222,7 @@ fi
 # HA (CODER_CODE_SERVER_HA, the template's code_server_ha) it runs elsewhere: the relay in this pod answers instead.
 if [ -n "$${CODER_CODE_SERVER_HA:-}" ]; then
  log "code-server: high availability - its instance runs apart from the workspace (the relay answers on 13337)"
-elif [ "$APP_SET" != dataflow ] && [ "$APP_SET" != obsidian ]; then
+elif [ "$APP_SET" != dataflow ]; then
  CODE_SERVER="$(command -v code-server || true)"
  if [ -z "$CODE_SERVER" ]; then
   if [ ! -x /tmp/code-server/bin/code-server ]; then
@@ -242,8 +246,8 @@ fi
 # under the app's path, on 127.0.0.1 only, no sign-in of its own; the Start folder, and each Cloud Drive here as a
 # source of its own (Quantum opens no link out of a source's folder; the Cloud Drive's watcher restarts it as the drive
 # is connected or disconnected). Its settings are written at every start (the Start folder may have changed); its
-# database stays in the home. An image built on an older workspace image still has the former File Browser: started
-# with its own flags.
+# database stays in the home. The helper is installed here and by the Cloud Drive's script, the newer one kept. An image
+# built on an older workspace image still has the former File Browser: started with its own flags.
 if [ "$FILE_BROWSER" != true ]; then
  log "File Browser: not in this template"
 elif ! command -v filebrowser >/dev/null; then
@@ -252,8 +256,8 @@ elif filebrowser version 2>/dev/null | grep -q "FileBrowser Quantum"; then
  mkdir -p "$HOME/.config/filebrowser-quantum" "$HOME/.local/bin"
  printf 'APPS=%q\nSTART_DIR=%q\nCLOUD_DRIVE_LINK=%q\n' "$APPS" "$START_DIR" "$CLOUD_DRIVE_LINK" \
   >"$HOME/.config/filebrowser-quantum/env"
- echo '${filebrowser}' | base64 -d >"$HOME/.local/bin/coder-filebrowser.new"
- chmod 0755 "$HOME/.local/bin/coder-filebrowser.new" && mv "$HOME/.local/bin/coder-filebrowser.new" "$HOME/.local/bin/coder-filebrowser"
+ fb_helper="$(mktemp)" && echo '${filebrowser}' | base64 -d >"$fb_helper" && bash "$fb_helper" install
+ rm -f "$fb_helper"
  log "$("$HOME/.local/bin/coder-filebrowser" start)"
 elif pgrep -x filebrowser >/dev/null; then
  log "File Browser: running already"
@@ -327,29 +331,18 @@ AIRFLOWRC
  fi
 fi
 
-# 5. Unsloth Studio (the AI templates: ubuntu-unsloth and ubuntu-opencode), on the AI workspace image, with no
-# network: its home linked to the image's install (its Python environments and llama.cpp are not copied into every
-# home), its window on the desktop, which starts its server on 127.0.0.1:8888 (OpenAI-compatible: OpenCode's provider,
-# with the model OpenCode loads at the Context length's tokens); it scans the model library (~/models) and the owner's
-# Cloud Drive (~/cloud-drive/models) for GGUF models. In the background, redirected: Unsloth takes up to a minute to
-# answer, and a background job holding the agent's output would keep this script from ending.
-if [ "$APP_SET" = unsloth ] || [ "$APP_SET" = opencode ]; then
+# 5. Unsloth Studio (the AI template, ubuntu-opencode), on the AI workspace image, with no network: its home linked to
+# the image's install (its Python environments and llama.cpp are not copied into every home), its window on the
+# desktop, which starts its server on 127.0.0.1:8888 (OpenAI-compatible: OpenCode's provider, with the model OpenCode
+# loads at the Context length's tokens); it scans the model library (~/models) and the owner's Cloud Drive
+# (~/cloud-drive/models) for GGUF models. In the background, redirected: Unsloth takes up to a minute to answer, and a
+# background job holding the agent's output would keep this script from ending.
+if [ "$APP_SET" = opencode ]; then
  if command -v coder-unsloth-start >/dev/null; then
   DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority setsid coder-unsloth-start </dev/null >/tmp/unsloth-start.log 2>&1 &
   log "Unsloth: starting on the desktop, with its server on 127.0.0.1:8888 (log: /tmp/unsloth-start.log)"
  else
   log "Unsloth Studio is not in this image (coder-unsloth-start): skipped"
- fi
-fi
-
-# 6. Obsidian (ubuntu-obsidian), on its own image, with no network: the vault ~/Obsidian (made at the first start; a
-# folder of the workspace's home, kept with it), its automatic updates off, its window on the desktop.
-if [ "$APP_SET" = obsidian ]; then
- if command -v coder-obsidian-start >/dev/null; then
-  DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority setsid coder-obsidian-start "$HOME/Obsidian" </dev/null >/tmp/obsidian-start.log 2>&1 &
-  log "Obsidian: starting on the desktop with the vault ~/Obsidian (log: /tmp/obsidian-start.log)"
- else
-  log "Obsidian is not in this image (coder-obsidian-start): skipped"
  fi
 fi
 

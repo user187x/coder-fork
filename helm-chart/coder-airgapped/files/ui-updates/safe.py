@@ -14,9 +14,12 @@ account a PersistentVolume (Retain: removing it never removes files) and its cla
 
   GET  /__coder-ui/api/safe                   the caller's safe: used, quota, where it is mounted
   GET  /__coder-ui/api/safe/list?path=a/b     a folder of it: folders and files (each file route also takes
-                                              &drive=<owner id>: a Cloud Drive shared with the caller, drivepeers)
+                                              &drive=<owner id>: a Cloud Drive shared with the caller, drivepeers -
+                                              only what is shared reached: a folder holding shared ones lists just
+                                              those; "access" says what the caller may do there)
   GET  /__coder-ui/api/safe/glance           it at a glance: how many files, how much, the newest (the Workspaces
-                                              page's HUD of a drive shared with the caller: &drive=<owner id>)
+                                              page's cards of what is shared with the caller: &drive=<owner id>
+                                              &share=<share id>)
   GET  /__coder-ui/api/safe/download?path=    a file, as an attachment
   PUT  /__coder-ui/api/safe/upload?path=      a file (the body; Content-Length), within the quota
   POST /__coder-ui/api/safe/folder {path}     a new folder
@@ -46,9 +49,10 @@ account a PersistentVolume (Retain: removing it never removes files) and its cla
                                                       ask with {path: overwrite | keep} for each collision)
   POST /__coder-ui/api/safe/mounts/unmount {workspace, path}
   POST /__coder-ui/api/safe/source/release {workspace, disconnect: [ids], confirm: "delete"}   the guard confirmed
-  /__coder-ui/api/safe/peers...               Cloud Drives shared between users (drivepeers.py): asked for in chat,
-                                              accepted by their owner, approved by an admin; mounted read only or
-                                              read and write in the requester's workspaces from their next start
+  /__coder-ui/api/safe/peers...               Cloud Drives shared between users (drivepeers.py): asked for in chat
+                                              and accepted, or shared by their owner - all of a drive, a folder or a
+                                              file - approved by an admin; mounted read only or read and write in the
+                                              other user's workspaces from their next start
 
 Only the owner reaches their Cloud Drive: the API serves the caller's own, and a workspace shared with other users or
 groups (Coder's workspace sharing) is kept disconnected and, from its next start, mounts none (the ConfigMap
@@ -443,10 +447,41 @@ def publish_now():
             LOG(event="cloud-drive-state-failed", error=str(e)[:200])
 
 
+ITEM_TTL = 30
+_items = {}  # (owner id, path) -> (time, "file" | "folder" | None)
+
+
+def item_kind(owner_id, path, fresh=False):
+    """What a path of the owner's Cloud Drive is: "file", "folder" or None (not there, or the drive unreachable) -
+    cached ITEM_TTL seconds unless fresh."""
+    path = clean_path(path)
+    if not path:
+        return "folder"
+    hit = _items.get((owner_id, path))
+    if hit and not fresh and time.time() - hit[0] < ITEM_TTL:
+        return hit[1]
+    kind = None
+    try:
+        s3, bkt, root, sse = drive_of(owner_id)
+        try:
+            s3.head(bkt, root + path, sse=sse)
+            kind = "file"
+        except s3client.S3Error as e:
+            if e.status != 404:
+                raise
+            objects, prefixes = s3.list(bkt, prefix=root + path + "/", delimiter="/", limit=1)
+            kind = "folder" if objects or prefixes else None
+    except (DriveUnavailable, s3client.S3Error, OSError) as e:
+        LOG(event="cloud-drive-item-failed", owner=owner_id, path=path, error=str(e)[:200])
+    _items[(owner_id, path)] = (time.time(), kind)
+    return kind
+
+
 def peer_mounts():
-    """{requester id: [{owner, name, claim, readOnly}]}: the Cloud Drives shared with each user (drivepeers), by the
-    volume their owner's own workspaces mount now - the S3 one, or the source's while it runs (none while it is
-    stopped)."""
+    """{user id: [{id, owner, name, claim, readOnly, kind, path, item}]}: the Cloud Drives - or folders and files of
+    them - shared with each user (drivepeers), by the volume their owner's own workspaces mount now: the S3 one, or the
+    source's while it runs (none while it is stopped). A folder or file is the volume's subPath, mounted only while it
+    is there (the kubelet would make a missing one a folder); item its name, for the link."""
     srcs = sources()
     out = {}
     for requester, peers in drivepeers.active().items():
@@ -454,9 +489,17 @@ def peer_mounts():
             src = srcs.get(p["owner"])
             if src and not (_sources_seen.get(p["owner"]) or {}).get("running"):
                 continue
+            if p["kind"] != "drive" and item_kind(p["owner"], p["path"]) != p["kind"]:
+                continue
             claim = (SOURCE_PREFIX if src else CLAIM_PREFIX) + p["owner"]
-            out.setdefault(requester, []).append({"owner": p["owner"], "name": p["name"], "claim": claim,
-                                                  "readOnly": p["access"] != "write"})
+            mounts = out.setdefault(requester, [])
+            twin = next((m for m in mounts if m["kind"] == "drive" == p["kind"] and m["owner"] == p["owner"]), None)
+            if twin:  # the entire drive asked for and shared too: mounted once, the wider way
+                twin["readOnly"] = twin["readOnly"] and p["access"] != "write"
+                continue
+            mounts.append({"id": p["id"], "owner": p["owner"], "name": p["name"], "claim": claim,
+                           "readOnly": p["access"] != "write", "kind": p["kind"], "path": p["path"],
+                           "item": p["path"].rsplit("/", 1)[-1] if p["path"] else ""})
     return out
 
 
@@ -547,6 +590,15 @@ def connections(user):
             "source": source_view(user["id"], src) if src else None}
 
 
+PEER_MOUNT_DIRS = ("/mnt/cloud-drive-peers/", "/mnt/cloud-drive-items/")
+
+
+def peer_mount_path(p):
+    """Where the template mounts a share (peer_mounts): a drive at /mnt/cloud-drive-peers/<owner>, a folder or file at
+    /mnt/cloud-drive-items/<share id>."""
+    return PEER_MOUNT_DIRS[0] + p["name"] if p.get("kind", "drive") == "drive" else PEER_MOUNT_DIRS[1] + p["id"]
+
+
 def stale_mounts(user_id, src, shared):
     """The account's running workspaces whose Cloud Drive volume is not the one they would get now (a source set or
     cleared, or started while the source was stopped), or whose shared Cloud Drives (drivepeers) are not those shared
@@ -567,10 +619,11 @@ def stale_mounts(user_id, src, shared):
             continue  # a template without the Cloud Drive's connections
         claims = {(v.get("persistentVolumeClaim") or {}).get("claimName")
                   for v in (p.get("spec") or {}).get("volumes") or []}
-        # the Cloud Drives shared with the user: those it mounts, those it would mount now
-        has_peers = {c for c in claims if c and c.startswith((CLAIM_PREFIX, SOURCE_PREFIX))
-                     and c not in (CLAIM_PREFIX + user_id, SOURCE_PREFIX + user_id)}
-        want_peers = set() if wid in shared else {m["claim"] for m in peers_now}
+        # what is shared with the user: where it mounts it (read only or not), where it would now
+        has_peers = {(m.get("mountPath"), bool(m.get("readOnly")))
+                     for c in (p.get("spec") or {}).get("containers") or [] for m in c.get("volumeMounts") or []
+                     if (m.get("mountPath") or "").startswith(PEER_MOUNT_DIRS)}
+        want_peers = set() if wid in shared else {(peer_mount_path(m), m["readOnly"]) for m in peers_now}
         if has_peers != want_peers:
             out.append(wid)
             continue
@@ -1650,7 +1703,25 @@ def summary(user):
     return {"enabled": True, "mountPath": MOUNT_PATH, "usedBytes": used, "files": files,
             "quotaBytes": None if src else quota_bytes(), "maxUploadBytes": MAX_UPLOAD_BYTES,
             "volume": "ready" if bound else "pending", "offline": offline,
-            "encrypted": encryption_on(user["id"]), "source": source_view(user["id"], src) if src else None}
+            "encrypted": encryption_on(user["id"]), "source": source_view(user["id"], src) if src else None,
+            "shared": shared_capacity(user["id"])}
+
+
+def shared_capacity(user_id):
+    """The entire Cloud Drives shared with the user read and write: room they can use besides their own -
+    [{owner, ownerName, quotaBytes (None: a source workspace's folder), usedBytes (None: unreachable now)}]."""
+    out = []
+    srcs = sources()
+    for p in drivepeers.active().get(user_id, []):
+        if p["kind"] != "drive" or p["access"] != "write":
+            continue
+        try:
+            used, _ = usage(p["owner"])
+        except (DriveUnavailable, s3client.S3Error, OSError):
+            used = None
+        out.append({"owner": p["owner"], "ownerName": p["name"],
+                    "quotaBytes": None if srcs.get(p["owner"]) else quota_bytes(), "usedBytes": used})
+    return out
 
 
 def listing(user, path):
@@ -1668,20 +1739,64 @@ def listing(user, path):
 GLANCE_NEWEST = 8
 
 
-def glance(user, owner=None):
-    """A Cloud Drive at a glance (the HUD of a drive shared with the caller): how many files, how much they take, and
-    the newest few, from one listing of the whole drive (which also refreshes its usage). owner: the drive's owner's
-    account ({id, username, name}) when it is shared with the caller."""
-    s3, bkt, root, _ = drive_of(user["id"])
-    objects, _ = s3.list(bkt, prefix=root)
+def glance(user, owner=None, share=None):
+    """A Cloud Drive at a glance (the card of what is shared with the caller): how many files, how much they take, and
+    the newest few, from one listing (of the whole drive, which also refreshes its usage; or of the shared folder, or
+    the shared file). owner: the drive's owner's account ({id, username, name}) when it is shared with the caller;
+    share: that share (drivepeers, public form), when only a folder or file of it is."""
+    s3, bkt, root, sse = drive_of(user["id"])
+    kind, top = (share or {}).get("kind") or "drive", (share or {}).get("path") or ""
+    if kind == "file":
+        try:
+            head = s3.head(bkt, root + top, sse=sse)
+            objects = [{"key": root + top, "size": int(head.headers.get("Content-Length") or 0),
+                        "modified": head.headers.get("Last-Modified")}]
+        except s3client.S3Error as e:
+            if e.status != 404:
+                raise
+            objects = []
+    else:
+        objects, _ = s3.list(bkt, prefix=root + (top + "/" if top else ""))
     files = [o for o in objects if not o["key"].endswith("/")]
     used = sum(o["size"] for o in objects)
-    with _lock:
-        _usage[user["id"]] = (time.time(), used, len(files))
+    if kind == "drive":
+        with _lock:
+            _usage[user["id"]] = (time.time(), used, len(files))
     newest = sorted(files, key=lambda o: o["modified"] or "", reverse=True)[:GLANCE_NEWEST]
     return {"files": len(files), "usedBytes": used,
             "newest": [{"path": o["key"][len(root):], "size": o["size"], "modified": o["modified"]} for o in newest],
-            "owner": {k: (owner or {}).get(k) for k in ("id", "username", "name")} if owner else None}
+            "owner": {k: (owner or {}).get(k) for k in ("id", "username", "name")} if owner else None,
+            "share": {k: share.get(k) for k in ("id", "kind", "path", "access")} if share else None}
+
+
+def shared_listing(owner_id, viewer_id, path):
+    """A folder of a Cloud Drive shared with the viewer, as far as it is shared: all of it where a share reaches it
+    ("access" read or write); a folder on the way to shared ones lists just those ("access" None; each entry's own
+    access, None for a folder on the way)."""
+    path = clean_path(path)
+    access = drivepeers.access_at(viewer_id, owner_id, path)
+    if access:
+        return {**listing({"id": owner_id}, path), "access": access}
+    below = path + "/" if path else ""
+    folders, files = {}, {}
+    for sh in drivepeers.shares_of(viewer_id, owner_id):
+        top = sh["path"]
+        if not top.startswith(below) or top == path:
+            continue
+        rest = top[len(below):]
+        head = rest.split("/", 1)[0]
+        if "/" in rest:
+            folders.setdefault(head, None)
+        elif sh["kind"] == "folder":
+            folders[head] = "write" if "write" in (folders.get(head), sh["access"]) else sh["access"]
+        else:
+            files[head] = "write" if "write" in (files.get(head), sh["access"]) else sh["access"]
+    if not folders and not files:
+        raise PermissionError("That is not shared with you.")
+    real = listing({"id": owner_id}, path)
+    return {"path": path, "access": None,
+            "folders": [dict(f, access=folders[f["name"]]) for f in real["folders"] if f["name"] in folders],
+            "files": [dict(f, access=files[f["name"]]) for f in real["files"] if f["name"] in files]}
 
 
 def upload_csrf_ok(h):
@@ -2069,32 +2184,56 @@ def handle(h, method, path, query):
         return True
     q = dict(urllib.parse.parse_qsl(query or "", keep_blank_values=True))
     shared = False
+    share = None
+    body = None
+    viewer = user
     try:
-        # A Cloud Drive shared with the caller (drivepeers): its owner's files, through the same file routes
-        # (?drive=<owner id>): read with any active share, written only with one shared read and write.
+        # What of a Cloud Drive is shared with the caller (drivepeers): its owner's files, through the same file routes
+        # (?drive=<owner id>), as far as a share reaches (drivepeers.access_at, for each path): read with any, written
+        # only with one shared read and write; a shared folder or file itself stays (only its owner deletes it).
         if q.get("drive") and q["drive"] != user["id"] and path in FILE_ROUTES:
-            access = drivepeers.access(user["id"], q["drive"])
-            if not access:
+            owner_id = q["drive"]
+            mine = drivepeers.shares_of(user["id"], owner_id)
+            if not mine:
                 raise PermissionError("That Cloud Drive is not shared with you (any more).")
-            if method != "GET" and access != "write":
-                raise PermissionError("That Cloud Drive is shared with you read only.")
-            user = {"id": q["drive"], "username": "%s (shared, %s)" % (user["username"], access)}
+            if method == "POST":
+                body = read_json(h)
+            target = clean_path(str((body or {}).get("path", "")) if method == "POST" else q.get("path", ""))
+            if path == BASE + "/api/safe/glance":
+                if q.get("share"):
+                    share = next((x for x in mine if x["id"] == q["share"]), None)
+                    if not share:
+                        raise PermissionError("That is not shared with you (any more).")
+                elif not any(x["kind"] == "drive" for x in mine):
+                    raise PermissionError("Only parts of that Cloud Drive are shared with you.")
+            elif path != BASE + "/api/safe/list":
+                access = drivepeers.access_at(user["id"], owner_id, target)
+                if not access:
+                    raise PermissionError("That is not shared with you.")
+                if method != "GET":
+                    if access != "write":
+                        raise PermissionError("That is shared with you read only.")
+                    whole = any(x["kind"] == "drive" and x["access"] == "write" for x in mine)
+                    if path != BASE + "/api/safe/upload" and not whole and any(x["path"] == target for x in mine):
+                        raise PermissionError("That is what is shared with you: only its owner removes it.")
+            user = {"id": owner_id, "username": "%s (shared)" % user["username"]}
             shared = True
         if method == "GET" and path == BASE + "/api/safe":
             h.send_json(200, summary(user))
         elif method == "GET" and path == BASE + "/api/safe/list":
-            h.send_json(200, listing(user, q.get("path", "")))
+            h.send_json(200, shared_listing(user["id"], viewer["id"], q.get("path", "")) if shared else
+                        listing(user, q.get("path", "")))
         elif method == "GET" and path == BASE + "/api/safe/glance":
             h.send_json(200, glance(user, (drivepeers.USER_BY_ID and drivepeers.USER_BY_ID(user["id"]) or
-                                           {"id": user["id"]}) if shared else None))
+                                           {"id": user["id"]}) if shared else None, share))
         elif method == "GET" and path == BASE + "/api/safe/download":
             download(h, user, q.get("path", ""))
         elif method == "PUT" and path == BASE + "/api/safe/upload":
             upload(h, user, q.get("path", ""))
         elif method == "POST" and path == BASE + "/api/safe/folder":
-            h.send_json(200, make_folder(user, read_json(h).get("path", "")))
+            h.send_json(200, make_folder(user, (body if body is not None else read_json(h)).get("path", "")))
         elif method == "POST" and path == BASE + "/api/safe/delete":
-            h.send_json(200, delete(user, str(read_json(h).get("path", ""))))
+            h.send_json(200, delete(user, str((body if body is not None else read_json(h)).get("path", ""))))
         elif method == "GET" and path == BASE + "/api/safe/settings":
             h.send_json(200, settings_view(user, fresh=q.get("check") == "1"))
         elif method == "POST" and path == BASE + "/api/safe/settings":

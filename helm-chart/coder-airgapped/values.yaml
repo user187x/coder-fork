@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.69 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.74 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.69-airgap
+      tag: 2.0.0-platform.74-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -451,7 +451,7 @@ uiUpdates:
   # (+ its database) and regctl (development/image-tools), which the Images view lints, formats and scans with -
   # tagged with the code's hash (development/tools/build-ui-image.sh builds and pins it). The chart carries no code:
   # Helm keeps each release in a Secret of at most 1 MiB.
-  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-adc6b37ef820") }}'
+  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-f4be49a66ca3") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'
@@ -550,7 +550,7 @@ coder-workspace:
   codeServerHA:
     image: *platformServiceImage
     dbCaSecret: '{{ .Values.global.database.name }}-ca'
-  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.8.7") }}'
+  workspaceImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace:1.9.2") }}'
   imagePullSecrets: []
   secrets:
     tlsCa: '{{ .Values.global.secretNames.tlsCa }}'
@@ -566,26 +566,14 @@ coder-workspace:
     displayName: UBUNTU DATAFLOW
     icon: /icon/ubuntu.svg
   dataflowImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-dataflow:1.1.2") }}'
-  # The AI templates: Unsloth Studio (its window on the desktop, its server) and OpenCode on it, on the AI workspace
-  # image. ubuntu-unsloth takes over ubuntu-lmstudio (LM Studio's, before) where there is one.
+  # The AI template: OpenCode on the workspace's Unsloth server, on the AI workspace image.
   aiTemplates:
     enabled: true
-    unsloth:
-      name: ubuntu-unsloth
-      displayName: UBUNTU UNSLOTH
-      icon: /__icons/unsloth.svg
     opencode:
       name: ubuntu-opencode
       displayName: UBUNTU OPENCODE
       icon: /__icons/opencode.svg
   aiImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-ai:2.0.0") }}'
-  # Obsidian (its window on the desktop; the vault ~/Obsidian), on its own image (internal use only: Obsidian's terms).
-  obsidianTemplate:
-    enabled: true
-    name: ubuntu-obsidian
-    displayName: UBUNTU OBSIDIAN
-    icon: /__icons/obsidian.svg
-  obsidianImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-obsidian:1.0.0") }}'
 
   icons:
     host: ""

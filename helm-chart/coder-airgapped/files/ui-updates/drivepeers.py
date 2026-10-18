@@ -1,11 +1,14 @@
-"""Cloud Drives shared between users: one user asks another for their Cloud Drive in a chat message (a request card in
-their conversation); its owner accepts it - read only, or read and write - or declines; while admins approve shares
-(the default), one of them approves it too. An active share mounts the owner's Cloud Drive in the requester's
-workspaces, at ~/cloud-drive-shared/<owner's username>, from their next start (safe.publish_state gives the templates
-each requester's shares; read only is the volume's own readOnly) - the Workspaces page says which running workspaces a
-restart brings it to. The owner, the requester or an admin ends a share at any time; it leaves the requester's
-workspaces at their next restart. A workspace shared with others (Coder's workspace sharing) mounts no shares, as it
-mounts no Cloud Drive of its owner's.
+"""Cloud Drives shared between users, whole or in part: one user asks another for their Cloud Drive in a chat message
+(a request card in their conversation); its owner accepts it - read only, or read and write - or declines. Or the owner
+shares it themselves: the entire drive, a folder or a file of it, with whom they choose, read only or read and write
+(a chat message tells them). While admins approve shares (the default), one of them approves it too. An active share
+mounts the owner's Cloud Drive - or just the folder or file (the volume's subPath) - in the other user's workspaces, at
+~/cloud-drive-shared/<owner's username> (a folder or file at ~/cloud-drive-shared/<owner>/<its name>), from their next
+start (safe.publish_state gives the templates each user's shares; read only is the mount's own readOnly) - the
+Workspaces page says which running workspaces a restart brings it to. In the Cloud Drive window they reach what is
+shared with them, and no more (safe.py's file routes ask access_at for every path). The owner, the user it is shared
+with or an admin ends a share at any time; it leaves their workspaces at their next restart. A workspace shared with
+others (Coder's workspace sharing) mounts no shares, as it mounts no Cloud Drive of its owner's.
 
 Admins turn the feature on and off, and choose whether they approve each share (Cloud Drive > Sharing): off, no
 request can be made and no share is mounted (the shares are kept, and mount again when it is turned back on). Kept in
@@ -15,6 +18,9 @@ PEERS_FILE on the service's volume.
                                                        drive); admins: every share, and those waiting for them
   POST /__coder-ui/api/safe/peers/settings {enabled?, adminApproval?}   admins
   POST /__coder-ui/api/safe/peers/request {owner: user id, access: read | write}   asks, in a chat message
+  POST /__coder-ui/api/safe/peers/share {to: user id, path, access}    the owner shares: path "" the entire drive, a
+                                                       folder or a file of it
+  GET  /__coder-ui/api/safe/peers/people               whom one can share with (Coder's active users but the caller)
   POST /__coder-ui/api/safe/peers/<id>/answer {accept, access?}    the owner (access: read only instead of asked write)
   POST /__coder-ui/api/safe/peers/<id>/approve {approve}           admins
   POST /__coder-ui/api/safe/peers/<id>/end                         the owner, the requester or an admin
@@ -41,12 +47,16 @@ IS_ADMIN = None
 USER_BY_ID = None  # user id -> {id, username, name, admin} | None
 CHAT_POST = None   # (from user, to user id, text, share id) -> None: a chat message carrying the share's card
 CHANGED = None     # () -> None: the templates told at once (safe.publish_now)
+PEOPLE = None      # () -> [{id, username, name}]: Coder's active users
+ITEM = None        # (owner id, path) -> "file" | "folder" | None: what a path of the owner's drive is (safe.item_kind)
+KINDS = ("drive", "folder", "file")
 _lock = threading.Lock()
 
 
-def setup(log, is_admin, user_by_id, chat_post, changed):
-    global LOG, IS_ADMIN, USER_BY_ID, CHAT_POST, CHANGED
+def setup(log, is_admin, user_by_id, chat_post, changed, people=None, item=None):
+    global LOG, IS_ADMIN, USER_BY_ID, CHAT_POST, CHANGED, PEOPLE, ITEM
     LOG, IS_ADMIN, USER_BY_ID, CHAT_POST, CHANGED = log, is_admin, user_by_id, chat_post, changed
+    PEOPLE, ITEM = people, item
 
 
 def _load():
@@ -76,8 +86,22 @@ def _admin(user):
 
 
 def _public(s):
-    return {k: s.get(k) for k in ("id", "from", "fromName", "owner", "ownerName", "access", "asked", "state",
-                                  "askedAt", "answeredAt", "approvedBy", "approvedAt", "closedBy", "closedAt")}
+    out = {k: s.get(k) for k in ("id", "from", "fromName", "owner", "ownerName", "access", "asked", "state",
+                                 "askedAt", "answeredAt", "approvedBy", "approvedAt", "closedBy", "closedAt")}
+    # a share from before parts of a drive could be shared: the entire drive, asked for
+    out.update(path=s.get("path") or "", kind=s.get("kind") or "drive", by=s.get("by") or "request")
+    return out
+
+
+def covers(s, path):
+    """Whether the share reaches the path (a/b/c, "" the drive's top): the entire drive everywhere, a folder at and
+    under it, a file only itself."""
+    kind, top = s.get("kind") or "drive", s.get("path") or ""
+    if kind == "drive":
+        return True
+    if kind == "folder":
+        return path == top or path.startswith(top + "/")
+    return path == top
 
 
 def settings():
@@ -85,29 +109,41 @@ def settings():
 
 
 def active():
-    """{requester id: [{owner, name, access}]} of the shares mounted now (none while the feature is off)."""
+    """{user id: [{id, owner, name, access, path, kind}]} of the shares mounted now (none while the feature is off):
+    name is the owner's username; path and kind what of their drive (path "" and kind "drive": all of it)."""
     data = _load()
     if not data["settings"]["enabled"]:
         return {}
     out = {}
     for s in data["shares"].values():
         if s.get("state") == "active":
-            out.setdefault(s["from"], []).append({"owner": s["owner"], "name": s["ownerName"], "access": s["access"]})
+            p = _public(s)
+            out.setdefault(s["from"], []).append({"id": p["id"], "owner": p["owner"], "name": p["ownerName"],
+                                                  "access": p["access"], "path": p["path"], "kind": p["kind"]})
     for peers in out.values():
-        peers.sort(key=lambda p: p["name"])
+        peers.sort(key=lambda p: (p["name"], p["kind"] != "drive", p["path"]))
     return out
 
 
-def access(requester_id, owner_id):
-    """What an active share gives the requester of the owner's Cloud Drive: "read", "write", or None (no active share,
-    or the feature off) - the Cloud Drive window's shared drives (safe.py's file routes, ?drive=<owner id>)."""
+def shares_of(user_id, owner_id):
+    """The active shares of the owner's drive with the user (public form; none while the feature is off)."""
     data = _load()
     if not data["settings"]["enabled"]:
-        return None
-    for s in data["shares"].values():
-        if s.get("state") == "active" and s.get("from") == requester_id and s.get("owner") == owner_id:
-            return s.get("access")
-    return None
+        return []
+    return [_public(s) for s in data["shares"].values()
+            if s.get("state") == "active" and s.get("from") == user_id and s.get("owner") == owner_id]
+
+
+def access_at(user_id, owner_id, path):
+    """What the user's active shares of the owner's drive give at the path: "write", "read" or None - the widest of
+    those that reach it (the Cloud Drive window's file routes, ?drive=<owner id>)."""
+    best = None
+    for s in shares_of(user_id, owner_id):
+        if covers(s, path):
+            if s["access"] == "write":
+                return "write"
+            best = "read"
+    return best
 
 
 def view(user):
@@ -187,19 +223,83 @@ def request(user, body):
         if not data["settings"]["enabled"]:
             raise PermissionError("Sharing Cloud Drives between users is off: an admin turns it on.")
         for s in data["shares"].values():
-            if s["from"] == user["id"] and s["owner"] == owner_id and s.get("state") in OPEN:
+            if s["from"] == user["id"] and s["owner"] == owner_id and s.get("state") in OPEN and \
+                    (s.get("kind") or "drive") == "drive":
                 raise ValueError("You asked %s already: %s." % (owner["username"], {
                     "asked": "waiting for their answer", "approval": "waiting for an admin's approval",
                     "active": "their Cloud Drive is shared with you"}[s["state"]]))
         sid = uuid.uuid4().hex
         share = {"id": sid, "from": user["id"], "fromName": user["username"], "owner": owner_id,
                  "ownerName": owner["username"], "access": access, "asked": access, "state": "asked",
-                 "askedAt": round(time.time(), 3)}
+                 "askedAt": round(time.time(), 3), "path": "", "kind": "drive", "by": "request"}
         data["shares"][sid] = share
         _save(data)
     LOG(event="cloud-drive-peers-request", share=sid, by=user["username"], owner=owner["username"], access=access)
     _post(user, owner_id, "Asks to use your Cloud Drive (%s)." % _access_words(access), sid)
     return {**view(user), "share": _public(share)}
+
+
+def _what(kind, path):
+    return "Cloud Drive" if kind == "drive" else "%s %s of my Cloud Drive" % (kind, path)
+
+
+def share(user, body):
+    """The owner shares their entire drive (path ""), or a folder or file of it, with a user: active at once, or once
+    an admin approves it."""
+    to_id = str(body.get("to") or "")
+    access = body.get("access") or "read"
+    path = body.get("path") or ""
+    if not isinstance(path, str):
+        raise ValueError("path: a folder or file of your Cloud Drive, or \"\" for all of it.")
+    path = path.strip("/")
+    if not USER_ID_RE.match(to_id):
+        raise ValueError("to: a user id.")
+    if access not in ACCESS:
+        raise ValueError("access: read or write.")
+    if to_id == user["id"]:
+        raise ValueError("It is your own Cloud Drive.")
+    to = USER_BY_ID(to_id) if USER_BY_ID else None
+    if not to:
+        raise ValueError("There is no such user.")
+    kind = "drive"
+    if path:
+        if any(part in ("", ".", "..") for part in path.split("/")):
+            raise ValueError("That is not a path of your Cloud Drive.")
+        kind = ITEM(user["id"], path) if ITEM else None
+        if kind not in ("file", "folder"):
+            raise ValueError("There is no %s in your Cloud Drive (any more)." % path)
+    with _lock:
+        data = _load()
+        if not data["settings"]["enabled"]:
+            raise PermissionError("Sharing Cloud Drives between users is off: an admin turns it on.")
+        for s in data["shares"].values():
+            if s["owner"] == user["id"] and s["from"] == to_id and s.get("state") in OPEN and \
+                    (s.get("path") or "") == path:
+                raise ValueError("It is shared with %s already (%s, %s): end that share to change it." % (
+                    to["username"], _access_words(s["access"]), s["state"]))
+        sid = uuid.uuid4().hex
+        now = time.time()
+        item = {"id": sid, "from": to_id, "fromName": to["username"], "owner": user["id"],
+                "ownerName": user["username"], "access": access, "asked": access, "askedAt": round(now, 3),
+                "answeredAt": int(now), "state": "approval" if data["settings"]["adminApproval"] else "active",
+                "path": path, "kind": kind, "by": "owner"}
+        data["shares"][sid] = item
+        _save(data)
+    LOG(event="cloud-drive-peers-share", share=sid, by=user["username"], to=to["username"], kind=kind, path=path,
+        access=access, state=item["state"])
+    _post(user, to_id, "Shared my %s with you (%s)%s." % (
+        _what(kind, path), _access_words(access),
+        ": an admin approves it first" if item["state"] == "approval" else ", from your workspaces' next start"), sid)
+    if item["state"] == "active":
+        _changed()
+    return {**view(user), "share": _public(item)}
+
+
+def people(user):
+    """Whom the user can share with: Coder's active users but themselves, by username."""
+    out = [{k: p.get(k) or "" for k in ("id", "username", "name")} for p in (PEOPLE() if PEOPLE else [])
+           if p.get("id") != user["id"]]
+    return {"people": sorted(out, key=lambda p: p["username"].lower())}
 
 
 def _get(data, sid):
@@ -268,9 +368,10 @@ def approve(user, sid, body):
         _save(data)
         share = dict(s)
     LOG(event="cloud-drive-peers-approve", share=sid, by=user["username"], approved=ok)
-    _post(user, share["from"], ("Approved: %s's Cloud Drive is shared with you (%s), from your workspaces' next "
-                                "start." % (share["ownerName"], _access_words(share["access"]))) if ok else
-          "Not approved: %s's Cloud Drive is not shared with you." % share["ownerName"], sid)
+    what = "%s's Cloud Drive" % share["ownerName"] if (share.get("kind") or "drive") == "drive" else \
+        "%s's %s %s" % (share["ownerName"], share["kind"], share["path"])
+    _post(user, share["from"], ("Approved: %s is shared with you (%s), from your workspaces' next start." % (
+        what, _access_words(share["access"]))) if ok else "Not approved: %s is not shared with you." % what, sid)
     _changed()
     return {**view(user), "share": _public(share)}
 
@@ -289,8 +390,9 @@ def end(user, sid):
     LOG(event="cloud-drive-peers-end", share=sid, by=user["username"])
     other = share["from"] if user["id"] == share["owner"] else share["owner"]
     if other != user["id"]:
-        _post(user, other, "Ended the share of %s's Cloud Drive: it leaves the workspaces at their next restart." %
-              share["ownerName"], sid)
+        what = "%s's Cloud Drive" % share["ownerName"] if (share.get("kind") or "drive") == "drive" else \
+            "%s's %s %s" % (share["ownerName"], share["kind"], share["path"])
+        _post(user, other, "Ended the share of %s: it leaves the workspaces at their next restart." % what, sid)
     _changed()
     return {**view(user), "share": _public(share)}
 
@@ -304,6 +406,10 @@ def handle(h, method, path, user, read_json):
         return h.send_json(200, save_settings(user, read_json(h)))
     if method == "POST" and rest == "/request":
         return h.send_json(200, request(user, read_json(h)))
+    if method == "POST" and rest == "/share":
+        return h.send_json(200, share(user, read_json(h)))
+    if method == "GET" and rest == "/people":
+        return h.send_json(200, people(user))
     m = re.match(r"^/([0-9a-f]{32})/(answer|approve|end)$", rest)
     if method == "POST" and m:
         sid, what = m.groups()

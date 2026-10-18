@@ -148,8 +148,8 @@ ensure() { # index: the image in the local docker - from its archive when the bu
 	fi
 }
 
-# The decorator install's two charts, packaged from ./coder-airgapped (or CHART_DIR: a copy, build-bundle.sh
-# --no-obsidian) into $1: the part (global.decorator.part), the chart's name and description, and without the other
+# The decorator install's two charts, packaged from ./coder-airgapped (or CHART_DIR: a copy, build-bundle.sh's) into
+# $1: the part (global.decorator.part), the chart's name and description, and without the other
 # part's subcharts. Prints the two packages' paths.
 decorator_charts() {
 	local out="$1" part d tmp; tmp=$(mktemp -d)

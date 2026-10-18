@@ -3,8 +3,14 @@
 #     also works without internet. light-locker and LightDM are left out: the screen locker needs a display manager,
 #     crashes in a container at every session start and leaves core.<pid> files in the user's home directory.
 #     The XFCE screensaver is not started either (it would lock the VNC desktop behind a password the user lacks);
-#   - Firefox (Mozilla's .deb, desktop/firefox-policies.json), XFCE's default web browser (desktop/);
+#   - Chromium (xtradeb's build, desktop/chromium-policies.json), XFCE's default web browser, and Terminator its
+#     default terminal (desktop/); Firefox (Mozilla's .deb, desktop/firefox-policies.json) stays beside it.
 #     XFCE's compositor is off by default (desktop/xfwm4.xml), which makes the desktop faster over VNC;
+#   - two desktop themes, the workspace's Desktop theme parameter (desktop/coder-desktop-theme puts one in the home):
+#     Classic, this image's own XFCE (/etc/xdg), the lightest over a slow connection; and Serenade, Miserable_Xfce's
+#     (github.com/mehedirm6244/Miserable_Xfce, pinned): Tokyo Night colours, its GTK, window and icon themes, fonts
+#     and background, a floating dock (rofi, docklike, eww's sidebar and System stats) and picom's animations
+#     (fdev31's animation-pr fork) - built and assembled in the picom, eww and serenade stages below;
 #   - JetBrains Mono Nerd Font (fonts/), the default monospace and desktop font (fontconfig, XFCE, its terminal);
 #   - tmux 3.8 with the bundled configuration (packages/tmux-installation.deb, package tmux-mirror); the template
 #     runs tmux-mirror-setup for users who have no tmux configuration yet;
@@ -19,9 +25,10 @@
 #     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc);
 #   - code-server and File Browser, the template's two web apps (pinned below, checked by SHA-256): the template used
 #     to download them at every workspace start, which fails without internet. File Browser is FileBrowser Quantum
-#     (gtsteffaniak/filebrowser), its release binary for linux-amd64 (filebrowser-quantum at the repository's root,
-#     put into the build by ../tools/build-workspace-image.sh), unpacked from UPX so the Images view's scanner reads
-#     its Go modules; installed as /usr/local/bin/filebrowser, the command the template starts;
+#     (gtsteffaniak/filebrowser), a binary for linux-amd64 (filebrowser-quantum at the repository's root, put into
+#     the build by ../tools/build-workspace-image.sh) - since 1.9.2 the workspace's own build of 2.1.2 with a
+#     FileBrowser update for symlinked folders (symlinkTargets) - unpacked from UPX when packed, so the Images view's
+#     scanner reads its Go modules; installed as /usr/local/bin/filebrowser, the command the template starts;
 #   - security: every package upgraded at build time; Docker's engine and plugins (dockerd, containerd, buildx,
 #     compose) removed - a workspace pod has no privileges to run them, and their Go builds carried known
 #     vulnerabilities - as is the base's stray /usr/bin/pebble (no package owns it, nothing uses it); the docker CLI
@@ -32,19 +39,107 @@
 #     the Images view, which lists it next to the image's security report.
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
 ARG BASE=codercom/enterprise-base:ubuntu
-ARG FILEBROWSER_QUANTUM_VERSION=2.0.1-stable
-ARG FILEBROWSER_QUANTUM_SHA256=42df10b6f2fcd4db17a53f64a9449e677a528164002fd13b050d348d7c477517
+ARG FILEBROWSER_QUANTUM_VERSION=2.1.2-coder.1
+ARG FILEBROWSER_QUANTUM_SHA256=d1b992b5d67afc5cc4089c8a6900af39c9a28d049a251639d34a5b6b02e3990b
 
-# FileBrowser Quantum: the release binary (the build context "quantum", from build-workspace-image.sh), checked, and
-# unpacked from UPX (the same program; a scanner cannot read a packed one).
+# FileBrowser Quantum: its binary (the build context "quantum", from build-workspace-image.sh), checked, and unpacked
+# from UPX when it is packed (the same program; a scanner cannot read a packed one). Since 1.9.2 the workspace's own
+# build of 2.1.2 (version 2.1.2-coder.1), with a FileBrowser update for symlinked folders: a source may follow links
+# into folders it is told (symlinkTargets, opt-in), and a symlinked folder is listed as a folder - the Cloud Drives'
+# links open in place (scripts/filebrowser.sh in the template sets it).
 FROM docker.io/library/golang:1.27.2-trixie@sha256:47667934874913a449b96faa7ef4777fa285d9ec29126ee80ed61c45b7cccf0e AS filebrowser
 ARG FILEBROWSER_QUANTUM_VERSION
 ARG FILEBROWSER_QUANTUM_SHA256
 COPY --from=quantum filebrowser-quantum /tmp/filebrowser-quantum
 RUN echo "${FILEBROWSER_QUANTUM_SHA256}  /tmp/filebrowser-quantum" | sha256sum -c - \
 	&& apt-get update && apt-get install -y --no-install-recommends upx-ucl \
-	&& mkdir -p /out && upx -d -q -o /out/filebrowser /tmp/filebrowser-quantum \
+	&& mkdir -p /out \
+	&& if upx -t -q /tmp/filebrowser-quantum >/dev/null 2>&1; then upx -d -q -o /out/filebrowser /tmp/filebrowser-quantum; \
+		else cp /tmp/filebrowser-quantum /out/filebrowser; fi \
 	&& /out/filebrowser version | grep -q "v${FILEBROWSER_QUANTUM_VERSION}"
+
+# picom with animations (Serenade): fdev31's animation-pr fork at its pinned commit, checked, built on the same Ubuntu.
+FROM docker.io/library/ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944 AS picom
+ARG PICOM_COMMIT=cee36cd8724952563dbf84fb6bb87a5a61e9e3d4
+ARG PICOM_SHA256=411f5c1c9dcfc1bf79862bd40df4d84abaace6d39735bc5b443d71e84131d029
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl build-essential meson ninja-build \
+		pkg-config libconfig-dev libdbus-1-dev libegl-dev libev-dev libgl-dev libpcre2-dev libpixman-1-dev \
+		libx11-xcb-dev libxcb1-dev libxcb-composite0-dev libxcb-damage0-dev libxcb-dpms0-dev libxcb-glx0-dev \
+		libxcb-image0-dev libxcb-present-dev libxcb-randr0-dev libxcb-render0-dev libxcb-render-util0-dev \
+		libxcb-shape0-dev libxcb-util-dev libxcb-xfixes0-dev libxext-dev uthash-dev \
+	&& curl -fsSL -o /tmp/picom.tgz "https://github.com/fdev31/picom/archive/${PICOM_COMMIT}.tar.gz" \
+	&& echo "${PICOM_SHA256}  /tmp/picom.tgz" | sha256sum -c - \
+	&& mkdir /src && tar -xzf /tmp/picom.tgz -C /src --strip-components=1 && cd /src \
+	&& meson setup --buildtype=release -Dwith_docs=false build . && ninja -C build \
+	&& install -D build/src/picom /out/usr/local/bin/picom && /out/usr/local/bin/picom --version
+
+# eww (Serenade's sidebar and System stats): its 0.6.0 release at its commit (its binary says 0.5.0: the release did
+# not bump it), checked, for X11; its time crate moved to 0.3.36 (0.3.34 does not build with today's Rust).
+FROM docker.io/library/ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944 AS eww
+ARG EWW_COMMIT=d87c2fdbfdc012e76d229e4e9ea3325bc0f23e89
+ARG EWW_SHA256=8a7cc1406c88fc354940fb28ec99b9dc6530799393b15fcac9c27920d25950d4
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl build-essential cargo rustc \
+		pkg-config libgtk-3-dev libdbusmenu-gtk3-dev libglib2.0-dev libcairo2-dev libpango1.0-dev \
+	&& curl -fsSL -o /tmp/eww.tgz "https://github.com/elkowar/eww/archive/${EWW_COMMIT}.tar.gz" \
+	&& echo "${EWW_SHA256}  /tmp/eww.tgz" | sha256sum -c - \
+	&& mkdir /src && tar -xzf /tmp/eww.tgz -C /src --strip-components=1 && cd /src \
+	&& cargo update -p time@0.3.34 --precise 0.3.36 \
+	&& cargo build --release --locked --no-default-features --features x11 \
+	&& install -D target/release/eww /out/usr/local/bin/eww && /out/usr/local/bin/eww --version
+
+# Serenade's files: Miserable_Xfce at its pinned commit, checked - its GTK theme (Lavanda, Tokyo Night) and window
+# theme (cirkles), the icon themes it uses (Zafiro and those it inherits from: Numix-Apps, Fluent-dark), its fonts
+# (Overpass, Feather), its background (No Man's Sky, as a JPEG), the dock's icons, and its settings for GTK, picom,
+# rofi and eww - adapted for a workspace: picom drawing without a GPU (xrender, no vsync), rofi in Overpass, eww's
+# windows on the one monitor, its profile picture a plain one (the user's); with this image's own files over them (desktop/serenade: XFCE's settings, the panel,
+# the sidebar without what needs the internet, Terminator). The home's part goes to /usr/share/coder-desktop/
+# serenade/home, which coder-desktop-theme copies into a home that chooses it.
+FROM docker.io/library/ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944 AS serenade
+ARG MISERABLE_COMMIT=e8c107cf46fcc271413abc006daad40e9fbcd5dc
+ARG MISERABLE_SHA256=0cbda84f8e56c0a53b7d921b79606da954ae6f03a0fa982b2cd0e5a0a1441c6c
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl python3-pil \
+	&& curl -fsSL -o /tmp/miserable.tgz "https://github.com/mehedirm6244/Miserable_Xfce/archive/${MISERABLE_COMMIT}.tar.gz" \
+	&& echo "${MISERABLE_SHA256}  /tmp/miserable.tgz" | sha256sum -c - \
+	&& mkdir /src && tar -xzf /tmp/miserable.tgz -C /src --strip-components=1
+COPY desktop/serenade/ /tmp/serenade/
+RUN set -e; m=/src/home; h=/out/usr/share/coder-desktop/serenade/home; \
+	install -d /out/usr/share/themes /out/usr/share/icons /out/usr/share/fonts/truetype/miserable-xfce \
+		/out/usr/share/backgrounds/coder-desktop /out/usr/share/coder-desktop/serenade/assets; \
+	cp -a "$m/.themes/Lavanda-Dark-Compact-Tokyonight" "$m/.themes/cirkles" /out/usr/share/themes/; \
+	for t in Zafiro Numix-Apps Fluent-dark; do cp -a "$m/.local/share/icons/$t" /out/usr/share/icons/; done; \
+	cp "$m"/.local/share/fonts/*.ttf /out/usr/share/fonts/truetype/miserable-xfce/; \
+	python3 -c 'import sys; from PIL import Image; Image.open(sys.argv[1]).convert("RGB").save(sys.argv[2], quality=88)' \
+		"$m/.local/share/backgrounds/nomanssky.png" /out/usr/share/backgrounds/coder-desktop/serenade.jpg; \
+	cp "$m"/.assets/*.svg /out/usr/share/coder-desktop/serenade/assets/; \
+	install -d "$h/.config/gtk-3.0" "$h/.config/gtk-4.0" "$h/.config/rofi" "$h/.config/terminator" \
+		"$h/.config/xfce4/xfconf/xfce-perchannel-xml"; \
+	cat "$m/.config/gtk-3.0/gtk.css" /tmp/serenade/gtk-panel.css >"$h/.config/gtk-3.0/gtk.css"; \
+	cp "$m/.config/gtk-4.0/gtk.css" "$h/.config/gtk-4.0/"; \
+	cp "$m/.Xresources" "$h/"; \
+	sed -e 's/^backend = "glx";/backend = "xrender";/' -e 's/^vsync = true;/vsync = false;/' \
+		"$m/.config/picom.conf" >"$h/.config/picom.conf"; \
+	grep -q '^backend = "xrender";' "$h/.config/picom.conf" && grep -q '^vsync = false;' "$h/.config/picom.conf"; \
+	sed 's/"Roboto 16"/"Overpass 14"/' "$m/.config/rofi/config.rasi" >"$h/.config/rofi/config.rasi"; \
+	cp -a "$m/.config/eww" "$h/.config/eww"; \
+	rm -f "$h/.config/eww/sidebar/weather.yuck" "$h/.config/eww/sidebar/spotify.yuck" "$h"/.config/eww/scripts/weather* \
+		"$h"/.config/eww/scripts/spotify_helper "$h"/.config/eww/scripts/playerctl.py "$h"/.config/eww/scripts/gmail.sh \
+		"$h"/.config/eww/scripts/updates "$h"/.config/eww/scripts/battery "$h"/.config/eww/scripts/wifi; \
+	sed -i 's/:screen 1/:monitor 0/' "$h/.config/eww/sysstat/sysstat.yuck" "$h/.config/eww/calendarevents/calendarevents.yuck"; \
+	cp /tmp/serenade/eww/variables.yuck "$h/.config/eww/variables.yuck"; \
+	cp /tmp/serenade/eww/sidebar.yuck "$h/.config/eww/sidebar/sidebar.yuck"; \
+	install -m 0755 /tmp/serenade/eww/launch.sh "$h/.config/eww/scripts/launch.sh"; \
+	! grep -rq ':screen 1' "$h/.config/eww"; \
+	python3 -c 'import sys; from PIL import Image, ImageDraw, ImageFont; im = Image.new("RGBA", (112, 112)); \
+d = ImageDraw.Draw(im); d.ellipse((0, 0, 111, 111), fill="#24283b", outline="#7aa2f7", width=4); \
+f = ImageFont.truetype(sys.argv[1], 56); d.text((56, 58), chr(0xea00), font=f, fill="#7aa2f7", anchor="mm"); \
+im.save(sys.argv[2])' "$m/.local/share/fonts/feather.ttf" "$h/.config/eww/images/avatar.png"; \
+	cp /tmp/serenade/xfconf/*.xml "$h/.config/xfce4/xfconf/xfce-perchannel-xml/"; \
+	cp -a /tmp/serenade/panel "$h/.config/xfce4/panel"; \
+	cp /tmp/serenade/terminator.conf "$h/.config/terminator/config"; \
+	chmod -R a+rX /out
 
 FROM ${BASE}
 
@@ -144,6 +239,49 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& { update-alternatives --set x-www-browser /usr/bin/firefox 2>/dev/null || true; }
 RUN firefox --version && test -f /usr/lib/x86_64-linux-gnu/pkcs11/p11-kit-trust.so
+
+# Chromium, the desktop's web browser (XFCE's "Web Browser", web links: desktop/helpers.rc and mimeapps.list):
+# xtradeb's build for this Ubuntu (Ubuntu's chromium package only installs the snap), its archive key checked by its
+# fingerprint and pinned to Chromium alone; policies for an offline network as Firefox's (desktop/chromium-policies.
+# json) and its flags (desktop/chromium-flags: without its sandbox where the pod allows no user namespaces). It
+# trusts the system's certificates through p11-kit in the user's NSS database (coder-desktop-theme: libnss3-tools).
+# Terminator, the desktop's terminal (XFCE's "Terminal Emulator"). With them what Serenade runs: rofi, the docklike
+# panel plugin, and picom's and eww's libraries (each checked: nothing missing).
+COPY desktop/chromium-policies.json /etc/chromium/policies/managed/coder-workspace.json
+COPY desktop/chromium-flags /etc/chromium.d/coder-workspace
+RUN curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x5301FA4FD93244FBC6F6149982BB6851C64F6880" \
+		-o /tmp/xtradeb.asc \
+	&& gpg --show-keys --with-colons /tmp/xtradeb.asc | grep -q '^fpr:::::::::5301FA4FD93244FBC6F6149982BB6851C64F6880:' \
+	&& gpg --dearmor </tmp/xtradeb.asc >/etc/apt/keyrings/xtradeb-apps.gpg && rm -f /tmp/xtradeb.asc \
+	&& . /etc/os-release \
+	&& echo "deb [signed-by=/etc/apt/keyrings/xtradeb-apps.gpg] https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu ${VERSION_CODENAME} main" \
+		>/etc/apt/sources.list.d/xtradeb-apps.list \
+	&& printf '%s\n' 'Package: *' 'Pin: release o=LP-PPA-xtradeb-apps' 'Pin-Priority: 1' '' \
+		'Package: chromium chromium-common chromium-sandbox chromium-l10n' 'Pin: release o=LP-PPA-xtradeb-apps' \
+		'Pin-Priority: 700' >/etc/apt/preferences.d/xtradeb-apps \
+	&& apt-get update \
+	&& apt-get install -y --no-install-recommends chromium terminator rofi xfce4-docklike-plugin libnss3-tools \
+		libconfig11 libev4t64 libpixman-1-0 libxcb-render-util0 libxcb-image0 libxcb-composite0 libxcb-damage0 \
+		libxcb-present0 libxcb-xfixes0 libxcb-dpms0 libxcb-glx0 libgl1 libegl1 libdbusmenu-gtk3-4 \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& update-alternatives --set x-www-browser /usr/bin/chromium \
+	&& update-alternatives --set x-terminal-emulator /usr/bin/terminator
+COPY --from=picom /out/usr/local/bin/picom /usr/local/bin/picom
+COPY --from=eww /out/usr/local/bin/eww /usr/local/bin/eww
+COPY --from=serenade /out/ /
+COPY desktop/coder-desktop-theme /usr/local/bin/coder-desktop-theme
+COPY desktop/classic/ /usr/share/coder-desktop/classic/
+COPY desktop/coder-compositor.desktop /etc/xdg/autostart/coder-compositor.desktop
+RUN chmod 0755 /usr/local/bin/coder-desktop-theme /usr/local/bin/picom /usr/local/bin/eww \
+	&& fc-cache -f >/dev/null && fc-list | grep -qi overpass \
+	&& for t in Zafiro Numix-Apps Fluent-dark; do gtk-update-icon-cache -q -f "/usr/share/icons/$t"; done \
+	&& ! ldd /usr/local/bin/picom /usr/local/bin/eww | grep 'not found' \
+	&& picom --version && eww --version && chromium --version && dpkg-query -W terminator && rofi -v \
+	&& h="$(mktemp -d)" && chmod 0777 "$h" \
+	&& runuser -u coder -- env HOME="$h" sh -c 'coder-desktop-theme apply serenade >/dev/null && test "$(coder-desktop-theme current)" = serenade \
+		&& test -f "$HOME/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml" && test -x "$HOME/.config/eww/scripts/launch.sh" \
+		&& grep -q "^WebBrowser=chromium" "$HOME/.config/xfce4/helpers.rc" \
+		&& coder-desktop-theme apply classic >/dev/null && test ! -e "$HOME/.config/picom.conf"' && rm -rf "$h"
 
 # code-server (VS Code in the browser) and File Browser: downloaded here, at build time only, and checked. The
 # template starts these; it downloads them itself only on an image without them (and only with internet).

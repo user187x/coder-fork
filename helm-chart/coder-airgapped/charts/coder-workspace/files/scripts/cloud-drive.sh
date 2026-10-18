@@ -13,18 +13,31 @@
 # workspace (`cloud-drive mount ~/project/data`), files of the same name resolved as the owner chooses; the watcher
 # brings those mounts up to date every 10 seconds (`cloud-drive sync`).
 # The Cloud Drives other users shared with the owner (Cloud Drive > Sharing) come mounted under PEERS, one folder per
-# owner (read only unless shared read and write): linked at ~/cloud-drive-shared/<owner>, at every start.
-# main.tf renders this with templatefile(): link, mode, mount and cli are the template's values (no shell braces here).
+# owner (read only unless shared read and write): linked at ~/cloud-drive-shared/<owner>, at every start. A folder or
+# file of one shared with them comes mounted under ITEMS (/mnt/cloud-drive-items/<share id>; ITEMS_LIST names them):
+# linked at ~/cloud-drive-shared/<owner>/<its name> - or ~/cloud-drive-shared/<owner> (shared items)/<its name> when
+# that owner's entire drive is linked at ~/cloud-drive-shared/<owner> too.
+# File Browser shows each of them as a source of its own: this installs its helper (scripts/filebrowser.sh, kept when the
+# template's own startup.sh installed a newer one), which starts it again as they change and, every 10 seconds, takes
+# over a File Browser an older startup.sh started (a template made in the template builder keeps its own startup.sh,
+# while this section is the base template's current one at every build).
+# main.tf renders this with templatefile(): link, mode, mount, cli, filebrowser and items are the template's values (no
+# shell braces here).
 LINK='${link}'
 MODE='${mode}'
 MOUNT='${mount}'
 STATE=/etc/platform/cloud-drive
 PEERS=/mnt/cloud-drive-peers
+ITEMS=/mnt/cloud-drive-items
+ITEMS_LIST='${items}'
 SHARED="$HOME/cloud-drive-shared"
 PIDFILE=/tmp/cloud-drive-watch.pid
 CLI="$HOME/.local/bin/cloud-drive"
+FB="$HOME/.local/bin/coder-filebrowser"
 
 mkdir -p "$HOME/.local/bin" && echo '${cli}' | base64 -d >"$CLI.new" && chmod 0755 "$CLI.new" && mv "$CLI.new" "$CLI"
+fb_helper="$(mktemp)" && echo '${filebrowser}' | base64 -d >"$fb_helper" && bash "$fb_helper" install
+rm -f "$fb_helper"
 
 case "$MODE" in
 shared) echo "Cloud Drive: none here - this workspace is shared with others, and the Cloud Drive is its owner's alone" ;;
@@ -65,16 +78,26 @@ sync_link() {
 # File Browser shows each Cloud Drive here as a source of its own (scripts/filebrowser.sh): started again when they
 # change (nothing if it does not run, or nothing changed for it).
 files_again() {
- if [ -x "$HOME/.local/bin/coder-filebrowser" ]; then
-  "$HOME/.local/bin/coder-filebrowser" restart || true
+ if [ -x "$FB" ]; then
+  CLOUD_DRIVE_LINK="$LINK" "$FB" restart || true
+ fi
+}
+
+# The same, in the background and skipped while another call works (the watcher's, every 10 seconds).
+files_check() {
+ if [ -x "$FB" ]; then
+  CLOUD_DRIVE_LINK="$LINK" "$FB" check </dev/null &
  fi
 }
 
 sync_link
 
-# The shared Cloud Drives: a link for each one mounted now; links to ones no longer shared go.
+# The shared Cloud Drives: a link for each one mounted now; links to ones no longer shared go (and the folders that
+# held only links to shared folders and files).
 if [ -d "$SHARED" ]; then
  find "$SHARED" -mindepth 1 -maxdepth 1 -type l -lname "$PEERS/*" -delete
+ find "$SHARED" -mindepth 2 -maxdepth 2 -type l -lname "$ITEMS/*" -delete
+ find "$SHARED" -mindepth 1 -maxdepth 1 -type d -empty -delete
 fi
 for d in "$PEERS"/*/; do
  [ -d "$d" ] || continue
@@ -83,6 +106,24 @@ for d in "$PEERS"/*/; do
  if [ -w "$PEERS/$name" ]; then access="read and write"; else access="read only"; fi
  echo "Cloud Drive: $name's, shared with you ($access): $SHARED/$name"
 done
+# The shared folders and files: a link for each one mounted now, by its name (another number when two are named alike).
+echo "$ITEMS_LIST" | base64 -d 2>/dev/null | jq -r '.[]? | [.id, .owner, .item] | @tsv' 2>/dev/null |
+ while IFS=$'\t' read -r id owner item; do
+  [ -e "$ITEMS/$id" ] || continue
+  dir="$SHARED/$owner"
+  if [ -L "$dir" ]; then dir="$SHARED/$owner (shared items)"; fi
+  mkdir -p "$dir" || continue
+  name="$item"
+  n=2
+  while [ -e "$dir/$name" ] || [ -L "$dir/$name" ]; do
+   name="$item ($n)"
+   n=$((n + 1))
+  done
+  ln -s "$ITEMS/$id" "$dir/$name"
+  if [ -w "$ITEMS/$id" ]; then access="read and write"; else access="read only"; fi
+  if [ -d "$ITEMS/$id" ]; then what="folder"; else what="file"; fi
+  echo "Cloud Drive: $owner's $what $item, shared with you ($access): $dir/$name"
+ done
 if [ -d "$SHARED" ] && [ -z "$(ls -A "$SHARED")" ]; then
  rmdir "$SHARED"
 fi
@@ -92,13 +133,16 @@ files_again
 if [ -f "$PIDFILE" ]; then
  kill "$(cat "$PIDFILE")" 2>/dev/null || true
 fi
-LINK="$LINK" MOUNT="$MOUNT" STATE="$STATE" CLI="$CLI" setsid bash -c "$(declare -f sync_link files_again)"'
+LINK="$LINK" MOUNT="$MOUNT" STATE="$STATE" CLI="$CLI" FB="$FB" setsid bash -c "$(declare -f sync_link files_again files_check)"'
  n=0
  while sleep 1; do
   sync_link
   n=$((n + 1))
-  if [ $((n % 10)) -eq 0 ] && [ -s "$HOME/.config/cloud-drive/mounts.json" ]; then
-   "$CLI" sync >/dev/null || true
+  if [ $((n % 10)) -eq 0 ]; then
+   if [ -s "$HOME/.config/cloud-drive/mounts.json" ]; then
+    "$CLI" sync >/dev/null || true
+   fi
+   files_check
   fi
  done' </dev/null >>/tmp/cloud-drive.log 2>&1 &
 echo $! >"$PIDFILE"

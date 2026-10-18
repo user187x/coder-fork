@@ -6,6 +6,10 @@ Coder's own /icon/* set is built into the server and coder_app.icon is limited t
 Service in icons.backend - in coder-airgapped the platform service (coder-ui-updates), which mounts the ConfigMap
 and serves the files. No separate web server.
 The HTTPRoute below is separate from Coder's own routes and only matches /__icons/.
+Every file goes in as binaryData (base64): any image, SVG or PNG alike, byte for byte - a ConfigMap's data carries
+text only. The platform service mounts the whole ConfigMap as a folder, so each key is a file there either way; it
+serves the extensions in ui-service.py's TEMPLATE_ICON_TYPES (chart_checks.py checks every icon here against them).
+The mount is optional: a ConfigMap that fails to render or apply leaves EVERY /__icons/ icon a 404.
 */ -}}
 {{- $ns := .Values.namespace | default "coder" }}
 {{- $name := printf "%s-icons" (include "coder-workspace.prefix" .) }}
@@ -15,10 +19,9 @@ kind: ConfigMap
 metadata:
   name: {{ $name }}
   namespace: {{ $ns }}
-data:
+binaryData:
   {{- range $path, $_ := .Files.Glob "files/icons/*" }}
-  {{ base $path }}: |-
-{{ $.Files.Get $path | indent 4 }}
+  {{ base $path }}: {{ $.Files.Get $path | b64enc }}
   {{- end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1

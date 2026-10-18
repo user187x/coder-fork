@@ -140,51 +140,75 @@ def safe_checks(chart, default_render):
           err.strip()[-200:] or keys)
 
 
+def icon_checks(chart, default_render):
+    """The workspace template's own icons (charts/coder-workspace/files/icons/, served at /__icons/<file> by the
+    platform service from their ConfigMap): any image - each comes through byte for byte (binaryData), its type and
+    name ones the service serves (ui-service.py's TEMPLATE_ICON_TYPES, TEMPLATE_ICON_RE: else it ships and 404s),
+    every /__icons/ reference a file there, the ConfigMap well under Kubernetes' 1 MiB (it is mounted optional: one
+    that fails to apply leaves every icon a 404)."""
+    import ast, base64, yaml
+    icons = os.path.join(chart, "charts", "coder-workspace", "files", "icons")
+    files = sorted(os.listdir(icons))
+    cms = [d for d in yaml.safe_load_all(default_render) if d and d.get("kind") == "ConfigMap"
+           and d["metadata"]["name"].endswith("-icons")]
+    data = (cms[0].get("binaryData") or {}) if cms else {}
+    differ = [f for f in files if base64.b64decode(data.get(f, "")) != open(os.path.join(icons, f), "rb").read()]
+    kinds = {os.path.splitext(f)[1].lower() for f in files}
+    check("template icons: every file in files/icons/ comes through byte for byte (binaryData; SVG and PNG among them)",
+          len(cms) == 1 and not differ and not (cms[0].get("data") or {}) and {".svg", ".png"} <= kinds,
+          differ or "%d icons" % len(files))
+    svc = ast.parse(open(os.path.join(chart, "files", "ui-updates", "ui-service.py")).read())
+    consts = {t.id: n.value for n in svc.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
+    types = set(ast.literal_eval(consts["TEMPLATE_ICON_TYPES"]))
+    name_re = re.compile(ast.literal_eval(consts["TEMPLATE_ICON_RE"].args[0]))
+    unserved = [f for f in files if os.path.splitext(f)[1].lower() not in types or not name_re.match(f)]
+    check("template icons: each one's type and name the platform service serves (else a 404)", not unserved, unserved)
+    texts = [os.path.join(chart, "charts", "coder-workspace", "files", "main.tf"),
+             os.path.join(chart, "charts", "coder-workspace", "values.yaml"),
+             os.path.join(chart, "charts", "coder-workspace", "templates", "job.yaml"), os.path.join(chart, "values.yaml")]
+    refs = sorted({m for t in texts for m in re.findall(r"/__icons/([A-Za-z0-9._-]+)", open(t).read())})
+    missing = [r for r in refs if r not in files]
+    check("template icons: every /__icons/ reference is a file in files/icons/", not missing,
+          missing or "%d referenced" % len(refs))
+    size = sum(len(v) for v in data.values())
+    check("template icons: their ConfigMap well under 1 MiB (base64)", 0 < size < 512 * 1024, "%d KiB" % (size // 1024))
+    tf = open(texts[0]).read()
+    check("template: File Browser's icon is FileBrowser Quantum's logo (files/icons/filebrowser-quantum.png)",
+          re.search(r'slug\s+= "filebrowser"\n\s+display_name = "File Browser"\n\s+icon\s+= "/__icons/filebrowser-quantum\.png"', tf)
+          is not None, "")
+
+
 def ai_checks(B, chart, default_render):
-    """The AI templates (aiTemplates): on, two push Jobs on the AI image (app_set unsloth and opencode; Unsloth's takes
-    over ubuntu-lmstudio), the Images view lists them, the template knows both sets and mounts the model library; off,
-    no Job; the image is pinned. The Obsidian template (obsidianTemplate) likewise, on its own image."""
+    """The AI template (aiTemplates): on, one push Job on the AI image (app_set opencode), the Images view lists it, the
+    template knows the set and mounts the model library; off, no Job; the image is pinned. The templates removed
+    (Unsloth's, LM Studio's, Obsidian's) are gone for good."""
     import yaml
     docs = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d}
     jobs = {k[1]: "\n".join(c["args"][0] for c in d["spec"]["template"]["spec"]["containers"])
             for k, d in docs.items() if k[0] == "Job" and "push-template" in k[1]}
-    job_env = {k[1]: {e["name"]: e.get("value") for c in d["spec"]["template"]["spec"]["initContainers"]
-                      for e in c.get("env", [])}
-               for k, d in docs.items() if k[0] == "Job" and "push-template" in k[1]}
     vals = open(os.path.join(chart, "values.yaml")).read()
     ai_image = re.search(r'^  aiImage:.*"([^"\n]+)"', vals, re.M).group(1)
-    ob_image = re.search(r'^  obsidianImage:.*"([^"\n]+)"', vals, re.M).group(1)
-    uns = next((a for n, a in jobs.items() if n.endswith("-unsloth")), "")
     oc = next((a for n, a in jobs.items() if n.endswith("-opencode")), "")
-    ob = next((a for n, a in jobs.items() if n.endswith("-obsidian")), "")
-    check("AI templates: ubuntu-unsloth and ubuntu-opencode pushed on %s" % ai_image,
-          'app_set="unsloth"' in uns and 'app_set="opencode"' in oc
-          and all('workspace_image="%s"' % ai_image in a for a in (uns, oc)), sorted(jobs))
-    uenv = next((e for n, e in job_env.items() if n.endswith("-unsloth")), {})
-    check("AI templates: Unsloth's push takes over ubuntu-lmstudio (LM Studio's, before)",
-          uenv.get("REPLACES_NAME") == "ubuntu-lmstudio" and "(lmstudio)" in (uenv.get("REPLACES_MESSAGE") or ""),
-          uenv.get("REPLACES_NAME"))
-    check("Obsidian template: ubuntu-obsidian pushed on %s" % ob_image,
-          'app_set="obsidian"' in ob and 'workspace_image="%s"' % ob_image in ob, sorted(jobs))
+    check("AI template: ubuntu-opencode pushed on %s" % ai_image,
+          'app_set="opencode"' in oc and 'workspace_image="%s"' % ai_image in oc, sorted(jobs))
+    check("AI template: no Unsloth or Obsidian template pushed",
+          not any(n.endswith(("-unsloth", "-lmstudio", "-obsidian")) for n in jobs), sorted(jobs))
     ui_env = {e["name"]: e.get("value") for c in docs[("Deployment", "coder-ui-updates")]["spec"]["template"]["spec"]["containers"]
               for e in c.get("env", [])}
     names = [t["name"] for t in json.loads(ui_env.get("BUILDER_TEMPLATES") or "[]")]
-    check("AI and Obsidian templates: in the Images view's In use list",
-          {"ubuntu-unsloth", "ubuntu-opencode", "ubuntu-obsidian"} <= set(names), names)
+    check("AI template: in the Images view's In use list, the removed ones not",
+          "ubuntu-opencode" in names and not {"ubuntu-unsloth", "ubuntu-obsidian"} & set(names), names)
     rc, off, err = run(["helm", "template", "coder", chart, "--namespace", "coder",
-                        "--set", "coder-workspace.aiTemplates.enabled=false",
-                        "--set", "coder-workspace.obsidianTemplate.enabled=false"])
-    check("AI and Obsidian templates: off - no push Job", rc == 0 and "push-template-unsloth" not in off
-          and "push-template-opencode" not in off and "push-template-obsidian" not in off, err.strip()[-200:])
+                        "--set", "coder-workspace.aiTemplates.enabled=false"])
+    check("AI template: off - no push Job", rc == 0 and "push-template-opencode" not in off, err.strip()[-200:])
     tf = open(os.path.join(chart, "charts", "coder-workspace", "files", "main.tf")).read()
     startup = open(os.path.join(chart, "charts", "coder-workspace", "files", "scripts", "startup.sh")).read()
-    check("AI templates: main.tf knows unsloth and opencode, mounts the model library, OpenCode's app on Unsloth",
-          '"unsloth", "opencode"' in tf and 'claim_name = "coder-models"' in tf and 'slug         = "opencode"' in tf
-          and "exec coder-opencode" in tf and "coder-unsloth-start" in startup
+    check("AI template: main.tf knows opencode, mounts the model library, OpenCode's app on Unsloth",
+          '"developer", "dataflow", "opencode"]' in tf and 'claim_name = "coder-models"' in tf
+          and 'slug         = "opencode"' in tf and "exec coder-opencode" in tf and "coder-unsloth-start" in startup
           and "lmstudio" not in tf and "LM Studio" not in tf + startup, "")
-    check("Obsidian template: Obsidian is the desktop's app, no code-server, its vault started at every start",
-          'local.obsidian ? "Obsidian"' in tf and "local.dataflow || local.obsidian ? 0 : 1" in tf
-          and "coder-obsidian-start" in startup, "")
+    check("main.tf: no Obsidian app set, code-server everywhere but dataflow",
+          "obsidian" not in (tf + startup).lower() and "local.dataflow ? 0 : 1" in tf, "")
     # "(cd X && app >log 2>&1 &)" backgrounds a bash that keeps the script's output open: the agent then reports
     # start_error ("script exited without closing output pipes"); the whole subshell is redirected instead
     held = [ln.strip() for ln in startup.splitlines()
@@ -196,21 +220,18 @@ def ai_checks(B, chart, default_render):
           not re.search(r"count\s*=\s*try\(data\.coder_parameter|try\((jsondecode\()?data\.kubernetes_config_map_v1"
                         r"\.workspace_images|try\(local\.images_kept", tf), "")
     icons = os.path.join(chart, "charts", "coder-workspace", "files", "icons")
-    check("AI and Obsidian templates: their icons (unsloth.svg, opencode.svg, obsidian.svg)",
-          all(os.path.isfile(os.path.join(icons, f)) for f in ("unsloth.svg", "opencode.svg", "obsidian.svg")), "")
+    check("AI template: its icons (unsloth.svg for the context length, opencode.svg); none for the removed ones",
+          all(os.path.isfile(os.path.join(icons, f)) for f in ("unsloth.svg", "opencode.svg"))
+          and not any(os.path.exists(os.path.join(icons, f)) for f in ("obsidian.svg", "lmstudio.svg")), "")
     build = os.path.join(B, "..", "development", "tools", "build-ai-image.sh")
     if os.path.isfile(build):
         b = open(build).read()
         check("AI image: Unsloth's AppImage and OpenCode's download pinned by SHA-256",
               re.search(r"^UNSLOTH_APPIMAGE_SHA256=[0-9a-f]{64}", b, re.M)
               and re.search(r"^OPENCODE_SHA256=[0-9a-f]{64}", b, re.M), "")
-        ob_build = open(os.path.join(B, "..", "development", "tools", "build-obsidian-image.sh")).read()
-        check("Obsidian image: its package pinned by SHA-256",
-              re.search(r"^OBSIDIAN_DEB_SHA256=[0-9a-f]{64}", ob_build, re.M) is not None, "")
     images_txt = open(os.path.join(B, "images.txt")).read()
-    for img in (ai_image, ob_image):
-        check("workspace image listed in images.txt (%s)" % img,
-              re.search(r"^%s\s+sha256:(?!0{64})[0-9a-f]{64}" % re.escape(img), images_txt, re.M) is not None, "")
+    check("workspace image listed in images.txt (%s)" % ai_image,
+          re.search(r"^%s\s+sha256:(?!0{64})[0-9a-f]{64}" % re.escape(ai_image), images_txt, re.M) is not None, "")
 
 
 def decorator_checks(B, chart, full_render):
@@ -386,6 +407,7 @@ def main():
     ha_checks(B, renders["high availability (values-ha.example.yaml)"], r)
     safe_checks(chart, r)
     ai_checks(B, chart, r)
+    icon_checks(chart, r)
     check("Coder starts without Keycloak's Secrets (optional)",
           re.search(r"name: keycloaking-coder-oidc\s*\n\s*optional: true", r) and
           re.search(r"secretName: keycloaking-coder-ca\s*\n\s*optional: true|optional: true\s*\n\s*secretName: keycloaking-coder-ca", r),
@@ -518,7 +540,7 @@ def main():
     fb = open(fb_path).read() if os.path.isfile(fb_path) else ""
     check("template: File Browser is FileBrowser Quantum, under the app's path, on 127.0.0.1, no sign-in of its own",
           "FileBrowser Quantum" in startup and '"$HOME/.local/bin/coder-filebrowser" start' in startup
-          and 'base="$APPS/filebrowser/"' in fb and 'listen: "127.0.0.1"' in fb and "noauth: true" in fb
+          and '"$APPS/filebrowser/"' in fb and 'listen: "127.0.0.1"' in fb and "noauth: true" in fb
           and "disableUpdateCheck: true" in fb
           and 'filebrowser = base64encode(file("${path.module}/scripts/filebrowser.sh"))' in tf["main.tf"]
           and "/apps/filebrowser/health" in tf["main.tf"]
@@ -531,9 +553,40 @@ def main():
     check("template: File Browser shows every Cloud Drive here as a source of its own (read only where shared so)",
           "CLOUD_DRIVE_LINK" in fb and '"$HOME/cloud-drive-shared"' in fb and "readOnly" in fb
           and "rule filePath" in fb and "rule folderPath" in fb and "sidebarLinks" in fb
-          and '"$HOME/.local/bin/coder-filebrowser" restart' in cd_sh
-          and 'declare -f sync_link files_again' in cd_sh
+          and 'CLOUD_DRIVE_LINK="$LINK" "$FB" restart' in cd_sh
+          and 'declare -f sync_link files_again files_check' in cd_sh
           and "cloud_drive_link       = var.user_storage ? var.user_storage_path" in tf["main.tf"], "")
+    # Every workspace, whatever started it: the PID file per container (one in the home names another process after a
+    # restart); the helper also comes with the Cloud Drive's platform section (the decorator gives templates made in
+    # the builder the base's current one at every build), the newer one kept; the watcher's check takes over a File
+    # Browser an older startup.sh started; a drive whose storage does not answer is left out, not waited on.
+    cd_section = re.search(r"# platform:begin cloud-drive\n(.*?)# platform:end cloud-drive", tf["main.tf"], re.S)
+    check("template: File Browser keeps every Cloud Drive through restarts and in every template (builder-made too)",
+          "pidfile=/tmp/" in fb and '"/proc/$1/comm"' in fb and "HELPER_VERSION=" in fb and "install)" in fb
+          and "check) flock -n 9" in fb and "timeout 10 test" in fb and 'grep -qxF "$config"' in fb
+          and bool(cd_section) and 'filebrowser = base64encode(file("${path.module}/scripts/filebrowser.sh"))'
+          in cd_section.group(1)
+          and 'bash "$fb_helper" install' in cd_sh and 'bash "$fb_helper" install' in startup
+          and "files_check" in cd_sh, "")
+    # Folders and files of a Cloud Drive shared with the owner: each its owner's volume's subPath, mounted apart
+    # (/mnt/cloud-drive-items/<share id>, one volume per owner's volume and access) and linked under
+    # ~/cloud-drive-shared/<owner>/; File Browser makes each shared folder a source of its own.
+    check("template: shared folders and files of a Cloud Drive mounted by subPath and linked in ~/cloud-drive-shared",
+          "/mnt/cloud-drive-items/${volume_mount.value.id}" in tf["main.tf"]
+          and "sub_path  = volume_mount.value.path" in tf["main.tf"]
+          and "cloud_drive_peer_volumes" in tf["main.tf"] and "for_each = local.cloud_drive_peer_volumes" in tf["main.tf"]
+          and "items = base64encode(jsonencode(" in tf["main.tf"]
+          and 'ITEMS=/mnt/cloud-drive-items' in cd_sh and '-lname "$ITEMS/*" -delete' in cd_sh
+          and "(shared items)" in cd_sh and 'source_of "$item"' in fb and "unique_names" in fb, "")
+    # The desktop's look: the Desktop theme parameter (where the template has the desktop), put in the home by the
+    # workspace image's coder-desktop-theme before the desktop starts (an image without it: skipped).
+    check("template: the Desktop theme parameter (Serenade by default, or Classic) applied before the desktop starts",
+          'data "coder_parameter" "desktop_theme"' in tf["main.tf"] and 'default      = "serenade"' in tf["main.tf"]
+          and 'value       = "classic"' in tf["main.tf"]
+          and 'desktop_theme          = var.desktop ? data.coder_parameter.desktop_theme[0].value : "classic"' in tf["main.tf"]
+          and "DESKTOP_THEME='${desktop_theme}'" in startup
+          and '/usr/local/bin/coder-desktop-theme apply "$DESKTOP_THEME"' in startup
+          and startup.index("coder-desktop-theme apply") < startup.index("Xtigervnc :1 -auth"), "")
     check("template: the workspace image is substituted (not codercom/enterprise-base)",
           "codercom/enterprise-base" not in r, "")
     ws_img = re.search(r'workspaceImage: .*?"(ghcr\.io/user187x/coder-workspace:[^"]+)"', vals).group(1)
@@ -545,6 +598,20 @@ def main():
         check("workspace image: code-server and File Browser (Quantum) preinstalled, pinned by SHA-256",
               "CODE_SERVER_SHA256=" in df and "FILEBROWSER_QUANTUM_SHA256=" in df
               and "COPY --from=filebrowser /out/filebrowser" in df and "FILEBROWSER_SRC_SHA256" not in df, "")
+        # Chromium (xtradeb's, its key by fingerprint, pinned to Chromium alone) the default browser, Terminator the
+        # terminal; the Serenade theme's sources (picom's fork, eww, Miserable_Xfce) each at a commit, by SHA-256.
+        theme_sh = open(os.path.join(os.path.dirname(dfp), "desktop", "coder-desktop-theme")).read()
+        helpers = open(os.path.join(os.path.dirname(dfp), "desktop", "helpers.rc")).read()
+        check("workspace image: Chromium the default browser and Terminator the terminal; Serenade's sources pinned",
+              "5301FA4FD93244FBC6F6149982BB6851C64F6880" in df and "Pin: release o=LP-PPA-xtradeb-apps" in df
+              and "update-alternatives --set x-www-browser /usr/bin/chromium" in df
+              and "update-alternatives --set x-terminal-emulator /usr/bin/terminator" in df
+              and "WebBrowser=chromium" in helpers and "TerminalEmulator=terminator" in helpers
+              and all(re.search(r"^ARG %s=[0-9a-f]{%d}$" % (k, n), df, re.M) for k, n in (
+                  ("PICOM_COMMIT", 40), ("PICOM_SHA256", 64), ("EWW_COMMIT", 40), ("EWW_SHA256", 64),
+                  ("MISERABLE_COMMIT", 40), ("MISERABLE_SHA256", 64)))
+              and 'backend = "xrender";' in df and "WebBrowser=chromium" in theme_sh
+              and "TerminalEmulator=terminator" in theme_sh and "before-serenade" in theme_sh, "")
     else:  # a bundle on its own: look inside the image archive's config for the tools' paths
         check("workspace image: code-server and File Browser preinstalled (needs development/: skipped)", True, "skipped")
 
@@ -592,7 +659,7 @@ def main():
                                "--ai", "keep"])
         ok = ok and rc2 == 0 and "aiTemplates.enabled: true" in out2 and \
             ("/" + ai_image.split("/", 1)[1]) in out2 and "aiImage: " in out2
-        check("argocd/update-application.sh: the AI templates off by default, --ai keep runs %s" % ai_image, ok,
+        check("argocd/update-application.sh: the AI template off by default, --ai keep runs %s" % ai_image, ok,
               (err2 or out2 or err or out).strip()[-300:] if not ok else "")
     # the layer bundle's helper (Python): compiles, and answers --help
     rc, out, err = run([sys.executable, os.path.join(B, "layer-support"), "--help"])

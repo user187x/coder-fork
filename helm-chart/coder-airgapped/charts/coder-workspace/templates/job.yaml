@@ -1,30 +1,19 @@
 {{- include "coder-workspace.platform.values" . -}}
 {{- $url := .Values.coder.internalUrl | default (required "CODER_URL must be provided!" .Values.coder.url) }}
 {{- /* The templates this chart pushes, each by its own Job: ubuntu-vnc-desktop, (dataflowTemplate) the same with
-Apache NiFi and Apache Airflow in place of code-server, on its own image, (aiTemplates) ubuntu-unsloth and
-ubuntu-opencode on the AI workspace image, and (obsidianTemplate) ubuntu-obsidian on its own image. Each push's message
-is its own: the login step finds a template renamed in the dashboard by it. A template a set replaces (its "replaces":
-the LM Studio template, which Unsloth replaced) is taken over: renamed, with its workspaces and history. */}}
+Apache NiFi and Apache Airflow in place of code-server, on its own image, and (aiTemplates) ubuntu-opencode on the AI
+workspace image. Each push's message is its own: the login step finds a template renamed in the dashboard by it. A
+template a set replaces (a job's "replaces": none now) is taken over: renamed, with its workspaces and history. */}}
 {{- $jobs := list (dict "suffix" "" "template" .Values.template "appSet" "developer" "image" ""
     "message" (printf "Deployed via Helm release %s" .Release.Name)) }}
 {{- if .Values.dataflowTemplate.enabled }}
 {{- $jobs = append $jobs (dict "suffix" "-dataflow" "template" .Values.dataflowTemplate "appSet" "dataflow"
     "image" .Values.dataflowImage "message" (printf "Deployed via Helm release %s (dataflow)" .Release.Name)) }}
 {{- end }}
-{{- /* The AI templates (aiTemplates): Unsloth Studio, and OpenCode on Unsloth, both on the AI workspace image. Unsloth
-took LM Studio's place: its Job takes over ubuntu-lmstudio where there is one. */}}
+{{- /* The AI template (aiTemplates): OpenCode on Unsloth, on the AI workspace image. */}}
 {{- if .Values.aiTemplates.enabled }}
-{{- $jobs = append $jobs (dict "suffix" "-unsloth" "template" .Values.aiTemplates.unsloth "appSet" "unsloth"
-    "image" .Values.aiImage "message" (printf "Deployed via Helm release %s (unsloth)" .Release.Name)
-    "replaces" (dict "name" "ubuntu-lmstudio" "message" (printf "Deployed via Helm release %s (lmstudio)" .Release.Name)
-                     "displayName" "UBUNTU LM STUDIO" "icon" "/__icons/lmstudio.svg")) }}
 {{- $jobs = append $jobs (dict "suffix" "-opencode" "template" .Values.aiTemplates.opencode "appSet" "opencode"
     "image" .Values.aiImage "message" (printf "Deployed via Helm release %s (opencode)" .Release.Name)) }}
-{{- end }}
-{{- /* The Obsidian template (obsidianTemplate), on its own image. */}}
-{{- if .Values.obsidianTemplate.enabled }}
-{{- $jobs = append $jobs (dict "suffix" "-obsidian" "template" .Values.obsidianTemplate "appSet" "obsidian"
-    "image" .Values.obsidianImage "message" (printf "Deployed via Helm release %s (obsidian)" .Release.Name)) }}
 {{- end }}
 {{- range $n, $j := $jobs }}
 {{- if $n }}
