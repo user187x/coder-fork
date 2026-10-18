@@ -18,9 +18,10 @@
 #   - the default shell setup (shell/): ~/.bashrc (/etc/skel and /usr/share/coder-workspace/bashrc) and the vimrc it
 #     points Vim at; the template copies them into homes that have none (or still Ubuntu's stock .bashrc);
 #   - code-server and File Browser, the template's two web apps (pinned below, checked by SHA-256): the template used
-#     to download them at every workspace start, which fails without internet. File Browser is built from its source
-#     (the filebrowser-* stages below) with the current Go and fixed Go modules: its release binary carries known
-#     vulnerabilities (an old Go and old golang.org/x modules);
+#     to download them at every workspace start, which fails without internet. File Browser is FileBrowser Quantum
+#     (gtsteffaniak/filebrowser), its release binary for linux-amd64 (filebrowser-quantum at the repository's root,
+#     put into the build by ../tools/build-workspace-image.sh), unpacked from UPX so the Images view's scanner reads
+#     its Go modules; installed as /usr/local/bin/filebrowser, the command the template starts;
 #   - security: every package upgraded at build time; Docker's engine and plugins (dockerd, containerd, buildx,
 #     compose) removed - a workspace pod has no privileges to run them, and their Go builds carried known
 #     vulnerabilities - as is the base's stray /usr/bin/pebble (no package owns it, nothing uses it); the docker CLI
@@ -31,30 +32,19 @@
 #     the Images view, which lists it next to the image's security report.
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
 ARG BASE=codercom/enterprise-base:ubuntu
-ARG FILEBROWSER_VERSION=2.63.23
-ARG FILEBROWSER_SRC_SHA256=18020983f6a4e43d679738738c3f95c52a333a282144046ec152491f2341a152
+ARG FILEBROWSER_QUANTUM_VERSION=2.0.1-stable
+ARG FILEBROWSER_QUANTUM_SHA256=42df10b6f2fcd4db17a53f64a9449e677a528164002fd13b050d348d7c477517
 
-# File Browser from its source: the frontend (pnpm, as its Taskfile builds it), then the Go binary with the current Go
-# and the fixed golang.org/x modules (its own go.mod pins vulnerable ones).
-FROM docker.io/library/node:24.21.0-trixie@sha256:1278a37eb510ec1606fba0e80f554bcc941ae0b44f35ae373c4822ae7717c64d AS filebrowser-frontend
-ARG FILEBROWSER_VERSION
-ARG FILEBROWSER_SRC_SHA256
-WORKDIR /src
-RUN curl -fsSL -o /tmp/fb.tgz "https://github.com/filebrowser/filebrowser/archive/refs/tags/v${FILEBROWSER_VERSION}.tar.gz" \
-	&& echo "${FILEBROWSER_SRC_SHA256}  /tmp/fb.tgz" | sha256sum -c - \
-	&& tar -xzf /tmp/fb.tgz --strip-components=1 && rm -f /tmp/fb.tgz
-RUN cd frontend && corepack enable && pnpm install --frozen-lockfile && pnpm run build
-
+# FileBrowser Quantum: the release binary (the build context "quantum", from build-workspace-image.sh), checked, and
+# unpacked from UPX (the same program; a scanner cannot read a packed one).
 FROM docker.io/library/golang:1.27.2-trixie@sha256:47667934874913a449b96faa7ef4777fa285d9ec29126ee80ed61c45b7cccf0e AS filebrowser
-ARG FILEBROWSER_VERSION
-COPY --from=filebrowser-frontend /src /src
-WORKDIR /src
-RUN go get golang.org/x/net@v0.61.0 golang.org/x/crypto@v0.58.0 golang.org/x/image@v0.47.0 \
-	&& go mod tidy \
-	&& CGO_ENABLED=0 go build -trimpath \
-		-ldflags "-s -w -X github.com/filebrowser/filebrowser/v2/version.Version=${FILEBROWSER_VERSION}" \
-		-o /out/filebrowser . \
-	&& /out/filebrowser version
+ARG FILEBROWSER_QUANTUM_VERSION
+ARG FILEBROWSER_QUANTUM_SHA256
+COPY --from=quantum filebrowser-quantum /tmp/filebrowser-quantum
+RUN echo "${FILEBROWSER_QUANTUM_SHA256}  /tmp/filebrowser-quantum" | sha256sum -c - \
+	&& apt-get update && apt-get install -y --no-install-recommends upx-ucl \
+	&& mkdir -p /out && upx -d -q -o /out/filebrowser /tmp/filebrowser-quantum \
+	&& /out/filebrowser version | grep -q "v${FILEBROWSER_QUANTUM_VERSION}"
 
 FROM ${BASE}
 
@@ -192,7 +182,7 @@ RUN curl -fsSL -o /tmp/basic-ftp.tgz "https://registry.npmjs.org/basic-ftp/-/bas
 	&& rm -f /tmp/basic-ftp.tgz \
 	&& /usr/lib/code-server/lib/node -e 'const f = require(process.argv[1]); if (require(process.argv[1] + "/package.json").version !== process.argv[2] || typeof f.Client !== "function") process.exit(1); require("/usr/lib/code-server/node_modules/get-uri")' "$d" "${BASIC_FTP_VERSION}"
 COPY --from=filebrowser /out/filebrowser /usr/local/bin/filebrowser
-RUN chmod 0755 /usr/local/bin/filebrowser && filebrowser version
+RUN chmod 0755 /usr/local/bin/filebrowser && filebrowser version | grep -q "FileBrowser Quantum"
 
 # Security, last (no later step may pull these back): medium findings with no fix released, in packages a workspace
 # pod has no use for.

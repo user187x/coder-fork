@@ -9,7 +9,7 @@ your network.
 | | Current release: [**v1.39.1**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
 | Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
-| Workspace image | `ghcr.io/user187x/coder-workspace:1.8.6` (desktop, IDEs, Kubernetes tools; nothing fetched at start) |
+| Workspace image | `ghcr.io/user187x/coder-workspace:1.8.7` (desktop, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
 | Platform service | `ghcr.io/user187x/coder-ui-updates` (its code on `coder-image-tools:1.0.0`: BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
 | Bundle | 22 images pinned by digest, in one folder per part (`images/ui/`: the user interface - Coder, the platform service, their databases; `workspaces/`, `cloud-drive/`, ...), and every chart packaged (`charts/`, a Helm repository); `-slim`: only our images; the same release in parts: `-charts` (no images) and `-images-<part>` per folder, together the bundle; `-layer`: the update for a cluster at the previous release, only what changed (often a few MB); `-decorator-update`: an Argo CD decorator install's update, the Coder image and both charts (~300 MB) |
@@ -184,12 +184,19 @@ The full feature list, with where each piece lives and how it is tested, is
 - **Home volumes:** backups (S3 or download) and disk growth (in place, or a copy to a bigger volume).
 - **Cloud Drive:** each account's own files on S3, at `~/cloud-drive` in each of its connected workspaces; on the
   Workspaces page, a cable from it to each connected workspace: drag a plug away to disconnect one, a cable onto
-  another to connect it, live (no restart).
-- **Lock Down:** admins jail any workspace, for instance one where an agent runs away. There are four modes:
-  - **Network:** only Coder stays reachable;
-  - **Sudo Command:** nobody in it can use sudo;
-  - **Complete:** both;
-  - **Freeze:** Complete, and everything in it paused where it is (its agent too), with a snapshot of its disk.
+  another to connect it, live (no restart). Encryption with a key of one's own, wrapped with a **Password**, a **PEM**
+  certificate or a **PFX** (the certificate read out of the P12 in the browser; its password never leaves the page).
+  **Sharing between users** (admins turn it on, and approve each share): one user asks another in chat, the owner
+  shares it read only or read and write; it opens at once in the requester's Cloud Drive window (its drive
+  switcher) and is at `~/cloud-drive-shared/<owner>` in their workspaces from their next start. The Accounts table
+  draws who shares with whom as the Cloud Drive's cables, from the owner's row to the other's.
+- **Lock Down:** admins jail any workspace, for instance one where an agent runs away. Its menu turns each lock on or
+  off (red while on, green while off):
+  - **Disconnect Network** / **Reconnect Network:** only Coder stays reachable;
+  - **Privilege Escalation Disable** / **Enable:** nobody in it can use sudo;
+  - **Lock Down** / **Unlock:** both;
+  - **Freeze** / **Unfreeze:** locked down, and everything in it paused where it is (its agent too), with a snapshot of
+    its disk.
 
   It works live on a running workspace: with the first three, its processes keep running, and its terminal and apps
   still open, so admins can inspect what the agent is doing. On a stopped workspace it applies from the next start.
@@ -202,7 +209,7 @@ The full feature list, with where each piece lives and how it is tested, is
 - **UBUNTU** (`ubuntu-vnc-desktop`, with the Ubuntu icon):
   - an XFCE desktop in the browser (TigerVNC + noVNC);
   - Firefox (Mozilla's build, with offline policies);
-  - code-server and File Browser;
+  - code-server and File Browser (FileBrowser Quantum);
   - tmux, btop, bat, eza, fzf, jq, yq and Vim;
   - k9s, kubectl and kubelogin;
   - the JetBrains Mono Nerd Font.
@@ -215,7 +222,12 @@ The full feature list, with where each piece lives and how it is tested, is
 ### Templates and the image builder
 
 - **Template Overview** with its resources, Details (Coder's insights) and README; Source Code with versions (squash
-  ranges, Promote); Export as ZIP with everything the template is made of: its Terraform, scripts and icons.
+  ranges, Promote, Delete - not the active one or one a workspace runs); Export as ZIP with everything the template is
+  made of: its Terraform, scripts and icons. Icons are an emoji, one of the library's, or an image uploaded from the
+  icon field's menu; admins rename the base template in Create new template.
+- **Workspace image, chosen from a list:** the template's image (it follows the template), the images built or
+  imported in Templates › Images, or another one entered with guidance - a workspace whose image went away is offered
+  the list at its next update instead of a validation error.
 - **Templates › Images, an image builder in the cluster** (BuildKit rootless). You can add:
   - apt packages (checked as you type) and uploaded `.deb` files;
   - installation scripts and removals;
@@ -248,11 +260,12 @@ The full feature list, with where each piece lives and how it is tested, is
   failures) and the Coder server's **System Uptime**; its totals on one line. The Settings menu shows the cluster's
   CPU, memory and network traffic (last 15 minutes) at a glance.
 - **Workspace settings** on one page of cards (General, Parameters, Schedule, Sharing).
-- **Four workspace templates:** UBUNTU (code-server), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow), and the
-  AI workspaces UBUNTU LM STUDIO (LM Studio on the desktop, its local server) and UBUNTU OPENCODE (the OpenCode agent
-  on the workspace's own LM Studio), with a shared **model library** (GGUF) in Templates > Images; the same workspace
-  otherwise; everything offline. LM Studio is for internal use only (its terms): `build-bundle.sh --no-lmstudio`
-  leaves it out of a bundle that leaves the organization.
+- **Five workspace templates:** UBUNTU (code-server), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow), the AI
+  workspaces UBUNTU UNSLOTH (Unsloth Studio on the desktop: chat, fine-tuning on a GPU, its OpenAI-compatible server)
+  and UBUNTU OPENCODE (the OpenCode agent on the workspace's own Unsloth), with a shared **model library** (GGUF) in
+  Templates > Images, and UBUNTU OBSIDIAN (Obsidian on the desktop, the vault `~/Obsidian`); the same workspace
+  otherwise; everything offline. Obsidian is for internal use only: `build-bundle.sh --no-obsidian` leaves it out of a
+  bundle that leaves the organization.
 - **Health, monitoring and security posture** views; network and persistence maps.
 - **Banners:** classification banners (e.g. UNCLASSIFIED), and an announcement banner with:
   - its message on an LCD screen set into the banner, over a background image (uploaded or a preset; animated GIFs
@@ -331,10 +344,10 @@ The full feature list, with where each piece lives and how it is tested, is
 
 ### Lock Down (containing a workspace)
 
-- **Network:** firewall rules in the workspace pod's own network namespace refuse everything in or out except
+- **Disconnect Network:** firewall rules in the workspace pod's own network namespace refuse everything in or out except
   loopback, DNS and Coder; connections already open stop at once, and IPv6 is blocked entirely. The agent's
   connection to Coder is kept, so admins can still reach the workspace.
-- **Sudo Command:** a last sudoers rule denies every command to everyone. A process that is root already stays root,
+- **Privilege Escalation Disable:** a last sudoers rule denies every command to everyone. A process that is root already stays root,
   and nothing else in the workspace can become root.
 - **It can't be undone from inside the workspace:**
   - the workspace container has no `NET_ADMIN`, so not even root there can change its firewall;
@@ -377,7 +390,8 @@ The full feature list, with where each piece lives and how it is tested, is
   image can be rescanned.
 - **The workspace image is tracked and scanned too**, and its findings are acted on. Workspace image 1.8.5 grades
   **B: no critical and no high finding** (1.8.3 was D, with 64 high), and 83 medium (1.8.4: 223): every package
-  upgraded; File Browser built from its source with the current Go and fixed Go modules; `basic-ftp` replaced in
+  upgraded; File Browser built from its source with the current Go and fixed Go modules (since 1.8.7 FileBrowser
+  Quantum's release binary, unpacked from UPX so the scanner reads its Go modules); `basic-ftp` replaced in
   code-server (as `shell-quote` was for CVE-2026-102422); GNU coreutils instead of Rust coreutils; removed, as a
   workspace pod has no use for them: Docker's engine and plugins, PulseAudio with ffmpeg's libraries, libsoup (and
   the weather plugin that needed it), the USB printer daemon and a stray `pebble`. What is left is medium findings with no fix released, in packages in use. Findings that cannot apply to a container are listed apart in the report, each with its reason, and not

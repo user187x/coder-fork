@@ -58,6 +58,7 @@ if [[ -n "$since" ]] && git -C "$top" rev-parse -q --verify "v${since}" >/dev/nu
 fi
 # The AI templates' image (coder-workspace.aiImage): not in the update either.
 ai=$(sed -n 's/^  aiImage:.*"\([^"]*\)".*/\1/p' "${chart}/values.yaml" | head -n1)
+obsidian=$(sed -n 's/^  obsidianImage:.*"\([^"]*\)".*/\1/p' "${chart}/values.yaml" | head -n1)
 [[ -n "$ai" ]] || { echo "ERROR: no coder-workspace.aiImage in ${chart}/values.yaml" >&2; exit 1; }
 dataflow_note=""
 if [[ -n "$dataflow_then" && "$dataflow_then" != "$dataflow" ]]; then
@@ -86,9 +87,10 @@ ${changed:-    (none listed)}
 This update carries Coder's. The ubuntu-dataflow template (UBUNTU DATAFLOW: Apache NiFi and Apache Airflow in the
 workspace) runs on ${dataflow}, which is not in it: the helper turns that template off
 (coder-workspace.dataflowTemplate.enabled: false) unless you give it the image (--dataflow).${dataflow_note}
-The AI templates (UBUNTU LM STUDIO and UBUNTU OPENCODE: LM Studio and OpenCode) run on ${ai}, not in it either: the
-helper turns them off (coder-workspace.aiTemplates.enabled: false) unless you give it the image (--ai). LM Studio's
-terms allow internal business use only: that image comes from your own build, never from a public source.
+The AI templates (UBUNTU UNSLOTH and UBUNTU OPENCODE: Unsloth Studio and OpenCode) run on ${ai}, not in it either:
+the helper turns them off (coder-workspace.aiTemplates.enabled: false) unless you give it the image (--ai).
+The Obsidian template (UBUNTU OBSIDIAN) runs on ${obsidian}, not in it either: off unless you give it the image
+(--obsidian). Obsidian is for internal use only: that image comes from your own build, never from a public source.
 
 Install
 -------

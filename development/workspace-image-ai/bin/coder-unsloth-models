@@ -1,0 +1,8 @@
+#!/bin/sh
+# The folders Unsloth Studio scans for GGUF models, ":"-joined: the shared model library (~/models, read-only:
+# Templates > Images > Model library) and the owner's own in their Cloud Drive (~/cloud-drive/models), where they are.
+out=""
+for d in "$HOME/models" "$HOME/cloud-drive/models"; do
+	if [ -d "$d" ]; then out="${out:+$out:}$d"; fi
+done
+printf '%s\n' "$out"

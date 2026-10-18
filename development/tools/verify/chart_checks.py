@@ -141,43 +141,76 @@ def safe_checks(chart, default_render):
 
 
 def ai_checks(B, chart, default_render):
-    """The AI templates (aiTemplates): on, two push Jobs on the AI image (app_set lmstudio and opencode), the Images
-    view lists them, the template knows both sets and mounts the model library; off, no Job; the image is pinned."""
+    """The AI templates (aiTemplates): on, two push Jobs on the AI image (app_set unsloth and opencode; Unsloth's takes
+    over ubuntu-lmstudio), the Images view lists them, the template knows both sets and mounts the model library; off,
+    no Job; the image is pinned. The Obsidian template (obsidianTemplate) likewise, on its own image."""
     import yaml
     docs = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d}
     jobs = {k[1]: "\n".join(c["args"][0] for c in d["spec"]["template"]["spec"]["containers"])
             for k, d in docs.items() if k[0] == "Job" and "push-template" in k[1]}
-    ai_image = re.search(r'^  aiImage:.*"([^"\n]+)"', open(os.path.join(chart, "values.yaml")).read(), re.M).group(1)
-    lms = next((a for n, a in jobs.items() if n.endswith("-lmstudio")), "")
+    job_env = {k[1]: {e["name"]: e.get("value") for c in d["spec"]["template"]["spec"]["initContainers"]
+                      for e in c.get("env", [])}
+               for k, d in docs.items() if k[0] == "Job" and "push-template" in k[1]}
+    vals = open(os.path.join(chart, "values.yaml")).read()
+    ai_image = re.search(r'^  aiImage:.*"([^"\n]+)"', vals, re.M).group(1)
+    ob_image = re.search(r'^  obsidianImage:.*"([^"\n]+)"', vals, re.M).group(1)
+    uns = next((a for n, a in jobs.items() if n.endswith("-unsloth")), "")
     oc = next((a for n, a in jobs.items() if n.endswith("-opencode")), "")
-    check("AI templates: ubuntu-lmstudio and ubuntu-opencode pushed on %s" % ai_image,
-          'app_set="lmstudio"' in lms and 'app_set="opencode"' in oc
-          and all('workspace_image="%s"' % ai_image in a for a in (lms, oc)), sorted(jobs))
+    ob = next((a for n, a in jobs.items() if n.endswith("-obsidian")), "")
+    check("AI templates: ubuntu-unsloth and ubuntu-opencode pushed on %s" % ai_image,
+          'app_set="unsloth"' in uns and 'app_set="opencode"' in oc
+          and all('workspace_image="%s"' % ai_image in a for a in (uns, oc)), sorted(jobs))
+    uenv = next((e for n, e in job_env.items() if n.endswith("-unsloth")), {})
+    check("AI templates: Unsloth's push takes over ubuntu-lmstudio (LM Studio's, before)",
+          uenv.get("REPLACES_NAME") == "ubuntu-lmstudio" and "(lmstudio)" in (uenv.get("REPLACES_MESSAGE") or ""),
+          uenv.get("REPLACES_NAME"))
+    check("Obsidian template: ubuntu-obsidian pushed on %s" % ob_image,
+          'app_set="obsidian"' in ob and 'workspace_image="%s"' % ob_image in ob, sorted(jobs))
     ui_env = {e["name"]: e.get("value") for c in docs[("Deployment", "coder-ui-updates")]["spec"]["template"]["spec"]["containers"]
               for e in c.get("env", [])}
     names = [t["name"] for t in json.loads(ui_env.get("BUILDER_TEMPLATES") or "[]")]
-    check("AI templates: in the Images view's In use list", {"ubuntu-lmstudio", "ubuntu-opencode"} <= set(names), names)
+    check("AI and Obsidian templates: in the Images view's In use list",
+          {"ubuntu-unsloth", "ubuntu-opencode", "ubuntu-obsidian"} <= set(names), names)
     rc, off, err = run(["helm", "template", "coder", chart, "--namespace", "coder",
-                        "--set", "coder-workspace.aiTemplates.enabled=false"])
-    check("AI templates: off - no push Job", rc == 0 and "push-template-lmstudio" not in off
-          and "push-template-opencode" not in off, err.strip()[-200:])
+                        "--set", "coder-workspace.aiTemplates.enabled=false",
+                        "--set", "coder-workspace.obsidianTemplate.enabled=false"])
+    check("AI and Obsidian templates: off - no push Job", rc == 0 and "push-template-unsloth" not in off
+          and "push-template-opencode" not in off and "push-template-obsidian" not in off, err.strip()[-200:])
     tf = open(os.path.join(chart, "charts", "coder-workspace", "files", "main.tf")).read()
     startup = open(os.path.join(chart, "charts", "coder-workspace", "files", "scripts", "startup.sh")).read()
-    check("AI templates: main.tf knows lmstudio and opencode, mounts the model library, OpenCode's app and settings",
-          '"lmstudio", "opencode"' in tf and 'claim_name = "coder-models"' in tf and 'slug         = "opencode"' in tf
-          and "OPENCODE_CONFIG" in tf and "coder-lmstudio-start" in startup, "")
+    check("AI templates: main.tf knows unsloth and opencode, mounts the model library, OpenCode's app on Unsloth",
+          '"unsloth", "opencode"' in tf and 'claim_name = "coder-models"' in tf and 'slug         = "opencode"' in tf
+          and "exec coder-opencode" in tf and "coder-unsloth-start" in startup
+          and "lmstudio" not in tf and "LM Studio" not in tf + startup, "")
+    check("Obsidian template: Obsidian is the desktop's app, no code-server, its vault started at every start",
+          'local.obsidian ? "Obsidian"' in tf and "local.dataflow || local.obsidian ? 0 : 1" in tf
+          and "coder-obsidian-start" in startup, "")
+    # "(cd X && app >log 2>&1 &)" backgrounds a bash that keeps the script's output open: the agent then reports
+    # start_error ("script exited without closing output pipes"); the whole subshell is redirected instead
+    held = [ln.strip() for ln in startup.splitlines()
+            if re.search(r"\(.*&&.*&\)\s*$", ln) and not ln.lstrip().startswith("#")]
+    check("startup.sh: no background subshell keeps the script's output open", not held, held[:3])
+    # Coder's form evaluates parameters in passes (the choice, then the version plan's data sources): try() settles
+    # before they are known - a conditional field would never show, the dropdown never list the images kept
+    check("main.tf: no try() on what Coder's form learns late (a conditional count, the images kept)",
+          not re.search(r"count\s*=\s*try\(data\.coder_parameter|try\((jsondecode\()?data\.kubernetes_config_map_v1"
+                        r"\.workspace_images|try\(local\.images_kept", tf), "")
     icons = os.path.join(chart, "charts", "coder-workspace", "files", "icons")
-    check("AI templates: their icons (lmstudio.svg, opencode.svg)",
-          all(os.path.isfile(os.path.join(icons, f)) for f in ("lmstudio.svg", "opencode.svg")), "")
+    check("AI and Obsidian templates: their icons (unsloth.svg, opencode.svg, obsidian.svg)",
+          all(os.path.isfile(os.path.join(icons, f)) for f in ("unsloth.svg", "opencode.svg", "obsidian.svg")), "")
     build = os.path.join(B, "..", "development", "tools", "build-ai-image.sh")
     if os.path.isfile(build):
         b = open(build).read()
-        check("AI image: LM Studio and OpenCode downloads pinned by SHA-256",
-              re.search(r"^LMSTUDIO_SHA256=[0-9a-f]{64}", b, re.M) and re.search(r"^OPENCODE_SHA256=[0-9a-f]{64}", b, re.M),
-              "")
+        check("AI image: Unsloth's AppImage and OpenCode's download pinned by SHA-256",
+              re.search(r"^UNSLOTH_APPIMAGE_SHA256=[0-9a-f]{64}", b, re.M)
+              and re.search(r"^OPENCODE_SHA256=[0-9a-f]{64}", b, re.M), "")
+        ob_build = open(os.path.join(B, "..", "development", "tools", "build-obsidian-image.sh")).read()
+        check("Obsidian image: its package pinned by SHA-256",
+              re.search(r"^OBSIDIAN_DEB_SHA256=[0-9a-f]{64}", ob_build, re.M) is not None, "")
     images_txt = open(os.path.join(B, "images.txt")).read()
-    check("AI image: listed in images.txt (%s)" % ai_image, re.search(r"^%s\s+sha256:[0-9a-f]{64}" % re.escape(ai_image),
-                                                                   images_txt, re.M) is not None, "")
+    for img in (ai_image, ob_image):
+        check("workspace image listed in images.txt (%s)" % img,
+              re.search(r"^%s\s+sha256:(?!0{64})[0-9a-f]{64}" % re.escape(img), images_txt, re.M) is not None, "")
 
 
 def decorator_checks(B, chart, full_render):
@@ -479,6 +512,15 @@ def main():
                  if not any(k in d and re.search(r"command -v %s\b" % re.escape(t), main_tf) for k, t in tools.items())]
     check("template: internet downloads only as a fallback, when the image lacks the tool", not unguarded,
           unguarded or "%d fallbacks" % len(downloads))
+    startup = open(os.path.join(tf_dir, "scripts", "startup.sh")).read() if os.path.isfile(
+        os.path.join(tf_dir, "scripts", "startup.sh")) else ""
+    check("template: File Browser is FileBrowser Quantum, under the app's path, on 127.0.0.1, no sign-in of its own",
+          "FileBrowser Quantum" in startup and 'baseURL: "$APPS/filebrowser/"' in startup
+          and "listen: 127.0.0.1" in startup and "noauth: true" in startup
+          and "disableUpdateCheck: true" in startup
+          and "/apps/filebrowser/health" in tf["main.tf"]
+          # Coder strips the app's path and joins the rest to the URL's path: the URL must carry the path back
+          and 'url          = "http://localhost:13339/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/filebrowser/"' in tf["main.tf"], "")
     check("template: the workspace image is substituted (not codercom/enterprise-base)",
           "codercom/enterprise-base" not in r, "")
     ws_img = re.search(r'workspaceImage: .*?"(ghcr\.io/user187x/coder-workspace:[^"]+)"', vals).group(1)
@@ -486,10 +528,10 @@ def main():
     dfp = os.path.normpath(os.path.join(B, "../development/workspace-image/Dockerfile"))
     if os.path.isfile(dfp):
         df = open(dfp).read()
-        # code-server's release download, and File Browser's source (built in the image's filebrowser-* stages)
-        check("workspace image: code-server and File Browser preinstalled, pinned by SHA-256",
-              "CODE_SERVER_SHA256=" in df and "FILEBROWSER_SRC_SHA256=" in df
-              and "COPY --from=filebrowser /out/filebrowser" in df, "")
+        # code-server's release download, and FileBrowser Quantum's release binary (its filebrowser stage unpacks it)
+        check("workspace image: code-server and File Browser (Quantum) preinstalled, pinned by SHA-256",
+              "CODE_SERVER_SHA256=" in df and "FILEBROWSER_QUANTUM_SHA256=" in df
+              and "COPY --from=filebrowser /out/filebrowser" in df and "FILEBROWSER_SRC_SHA256" not in df, "")
     else:  # a bundle on its own: look inside the image archive's config for the tools' paths
         check("workspace image: code-server and File Browser preinstalled (needs development/: skipped)", True, "skipped")
 

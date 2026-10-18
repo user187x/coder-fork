@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The workspace's startup script (coder_agent.main in ../main.tf): the shell defaults, the cluster sign-in for admins,
 # the desktop and the apps (code-server, File Browser; in the ubuntu-dataflow template, Apache NiFi and Apache Airflow
-# in place of code-server; in the AI templates, ubuntu-lmstudio and ubuntu-opencode, LM Studio and its server too). A
+# in place of code-server; in the AI templates, ubuntu-unsloth and ubuntu-opencode, Unsloth Studio and its server too;
+# in ubuntu-obsidian, Obsidian in place of code-server). A
 # template made in Create new template may leave out the desktop or File Browser (its desktop and file_browser
 # variables). Runs at every start; each step is safe to repeat.
 # The .tf file renders this with templatefile(), so Terraform template syntax applies here: a shell variable in
@@ -16,10 +17,10 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
-APP_SET='${app_set}'           # developer (code-server), dataflow (NiFi, Airflow), lmstudio or opencode (AI)
+APP_SET='${app_set}'           # developer (code-server), dataflow (NiFi, Airflow), unsloth or opencode (AI), obsidian
 DESKTOP='${desktop}'           # true: the desktop (noVNC's Desktop app)
 FILE_BROWSER='${file_browser}' # true: File Browser
-AI_CONTEXT='${context_length}' # the AI templates' Context length parameter: LM Studio's default context, in tokens
+AI_CONTEXT='${context_length}' # the AI templates' Context length parameter: the tokens OpenCode loads a model with
 ACCESS_HOST='${access_host}'   # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
 START_DIR='${start_directory}' # the Start folder parameter: where the terminal and File Browser open
 # Path-based apps are proxied under this prefix ("main" = the agent's name).
@@ -216,7 +217,7 @@ fi
 # HA (CODER_CODE_SERVER_HA, the template's code_server_ha) it runs elsewhere: the relay in this pod answers instead.
 if [ -n "$${CODER_CODE_SERVER_HA:-}" ]; then
  log "code-server: high availability - its instance runs apart from the workspace (the relay answers on 13337)"
-elif [ "$APP_SET" != dataflow ]; then
+elif [ "$APP_SET" != dataflow ] && [ "$APP_SET" != obsidian ]; then
  CODE_SERVER="$(command -v code-server || true)"
  if [ -z "$CODE_SERVER" ]; then
   if [ ! -x /tmp/code-server/bin/code-server ]; then
@@ -235,26 +236,61 @@ elif [ "$APP_SET" != dataflow ]; then
  fi
 fi
 
-# 3. File Browser (when the template has it): the workspace image's as well; downloaded only on an image without it
-# (needs internet).
+# 3. File Browser (when the template has it): FileBrowser Quantum, the workspace image's (an image without it gets
+# none: there is nothing to download it from without internet). Path-based apps are proxied with their full
+# /@user/workspace.agent/apps/<slug> prefix intact, so it serves under that path (http.baseURL) or its assets 404 (an
+# endless spinner); on 127.0.0.1 only, no sign-in of its own (Coder's app proxy lets only the owner in), no update
+# check. Its settings are written at every start (the Start folder may have changed); its database stays in the home.
+# An image built on an older workspace image still has the former File Browser: started with its own flags.
+# The agent name ("main") is hardcoded: referencing coder_agent.main here would be a cycle.
 if [ "$FILE_BROWSER" != true ]; then
  log "File Browser: not in this template"
 elif ! command -v filebrowser >/dev/null; then
- curl -fsSL --max-time 60 https://raw.githubusercontent.com/filebrowser/get/master/get.sh | sudo bash ||
-  echo "File Browser is not in this image and could not be downloaded: skipped"
-fi
-# Path-based apps are proxied with their full /@user/workspace.agent/apps/<slug> prefix
-# intact, so filebrowser must serve under it or its assets 404 (endless spinner).
-# The agent name ("main") is hardcoded: referencing coder_agent.main here would be a cycle.
-if [ "$FILE_BROWSER" != true ]; then
- :
-elif ! pgrep -x filebrowser >/dev/null; then
+ log "File Browser: not in this image: skipped"
+elif pgrep -x filebrowser >/dev/null; then
+ log "File Browser: running already"
+elif filebrowser version 2>/dev/null | grep -q "FileBrowser Quantum"; then
+ fb_dir="$HOME/.config/filebrowser-quantum"
+ mkdir -p "$fb_dir"
+ cat >"$fb_dir/config.yaml" <<FB
+http:
+  listen: 127.0.0.1
+  port: 13339
+  baseURL: "$APPS/filebrowser/"
+  trustProxyHeaders: true
+server:
+  disableUpdateCheck: true
+  database:
+    path: "$fb_dir/filebrowser.sqlite"
+  cacheDir: /tmp/filebrowser-cache
+  sources:
+    - path: "$START_DIR"
+      name: "$(basename "$START_DIR")"
+      config:
+        defaultEnabled: true
+        defaultPermissions:
+          view: true
+          download: true
+          modify: true
+          create: true
+          delete: true
+auth:
+  methods:
+    noauth: true
+userDefaults:
+  listing:
+    showHidden: true
+  account:
+    disableUpdateNotifications: true
+FB
+ # the whole subshell redirected (exec: it becomes File Browser), so nothing keeps the script's output open
+ (cd "$fb_dir" && exec filebrowser -c "$fb_dir/config.yaml" --no-input) </dev/null >/tmp/filebrowser.log 2>&1 &
+ log "File Browser (Quantum): started in $START_DIR (log: /tmp/filebrowser.log)"
+else
  filebrowser --noauth --root "$START_DIR" --port 13339 \
   --baseurl "$APPS/filebrowser" \
   >/tmp/filebrowser.log 2>&1 &
  log "File Browser: started in $START_DIR (log: /tmp/filebrowser.log)"
-else
- log "File Browser: running already"
 fi
 
 # 4. Apache NiFi and Apache Airflow: the ubuntu-dataflow template's apps, in place of code-server, with no network.
@@ -320,18 +356,29 @@ AIRFLOWRC
  fi
 fi
 
-# 5. LM Studio (the AI templates: ubuntu-lmstudio and ubuntu-opencode), on the AI workspace image, with no network:
-# its home linked to the image's app (its engines are not copied into every home), the GGUF models of the model
-# library (~/models) and of the owner's Cloud Drive (~/cloud-drive/models) linked in, its window on the desktop,
-# then its server on 127.0.0.1:1234 (models load when first asked for, with the Context length parameter's tokens)
-# and OpenCode's settings (OPENCODE_CONFIG: LM Studio's models). In the background, redirected: LM Studio takes up
-# to a minute to answer, and a background job holding the agent's output would keep this script from ending.
-if [ "$APP_SET" = lmstudio ] || [ "$APP_SET" = opencode ]; then
- if command -v coder-lmstudio-start >/dev/null; then
-  DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority setsid coder-lmstudio-start "$AI_CONTEXT" </dev/null >/tmp/lm-studio-start.log 2>&1 &
-  log "LM Studio: starting on the desktop, then its server on 127.0.0.1:1234 (log: /tmp/lm-studio-start.log)"
+# 5. Unsloth Studio (the AI templates: ubuntu-unsloth and ubuntu-opencode), on the AI workspace image, with no
+# network: its home linked to the image's install (its Python environments and llama.cpp are not copied into every
+# home), its window on the desktop, which starts its server on 127.0.0.1:8888 (OpenAI-compatible: OpenCode's provider,
+# with the model OpenCode loads at the Context length's tokens); it scans the model library (~/models) and the owner's
+# Cloud Drive (~/cloud-drive/models) for GGUF models. In the background, redirected: Unsloth takes up to a minute to
+# answer, and a background job holding the agent's output would keep this script from ending.
+if [ "$APP_SET" = unsloth ] || [ "$APP_SET" = opencode ]; then
+ if command -v coder-unsloth-start >/dev/null; then
+  DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority setsid coder-unsloth-start </dev/null >/tmp/unsloth-start.log 2>&1 &
+  log "Unsloth: starting on the desktop, with its server on 127.0.0.1:8888 (log: /tmp/unsloth-start.log)"
  else
-  log "LM Studio is not in this image (coder-lmstudio-start): skipped"
+  log "Unsloth Studio is not in this image (coder-unsloth-start): skipped"
+ fi
+fi
+
+# 6. Obsidian (ubuntu-obsidian), on its own image, with no network: the vault ~/Obsidian (made at the first start; a
+# folder of the workspace's home, kept with it), its automatic updates off, its window on the desktop.
+if [ "$APP_SET" = obsidian ]; then
+ if command -v coder-obsidian-start >/dev/null; then
+  DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority setsid coder-obsidian-start "$HOME/Obsidian" </dev/null >/tmp/obsidian-start.log 2>&1 &
+  log "Obsidian: starting on the desktop with the vault ~/Obsidian (log: /tmp/obsidian-start.log)"
+ else
+  log "Obsidian is not in this image (coder-obsidian-start): skipped"
  fi
 fi
 

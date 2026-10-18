@@ -2646,3 +2646,143 @@ class CodeServerHATest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloudDrivePeersTest(unittest.TestCase):
+    """Cloud Drives shared between users (drivepeers.py, through safe.py): asked for in chat, accepted by the owner
+    (read only or read and write), approved by an admin when admins approve, mounted in the requester's workspaces
+    from their next start (the templates' state), ended by either side or an admin; admins turn it all off."""
+
+    ANN = {"id": "3f0c2a52-7d7e-4c5b-9a3e-2f4b8c1d0e9a", "username": "ann", "roles": []}
+    BOB = {"id": "4a1d3b63-8e8f-4d6c-8b4f-3a5c9d2e1f0b", "username": "bob", "roles": []}
+    EVE = {"id": "5b2e4c74-9f90-4e7d-9c5a-4b6dae3f2a1c", "username": "eve", "roles": []}
+    ADMIN = {"id": "6c3f5d85-a0a1-4f8e-ad6b-5c7ebf4a3b2d", "username": "admin", "roles": ["owner"]}
+    WS = "11111111-2222-4333-8444-555555555555"
+
+    class Kube(CloudDriveConnectionsTest.Kube):
+        def call(self, method, path, body=None, patch_type=None):
+            if method == "GET" and "/pods?labelSelector=" in path:  # by whichever label the selector names
+                key, want = urllib.parse.unquote(path.split("labelSelector=", 1)[1]).split("=", 1)
+                return 200, {"items": [p for p in self.pods if p["metadata"]["labels"].get(key) == want]}
+            return super().call(method, path, body, patch_type)
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.safe = load("safe", "safe.py")
+        self.peers = self.safe.drivepeers
+        self.safe.LOG = lambda **kw: None
+        self.safe.LINKS_FILE = os.path.join(self.dir.name, "links.json")
+        self.peers.PEERS_FILE = os.path.join(self.dir.name, "peers.json")
+        self.chat, self.changes = [], []
+        users = {u["id"]: {**u, "name": "", "admin": "owner" in u["roles"]}
+                 for u in (self.ANN, self.BOB, self.EVE, self.ADMIN)}
+        self.peers.setup(lambda **kw: None, lambda u: "owner" in (u.get("roles") or []), users.get,
+                         lambda user, to, text, sid: self.chat.append((user["username"], to, text, sid)),
+                         lambda: self.changes.append(1))
+        pod = CloudDriveConnectionsTest.pod("coder-ann-1", self.WS, self.ANN["id"])
+        pod["spec"] = {"volumes": [{"name": "safe", "persistentVolumeClaim": {"claimName": "coder-safe-" + self.ANN["id"]}}]}
+        self.kube = self.Kube([pod])
+        self.safe.KUBE = self.kube
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_ask_accept_approve_mount_end(self):
+        p = self.peers
+        with self.assertRaises(PermissionError):  # off by default
+            p.request(self.ANN, {"owner": self.BOB["id"], "access": "write"})
+        with self.assertRaises(PermissionError):  # admins only
+            p.save_settings(self.ANN, {"enabled": True})
+        p.save_settings(self.ADMIN, {"enabled": True})
+        out = p.request(self.ANN, {"owner": self.BOB["id"], "access": "write"})
+        sid = out["share"]["id"]
+        self.assertEqual(out["share"]["state"], "asked")
+        self.assertEqual(self.chat[-1][:2], ("ann", self.BOB["id"]))
+        self.assertEqual(self.chat[-1][3], sid)
+        with self.assertRaises(ValueError):  # once
+            p.request(self.ANN, {"owner": self.BOB["id"], "access": "read"})
+        with self.assertRaises(PermissionError):  # only the owner answers
+            p.answer(self.EVE, sid, {"accept": True})
+        out = p.answer(self.BOB, sid, {"accept": True, "access": "read"})
+        self.assertEqual((out["share"]["state"], out["share"]["access"]), ("approval", "read"))
+        self.assertEqual(p.active(), {})
+        self.assertEqual([s["id"] for s in p.view(self.ADMIN)["waiting"]], [sid])
+        with self.assertRaises(PermissionError):
+            p.approve(self.BOB, sid, {"approve": True})
+        p.approve(self.ADMIN, sid, {"approve": True})
+        self.assertEqual(self.safe.peer_mounts(), {self.ANN["id"]: [
+            {"owner": self.BOB["id"], "name": "bob", "claim": "coder-safe-" + self.BOB["id"], "readOnly": True}]})
+        # the templates hear of it, and Ann's running workspace needs a restart to get it
+        self.safe.publish_state({})
+        self.assertEqual(json.loads(self.kube.state)["peers"][self.ANN["id"]][0]["claim"],
+                         "coder-safe-" + self.BOB["id"])
+        self.assertEqual(self.safe.stale_mounts(self.ANN["id"], None, set()), [self.WS])
+        self.assertTrue(self.changes)
+        with self.assertRaises(PermissionError):  # a third party does not end it
+            p.end(self.EVE, sid)
+        p.end(self.BOB, sid)
+        self.assertEqual(p.active(), {})
+        self.assertEqual(self.safe.stale_mounts(self.ANN["id"], None, set()), [])
+        self.assertIn("Ended", self.chat[-1][2])
+
+    def test_without_admin_approval_and_turned_off(self):
+        p = self.peers
+        p.save_settings(self.ADMIN, {"enabled": True})
+        waiting = p.request(self.EVE, {"owner": self.BOB["id"], "access": "read"})["share"]["id"]
+        p.answer(self.BOB, waiting, {"accept": True})
+        # approving turned off: what waited for an admin goes active, and new ones need only the owner
+        p.save_settings(self.ADMIN, {"adminApproval": False})
+        sid = p.request(self.ANN, {"owner": self.BOB["id"], "access": "write"})["share"]["id"]
+        self.assertEqual(p.answer(self.BOB, sid, {"accept": True})["share"]["state"], "active")
+        self.assertEqual({k: [m["access"] for m in v] for k, v in p.active().items()},
+                         {self.ANN["id"]: ["write"], self.EVE["id"]: ["read"]})
+        # read only cannot be widened to write by the owner's answer
+        other = p.request(self.ANN, {"owner": self.EVE["id"], "access": "read"})["share"]["id"]
+        with self.assertRaises(ValueError):
+            p.answer(self.EVE, other, {"accept": True, "access": "write"})
+        p.answer(self.EVE, other, {"accept": False})
+        self.assertEqual(next(x for x in p.view(self.ANN)["asked"] if x["id"] == other)["state"], "declined")
+        # the feature off: nothing mounted (kept for when it is back on)
+        p.save_settings(self.ADMIN, {"enabled": False})
+        self.assertEqual(p.active(), {})
+        p.save_settings(self.ADMIN, {"enabled": True})
+        self.assertEqual(len(p.active()), 2)
+
+    def test_shared_drive_opens_at_once_through_the_file_routes(self):
+        """A share is usable at once in the Cloud Drive window (?drive=<owner id>), before any workspace restart: read
+        with any active share, written only with a read and write one; nothing without an active share."""
+        p, safe = self.peers, self.safe
+        safe.ENABLED = True
+        p.save_settings(self.ADMIN, {"enabled": True, "adminApproval": False})
+        read = p.request(self.ANN, {"owner": self.BOB["id"], "access": "read"})["share"]["id"]
+        p.answer(self.BOB, read, {"accept": True})
+        write = p.request(self.EVE, {"owner": self.BOB["id"], "access": "write"})["share"]["id"]
+        p.answer(self.BOB, write, {"accept": True, "access": "write"})
+        self.assertEqual(p.access(self.ANN["id"], self.BOB["id"]), "read")
+        self.assertEqual(p.access(self.EVE["id"], self.BOB["id"]), "write")
+        self.assertIsNone(p.access(self.BOB["id"], self.ANN["id"]))
+
+        def call(user, method, path, query):
+            sent, seen = [], []
+            h = mock.Mock()
+            h.headers = {"X-Requested-With": "coder-ui", "Origin": "https://c.example", "Host": "c.example"}
+            h.user = lambda: (user, None)
+            h.send_json = lambda status, body: sent.append((status, body))
+            with mock.patch.object(safe, "listing", lambda u, path: seen.append(u["id"]) or {"path": path}), \
+                    mock.patch.object(safe, "make_folder", lambda u, path: seen.append(u["id"]) or {"ok": True}), \
+                    mock.patch.object(safe, "read_json", lambda h: {"path": "x"}):
+                safe.handle(h, method, "/__coder-ui/api/safe/" + path, query)
+            return sent[0][0], seen
+
+        drive = "drive=" + self.BOB["id"]
+        self.assertEqual(call(self.ANN, "GET", "list", "path=&" + drive), (200, [self.BOB["id"]]))
+        self.assertEqual(call(self.ANN, "POST", "folder", drive), (403, []))  # read only
+        self.assertEqual(call(self.EVE, "POST", "folder", drive), (200, [self.BOB["id"]]))
+        self.assertEqual(call(self.BOB, "GET", "list", "drive=" + self.EVE["id"]), (403, []))  # not shared
+        self.assertEqual(call(self.ANN, "GET", "list", "path="), (200, [self.ANN["id"]]))  # their own
+        # ended, or the feature off: no more
+        p.end(self.BOB, read)
+        self.assertEqual(call(self.ANN, "GET", "list", drive), (403, []))
+        p.save_settings(self.ADMIN, {"enabled": False})
+        self.assertEqual(call(self.EVE, "GET", "list", drive), (403, []))

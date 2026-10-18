@@ -13,7 +13,8 @@ reach - GeeseFS runs on the node, outside the cluster's DNS, so the chart's MinI
 account a PersistentVolume (Retain: removing it never removes files) and its claim.
 
   GET  /__coder-ui/api/safe                   the caller's safe: used, quota, where it is mounted
-  GET  /__coder-ui/api/safe/list?path=a/b     a folder of it: folders and files
+  GET  /__coder-ui/api/safe/list?path=a/b     a folder of it: folders and files (each file route also takes
+                                              &drive=<owner id>: a Cloud Drive shared with the caller, drivepeers)
   GET  /__coder-ui/api/safe/download?path=    a file, as an attachment
   PUT  /__coder-ui/api/safe/upload?path=      a file (the body; Content-Length), within the quota
   POST /__coder-ui/api/safe/folder {path}     a new folder
@@ -43,6 +44,9 @@ account a PersistentVolume (Retain: removing it never removes files) and its cla
                                                       ask with {path: overwrite | keep} for each collision)
   POST /__coder-ui/api/safe/mounts/unmount {workspace, path}
   POST /__coder-ui/api/safe/source/release {workspace, disconnect: [ids], confirm: "delete"}   the guard confirmed
+  /__coder-ui/api/safe/peers...               Cloud Drives shared between users (drivepeers.py): asked for in chat,
+                                              accepted by their owner, approved by an admin; mounted read only or
+                                              read and write in the requester's workspaces from their next start
 
 Only the owner reaches their Cloud Drive: the API serves the caller's own, and a workspace shared with other users or
 groups (Coder's workspace sharing) is kept disconnected and, from its next start, mounts none (the ConfigMap
@@ -68,7 +72,7 @@ Only ever the caller's own prefix: paths are checked segment by segment (no ".."
 The shared libraries (the Images view), each a prefix of the same bucket mounted read-only in workspaces (one shared
 volume each, ReadOnlyMany); everyone sees them, admins and template admins add and remove their files:
   - the ISO library: disk images for every workspace, library/isos/, at ~/isos (volume coder-isos);
-  - the model library: GGUF language models for the AI workspaces (LM Studio, OpenCode), library/models/, at ~/models
+  - the model library: GGUF language models for the AI workspaces (Unsloth, OpenCode), library/models/, at ~/models
     (volume coder-models). A model added waits in library/quarantine/models/ (mounted nowhere) until its security scan
     (garak, modelscan.py) releases it.
 
@@ -89,6 +93,7 @@ import time
 import urllib.parse
 import urllib.request
 
+import drivepeers
 import kexec
 import kitcrypto
 import s3client
@@ -436,14 +441,33 @@ def publish_now():
             LOG(event="cloud-drive-state-failed", error=str(e)[:200])
 
 
+def peer_mounts():
+    """{requester id: [{owner, name, claim, readOnly}]}: the Cloud Drives shared with each user (drivepeers), by the
+    volume their owner's own workspaces mount now - the S3 one, or the source's while it runs (none while it is
+    stopped)."""
+    srcs = sources()
+    out = {}
+    for requester, peers in drivepeers.active().items():
+        for p in peers:
+            src = srcs.get(p["owner"])
+            if src and not (_sources_seen.get(p["owner"]) or {}).get("running"):
+                continue
+            claim = (SOURCE_PREFIX if src else CLAIM_PREFIX) + p["owner"]
+            out.setdefault(requester, []).append({"owner": p["owner"], "name": p["name"], "claim": claim,
+                                                  "readOnly": p["access"] != "write"})
+    return out
+
+
 def publish_state(shared):
     """The ConfigMap the workspace templates read at a start: {"shared": [workspace ids], "sources": {owner id:
-    {workspace, path, running}}} - a shared workspace mounts no Cloud Drive; a source workspace serves its directory and
-    mounts none; the owner's others mount the source's while it runs."""
+    {workspace, path, running}}, "peers": {user id: [{owner, name, claim, readOnly}]}} - a shared workspace mounts no
+    Cloud Drive; a source workspace serves its directory and mounts none; the owner's others mount the source's while
+    it runs; a user's workspaces mount the Cloud Drives shared with them (peer_mounts)."""
     state = json.dumps({"shared": sorted(shared),
                         "sources": {owner: {"workspace": src["workspace"], "path": src["path"],
                                             "running": bool((_sources_seen.get(owner) or {}).get("running"))}
-                                    for owner, src in sorted(sources().items())}}, sort_keys=True)
+                                    for owner, src in sorted(sources().items())},
+                        "peers": peer_mounts()}, sort_keys=True)
     if state == _published["state"]:
         return
     path = "/api/v1/namespaces/%s/configmaps/%s" % (NAMESPACE, STATE_CONFIGMAP)
@@ -523,13 +547,15 @@ def connections(user):
 
 def stale_mounts(user_id, src, shared):
     """The account's running workspaces whose Cloud Drive volume is not the one they would get now (a source set or
-    cleared, or started while the source was stopped): theirs comes with a restart."""
+    cleared, or started while the source was stopped), or whose shared Cloud Drives (drivepeers) are not those shared
+    with the account now: theirs come with a restart."""
     if not (KUBE and KUBE.ok):
         return []
     status, pods = KUBE.call("GET", "/api/v1/namespaces/%s/pods?labelSelector=%s" % (
         NAMESPACE, urllib.parse.quote("com.coder.user.id=" + user_id)))
     out = []
     running = bool(src and (_sources_seen.get(user_id) or {}).get("running"))
+    peers_now = peer_mounts().get(user_id, [])
     for p in (pods.get("items") or []) if status == 200 and isinstance(pods, dict) else []:
         meta = p.get("metadata") or {}
         wid = (meta.get("labels") or {}).get("com.coder.workspace.id")
@@ -539,6 +565,13 @@ def stale_mounts(user_id, src, shared):
             continue  # a template without the Cloud Drive's connections
         claims = {(v.get("persistentVolumeClaim") or {}).get("claimName")
                   for v in (p.get("spec") or {}).get("volumes") or []}
+        # the Cloud Drives shared with the user: those it mounts, those it would mount now
+        has_peers = {c for c in claims if c and c.startswith((CLAIM_PREFIX, SOURCE_PREFIX))
+                     and c not in (CLAIM_PREFIX + user_id, SOURCE_PREFIX + user_id)}
+        want_peers = set() if wid in shared else {m["claim"] for m in peers_now}
+        if has_peers != want_peers:
+            out.append(wid)
+            continue
         has = (SOURCE_PREFIX + user_id) if (SOURCE_PREFIX + user_id) in claims else \
               (CLAIM_PREFIX + user_id) if (CLAIM_PREFIX + user_id) in claims else None
         if wid in shared or (src and src["workspace"] == wid):
@@ -549,7 +582,7 @@ def stale_mounts(user_id, src, shared):
             want = CLAIM_PREFIX + user_id
         if has != want and want is not None:
             out.append(wid)
-    return sorted(out)
+    return sorted(set(out))
 
 
 def set_connected(h, user, wid, body):
@@ -1995,6 +2028,11 @@ def mount_remove(h, user, body):
     return r
 
 
+# The routes that read or write a Cloud Drive's files: a shared one's too (?drive=).
+FILE_ROUTES = {BASE + "/api/safe/list", BASE + "/api/safe/download", BASE + "/api/safe/upload",
+               BASE + "/api/safe/folder", BASE + "/api/safe/delete"}
+
+
 def handle(h, method, path, query):
     """True when it answered."""
     if not path.startswith(BASE + "/api/safe"):
@@ -2009,7 +2047,18 @@ def handle(h, method, path, query):
     if err:
         return True
     q = dict(urllib.parse.parse_qsl(query or "", keep_blank_values=True))
+    shared = False
     try:
+        # A Cloud Drive shared with the caller (drivepeers): its owner's files, through the same file routes
+        # (?drive=<owner id>): read with any active share, written only with one shared read and write.
+        if q.get("drive") and q["drive"] != user["id"] and path in FILE_ROUTES:
+            access = drivepeers.access(user["id"], q["drive"])
+            if not access:
+                raise PermissionError("That Cloud Drive is not shared with you (any more).")
+            if method != "GET" and access != "write":
+                raise PermissionError("That Cloud Drive is shared with you read only.")
+            user = {"id": q["drive"], "username": "%s (shared, %s)" % (user["username"], access)}
+            shared = True
         if method == "GET" and path == BASE + "/api/safe":
             h.send_json(200, summary(user))
         elif method == "GET" and path == BASE + "/api/safe/list":
@@ -2056,6 +2105,8 @@ def handle(h, method, path, query):
             h.send_json(200, mount_apply(h, user, read_json(h, limit=16 * 1024 * 1024)))
         elif method == "POST" and path == BASE + "/api/safe/mounts/unmount":
             h.send_json(200, mount_remove(h, user, read_json(h)))
+        elif path == BASE + "/api/safe/peers" or path.startswith(BASE + "/api/safe/peers/"):
+            drivepeers.handle(h, method, path, user, read_json)
         elif method == "POST" and path.startswith(BASE + "/api/safe/connections/"):
             h.send_json(200, set_connected(h, user, path[len(BASE + "/api/safe/connections/"):], read_json(h)))
         elif method == "POST" and path == BASE + "/api/safe/settings/test":
@@ -2072,7 +2123,8 @@ def handle(h, method, path, query):
         h.send_json(403, {"error": "Only admins change where the Cloud Drive keeps files." if "/settings" in path
                           else str(e) or "Not yours."})
     except DriveUnavailable as e:
-        h.send_json(503, {"error": str(e)})
+        h.send_json(503, {"error": "Its owner's Cloud Drive cannot be reached now (it is being re-encrypted, or "
+                                   "kept in a workspace that is stopped): try again later." if shared else str(e)})
     except s3client.S3Error as e:
         if e.status == 404:
             h.send_json(404, {"error": "It is not in your Cloud Drive (any more)."})

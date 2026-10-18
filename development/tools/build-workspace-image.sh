@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 # Builds the workspace image ghcr.io/user187x/coder-workspace:<TAG> (../workspace-image: enterprise-base + desktop,
-# Firefox, JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc)
-# and saves it into the delivery bundle (helm-chart/images/custom/), replacing the previous one (needs internet).
+# Firefox, JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc,
+# code-server, FileBrowser Quantum) and saves it into the delivery bundle (helm-chart/images/custom/), replacing the
+# previous one (needs internet). FileBrowser Quantum is its release binary for linux-amd64, kept untracked at the
+# repository's root as filebrowser-quantum (or FILEBROWSER_QUANTUM=<file>): https://github.com/gtsteffaniak/filebrowser/
+# releases/download/v2.0.1-stable/linux-amd64-filebrowser (the Dockerfile checks its SHA-256).
 # Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.8.6
+#   ./build-workspace-image.sh [TAG]       default 1.8.7
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.8.6}"; img="ghcr.io/user187x/coder-workspace:${tag}"
-docker build --platform linux/amd64 -t "$img" "${dev}/workspace-image"
+tag="${1:-1.8.7}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+quantum="${FILEBROWSER_QUANTUM:-${top}/filebrowser-quantum}"
+[ -f "$quantum" ] || { echo "FileBrowser Quantum's binary is missing: $quantum (see the top of this script)" >&2; exit 1; }
+# the binary alone as a build context of its own (not the repository)
+qctx="$(mktemp -d)"; trap 'rm -rf "$qctx"' EXIT
+cp "$quantum" "$qctx/filebrowser-quantum"
+docker build --platform linux/amd64 --build-context quantum="$qctx" -t "$img" "${dev}/workspace-image"
 # What the image must provide (the template relies on it):
 docker run --rm --entrypoint sh "$img" -c '
 	set -e
@@ -36,14 +44,18 @@ docker run --rm --network none --shm-size 256m --entrypoint bash "$img" -c '
 	set -e; export HOME="$(mktemp -d)"; echo "<h1>ok</h1>" >"$HOME/t.html"
 	timeout 120 firefox --headless --screenshot "$HOME/s.png" "file://$HOME/t.html" >"$HOME/ff.log" 2>&1 || { cat "$HOME/ff.log"; exit 1; }
 	test -s "$HOME/s.png" && echo "firefox offline check passed"'
-# code-server and File Browser start and answer with no network at all (the template's two web apps).
+# code-server and File Browser (Quantum, set up as the template does: under an app path, no sign-in) start and answer
+# with no network at all (the template's two web apps).
 docker run --rm --network none --entrypoint bash "$img" -c '
-	set -e; export HOME="$(mktemp -d)"; cd "$HOME"
+	set -e; export HOME="$(mktemp -d)"; cd "$HOME"; mkdir -p files/sub && echo hi >files/sub/a.txt
 	code-server --auth none --bind-addr 127.0.0.1:13337 --disable-telemetry --disable-update-check >cs.log 2>&1 &
-	filebrowser --noauth --root "$HOME" --port 13339 --database "$HOME/fb.db" >fb.log 2>&1 &
-	for i in $(seq 1 60); do curl -fs http://127.0.0.1:13337/healthz >/dev/null && curl -fs http://127.0.0.1:13339/health >/dev/null && break; sleep 0.5; done
+	printf "http:\n  listen: 127.0.0.1\n  port: 13339\n  baseURL: /@u/w.main/apps/filebrowser/\nserver:\n  disableUpdateCheck: true\n  database:\n    path: %s/fb.sqlite\n  sources:\n    - path: %s/files\n      name: files\n      config:\n        defaultEnabled: true\nauth:\n  methods:\n    noauth: true\n" "$HOME" "$HOME" >fb.yaml
+	filebrowser -c fb.yaml --no-input >fb.log 2>&1 &
+	fb=http://127.0.0.1:13339/@u/w.main/apps/filebrowser
+	for i in $(seq 1 60); do curl -fs http://127.0.0.1:13337/healthz >/dev/null && curl -fs $fb/health >/dev/null && break; sleep 0.5; done
 	curl -fs http://127.0.0.1:13337/healthz >/dev/null || { cat cs.log; exit 1; }
-	curl -fs http://127.0.0.1:13339/health >/dev/null || { cat fb.log; exit 1; }
+	curl -fs $fb/health >/dev/null || { cat fb.log; exit 1; }
+	curl -fs "$fb/api/resources?path=/sub&source=files" | grep -q a.txt || { cat fb.log; exit 1; }
 	echo "code-server and File Browser offline checks passed"'
 # its archive in the bundle, in its section's folder of images.txt (replacing the previous tag's)
 "${top}/helm-chart/mirror-images.sh" store "$img"

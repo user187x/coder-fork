@@ -39,6 +39,11 @@ before building on it, or using it in an enclave.
                                                         holds it (no registry needed: air-gapped clusters, preloaded
                                                         images); listed as a read-only entry with its report
     GET  /__coder-ui/internal/builds/<token>/context.tar    (build Job)   POST .../report (scan Job)
+
+The workspace templates' Workspace image choices (ConfigMap IMAGES_CONFIGMAP, key "images", JSON, kept every
+IMAGES_PUBLISH_SECONDS): {"registry": [{ref, name, version, description}] - every version built or imported here that
+the registry still has - and "nodes": [refs] - the platform's workspace images (coder-workspace*) the nodes keep}; a
+template offers its own image, these (the nodes' of its own image's repository only) and any other image entered.
 """
 
 import base64
@@ -2723,6 +2728,67 @@ def sync_tracked():
         start_rescan(TRACKED_ID, "platform")
 
 
+IMAGES_CONFIGMAP = "coder-workspace-images"
+IMAGES_PUBLISH_SECONDS = int(os.environ.get("BUILDER_IMAGES_PUBLISH_SECONDS", "30"))
+# The platform's workspace images on the nodes (their earlier versions too): ghcr.io/user187x/coder-workspace[-*]:<tag>.
+WORKSPACE_IMAGE_RE = re.compile(r"^[^@\s]*/coder-workspace(-[a-z0-9]+)*:[A-Za-z0-9._-]+$")
+_images_published = {"state": None}
+
+
+def workspace_image_choices():
+    """What the templates offer as a workspace's image besides their own (see the module's docstring)."""
+    registry = []
+    for img in STORE.images():
+        if img.get("tracked") or img.get("scanned") or not img.get("pullRef"):
+            continue
+        versions = sorted({b["version"] for b in STORE.builds(img["id"], limit=200) if b["status"] == "ready"}
+                          | {img["version"]}, reverse=True)
+        for v in versions:
+            registry.append({"ref": "%s/%s/%s:%d" % (PULL_PREFIX, REPO, img["id"], v), "name": img["id"],
+                             "version": v, "description": (img.get("description") or "")[:200]})
+    nodes = sorted({ref for ref in node_images() if WORKSPACE_IMAGE_RE.match(ref)})
+    return {"registry": registry, "nodes": nodes}
+
+
+def publish_workspace_images():
+    state = json.dumps(workspace_image_choices(), sort_keys=True)
+    if state == _images_published["state"]:
+        return
+    path = "/api/v1/namespaces/%s/configmaps/%s" % (NAMESPACE, IMAGES_CONFIGMAP)
+    body = {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": IMAGES_CONFIGMAP, "namespace": NAMESPACE,
+                         "labels": {"app.kubernetes.io/name": "coder-image-builder",
+                                    "app.kubernetes.io/part-of": "coder"}},
+            "data": {"images": state}}
+    status, cur = kube_call("GET", path)
+    if status == 404:
+        status, _ = kube_call("POST", "/api/v1/namespaces/%s/configmaps" % NAMESPACE, body)
+    elif status == 200:
+        if (cur.get("data") or {}).get("images") == state:
+            _images_published["state"] = state
+            return
+        version = (cur.get("metadata") or {}).get("resourceVersion")
+        if version:
+            body["metadata"]["resourceVersion"] = version
+        status, _ = kube_call("PUT", path, body)
+    if status not in (200, 201):
+        raise RuntimeError("ConfigMap %s: HTTP %s" % (IMAGES_CONFIGMAP, status))
+    _images_published["state"] = state
+
+
+def _publish_images_loop():
+    last = None
+    while True:
+        try:
+            publish_workspace_images()
+            last = None
+        except Exception as e:  # noqa: BLE001 - reported once, tried again on the next round
+            if LOG and str(e) != last:
+                LOG(event="workspace-images-publish-failed", error=str(e)[:300])
+            last = str(e)
+        time.sleep(IMAGES_PUBLISH_SECONDS)
+
+
 def _sync_tracked_loop():
     while True:
         try:
@@ -2806,6 +2872,7 @@ def start():
         STORE = DB(os.path.join(FILES, "images.sqlite"))
         securitydata.setup(FILES)
         threading.Thread(target=_sync_tracked_loop, daemon=True, name="tracked-image").start()
+        threading.Thread(target=_publish_images_loop, daemon=True, name="workspace-images").start()
 
 
 if __name__ == "__main__":

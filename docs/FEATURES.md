@@ -29,7 +29,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Coder image with a Terraform provider mirror (`-airgap`): template pushes and builds never reach `registry.terraform.io` | chart | e2e step 8 |
 | No telemetry, update check, trial or premium funnel, STUN servers or GitHub/GitLab default login: Coder contacts nothing outside the network | fork | `go test ./cli` (OIDC), egress crawl |
 | Coder starts and password sign-in works before Keycloak is set up or while it is down (Keycloak's standard endpoints; other OIDC providers: password-only, then a restart once they answer). Keycloak's Secrets optional | fork, chart | `go test ./cli -run OIDC`, verify |
-| Workspace image with everything preinstalled: desktop (XFCE, noVNC), Firefox, code-server, File Browser, tmux, btop, k9s, kubectl, kubelogin, JetBrains Mono Nerd Font | image | image build checks (offline), e2e step 8 |
+| Workspace image with everything preinstalled: desktop (XFCE, noVNC), Firefox, code-server, File Browser (FileBrowser Quantum), tmux, btop, k9s, kubectl, kubelogin, JetBrains Mono Nerd Font | image | image build checks (offline), e2e step 8 |
 | Images lists the workspace template's own image (read-only): its security report and its add-ons (every program with its version, apt and Python packages, from the image's addons.json) | service, fork, image | platform unit tests, vitest |
 | Workspace template UBUNTU (`ubuntu-vnc-desktop`, Ubuntu icon): its scripts as files (`files/scripts/`, `shfmt -i 1`; the metrics as functions of `metadata.sh`), read with `file()` / `templatefile()`; a workspace load average beside the node's | chart | chart checks, step8 |
 | Workspace network lights: RX / TX LEDs in the workspace header, flickering with the workspace's own traffic (template metadata `net`); hover for a live graph of the last minute (received green, sent blue, the axis in B/s to GB/s); red and still while Lock Down cuts the network, the graph showing no traffic | fork, chart | vitest |
@@ -67,21 +67,33 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Workspace image without what a pod cannot use (PulseAudio with ffmpeg's libraries, libsoup, Docker's engine, ...) and with GNU coreutils: no critical or high finding, the rest waiting on Ubuntu's fixes | workspace image | build checks, scan, verify |
 | Layer bundle per release: the customization layer alone (chart, installers, changed images; ours as thin deltas of their previous version), checked against the cluster before it installs | bundle | layer build + restore check, layer deploy on Minikube |
 | Argo CD decorator install: the Coder installation (coder-airgapped-base, upstream Coder) and the customization layer (coder-airgapped-layer) as two charts in one Application; the layer comes off again (`--plain`) with the data kept; `./make --argocd` pushes to Harbor and deploys | bundle, chart | static checks, kind + Argo CD e2e |
-| **Lock Down**: admins jail a workspace (Network: only Coder reachable; Sudo Command: no sudo; Complete: both; Freeze: Complete and everything paused, with a snapshot of its disk), live while it runs or from its next start, and again after every restart until lifted; a centred notice for everyone who sees it; red, still network lights | fork, service, chart | platform unit tests, vitest, live Lock Down test |
+| **Lock Down**: admins jail a workspace (Disconnect Network: only Coder reachable; Privilege Escalation Disable: no sudo; Lock Down: both; Freeze: Lock Down and everything paused, with a snapshot of its disk), live while it runs or from its next start, and again after every restart until lifted; a centred notice for everyone who sees it; red, still network lights | fork, service, chart | platform unit tests, vitest, live Lock Down test |
 | Per-user quota | fork, service | e2e step 8 |
 | "Animations" switch; no Favorite; no links to Coder's online docs | fork | vitest |
+| Cloud Drive encryption wrapped with a Password, a PEM certificate, or a PFX (the certificate read out of the P12 in the browser - the Account's own, handed back to its owner only - its password never sent, stored or logged) | fork, service | vitest, unit |
+| Cloud Drives shared between users: asked for in chat (a request card), shared read only or read and write by the owner, approved by an admin (both switches in Cloud Drive › Sharing), mounted at `~/cloud-drive-shared/<owner>` from the next start | fork, service, chart | vitest, unit, live |
+| A shared Cloud Drive open at once in the Cloud Drive window (its drive switcher; read only: no Upload, New folder or Delete, writes refused by the service); the Sharing view names the workspaces a restart brings the shares to | fork, service | vitest, unit, live |
+| The Accounts table's cables: each active share a Cloud Drive cable from the owner's row (its socket) to the row of whom it is shared with (a plug; green prongs read and write, blue read only), pointed at: who and how, both rows marked | fork | vitest, live |
+| Workspaces list: an outdated workspace's update icon pulses in the workspace page's orange | fork | vitest |
+| File Browser is FileBrowser Quantum (the provided release binary), under the app's path, on 127.0.0.1, no sign-in of its own | image, chart | image build check, live |
 
 ## 4. Templates and images
 
 | Feature | Where | Test |
 |---|---|---|
-| Template Overview: resources, Details (Coder's insights; number parameters shown without quotes) and the README; Source Code with versions (squash ranges, Promote) | fork | vitest |
+| Template Overview: resources, Details (Coder's insights; parameter values shown without quotes) and the README; Source Code with versions (squash ranges, Promote) | fork | vitest |
 | Export as ZIP: the template's Terraform, scripts and other files and every icon it uses (the Embed tab and Share menu removed) | fork | vitest, verify UI |
 | Templates › Images: an image builder in the cluster (BuildKit rootless): base, apt packages (checked as you type), uploaded .deb files, installations, removals, hardening, XFCE/GNOME/no desktop, dotfiles; review and Dockerfile; builds with progress | fork, service | step 9 |
 | Every build scanned offline: trivy (vulnerabilities, secrets), users/sudo/setuid checks, FIPS readiness; reports say what graded them | service | step 9 |
 | Security data kept current in an air gap: load trivy's databases and FIPS rules from a file made outside (`build-security-data.sh`), dated, rescans | service | verify |
 | Built images downloadable, backed up to S3 | service | verify |
 | A template renamed in the dashboard keeps getting the chart's updates | chart | verify |
+| AI templates: UBUNTU UNSLOTH (Unsloth Studio's desktop app and its OpenAI-compatible server, installed in the image) and UBUNTU OPENCODE (OpenCode on the workspace's Unsloth); UBUNTU UNSLOTH takes over UBUNTU LM STUDIO | image, chart | image build check, live |
+| UBUNTU OBSIDIAN: Obsidian on the desktop with the vault `~/Obsidian`, updates off (internal use: `build-bundle.sh --no-obsidian`) | image, chart | image build check, live |
+| Workspace image parameter: a dropdown of the template's image (follows the template), Templates › Images' images and Another image… with guidance; earlier literal values run the template's image | chart, service | verify, live |
+| Template versions deleted from the history (not the active one, one building, or one a workspace runs) | fork | go test, vitest |
+| Create new template: admins rename the base template; icon fields upload an image (Emoji or icon / Upload image) | fork | vitest |
+| Source Code: a file picked in the tree is centred, without the hash jump | fork | vitest |
 
 ## 5. Administration and monitoring
 

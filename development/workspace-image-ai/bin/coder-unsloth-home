@@ -1,0 +1,32 @@
+#!/bin/sh
+# ~/.unsloth for the Unsloth Studio in /opt/unsloth, at every start of an AI workspace (coder-unsloth-start): what the
+# image installed - the server's Python environments, llama.cpp, Node, whisper.cpp, audio.cpp - is linked, not copied
+# (some 10 GB); the rest of ~/.unsloth/studio is the workspace's own and stays (chats, settings, accounts, outputs,
+# exports, logs). A link into an Unsloth no longer in the image is replaced; a copy in the way (a home that ran
+# Unsloth's own installer) is moved aside once.
+#   coder-unsloth-home
+set -eu
+I=/opt/unsloth/.unsloth
+U="$HOME/.unsloth"
+[ -d "$I/studio" ] || {
+	echo "Unsloth Studio is not in this image (/opt/unsloth)"
+	exit 0
+}
+mkdir -p "$U/studio"
+
+link() { # TARGET LINK: a link replaced; a real copy in the way moved aside
+	if [ -e "$2" ] && [ ! -L "$2" ]; then mv "$2" "$2.before-image-$(date +%Y%m%d%H%M%S)"; fi
+	ln -sfn "$1" "$2"
+}
+for d in llama.cpp node whisper.cpp audio.cpp; do
+	if [ -e "$I/$d" ]; then link "$I/$d" "$U/$d"; fi
+done
+for d in "$I"/studio/unsloth_studio "$I"/studio/.venv_t5_*; do
+	if [ -e "$d" ]; then link "$d" "$U/studio/$(basename "$d")"; fi
+done
+# links to environments the image no longer has
+for l in "$U"/studio/.venv_t5_*; do
+	if [ -L "$l" ] && [ ! -e "$l" ]; then rm -f "$l"; fi
+done
+# the installer's mark that this Unsloth home is Unsloth's own
+: >"$U/studio/.unsloth-studio-owned"

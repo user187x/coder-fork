@@ -12,11 +12,15 @@
 # It also installs the `cloud-drive` command (~/.local/bin/cloud-drive): the Cloud Drive mounted into folders of the
 # workspace (`cloud-drive mount ~/project/data`), files of the same name resolved as the owner chooses; the watcher
 # brings those mounts up to date every 10 seconds (`cloud-drive sync`).
+# The Cloud Drives other users shared with the owner (Cloud Drive > Sharing) come mounted under PEERS, one folder per
+# owner (read only unless shared read and write): linked at ~/cloud-drive-shared/<owner>, at every start.
 # main.tf renders this with templatefile(): link, mode, mount and cli are the template's values (no shell braces here).
 LINK='${link}'
 MODE='${mode}'
 MOUNT='${mount}'
 STATE=/etc/platform/cloud-drive
+PEERS=/mnt/cloud-drive-peers
+SHARED="$HOME/cloud-drive-shared"
 PIDFILE=/tmp/cloud-drive-watch.pid
 CLI="$HOME/.local/bin/cloud-drive"
 
@@ -57,6 +61,22 @@ sync_link() {
 }
 
 sync_link
+
+# The shared Cloud Drives: a link for each one mounted now; links to ones no longer shared go.
+if [ -d "$SHARED" ]; then
+ find "$SHARED" -mindepth 1 -maxdepth 1 -type l -lname "$PEERS/*" -delete
+fi
+for d in "$PEERS"/*/; do
+ [ -d "$d" ] || continue
+ name="$(basename "$d")"
+ mkdir -p "$SHARED" && ln -sfn "$PEERS/$name" "$SHARED/$name"
+ if [ -w "$PEERS/$name" ]; then access="read and write"; else access="read only"; fi
+ echo "Cloud Drive: $name's, shared with you ($access): $SHARED/$name"
+done
+if [ -d "$SHARED" ] && [ -z "$(ls -A "$SHARED")" ]; then
+ rmdir "$SHARED"
+fi
+
 # A watcher from an earlier start (the agent restarted) gives way to this one.
 if [ -f "$PIDFILE" ]; then
  kill "$(cat "$PIDFILE")" 2>/dev/null || true

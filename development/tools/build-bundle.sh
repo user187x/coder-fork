@@ -22,16 +22,17 @@
 #                                           coder); no third-party chart or image unless it changed (helm-chart/layer-support)
 # Lints and renders the chart first. Public image archives that are missing are fetched with `mirror-images.sh save`
 # (needs internet; --no-save fails instead). Our image archives must exist (tools/build-*.sh).
-#   ./build-bundle.sh [--no-save] [--no-slim] [--no-split] [--layer-base VERSION | --no-layer] [--no-lmstudio]
+#   ./build-bundle.sh [--no-save] [--no-slim] [--no-split] [--layer-base VERSION | --no-layer] [--no-obsidian]
 # --no-slim: not the slim tarball (not a release asset; it holds every image of ours, the dataflow one among them).
-# --no-lmstudio: no LM Studio in any of the tarballs - LM Studio's terms allow personal and internal business use only,
-#   so a bundle that leaves the organization (a public release) must not carry it: the AI image's archive and its
-#   images.txt line are left out, and the AI templates are off in the chart's values and in every packaged chart.
+# --no-obsidian: no Obsidian in any of the tarballs - Obsidian is a private package, for the organization's own clusters,
+#   so a bundle that leaves the organization (a public release) must not carry it: the Obsidian image's archive and
+#   its images.txt line are left out, and the Obsidian template is off in the chart's values and in every packaged
+#   chart. (The AI image's Unsloth Studio is AGPL-3.0 and ships; LM Studio, which it replaced, did not.)
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; top="$(cd "${here}/../.." && pwd)"
 bundle="${top}/helm-chart"; chart="${bundle}/coder-airgapped"; dist="${top}/dist"
 version=$(sed -n 's/^version: *//p' "${chart}/Chart.yaml"); name="coder-airgapped-${version}"
-save=1 slim=1 split=1 layer_base="" lmstudio=1
+save=1 slim=1 split=1 layer_base="" private=1
 while (($#)); do
 	case "$1" in
 	--no-save) save=0 ;;
@@ -39,7 +40,7 @@ while (($#)); do
 	--no-split) split=0 ;;
 	--layer-base) layer_base="${2:?--layer-base VERSION}"; shift ;;
 	--no-layer) layer_base=none ;;
-	--no-lmstudio) lmstudio=0 ;;
+	--no-obsidian) private=0 ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 	shift
@@ -62,40 +63,40 @@ done
 mirror verify | tail -n 1
 
 zip=$(command -v pigz || echo gzip); mkdir -p "$dist"
-ai_image=$(awk '!/^#/ && $1 ~ /^ghcr\.io\/user187x\/coder-workspace-ai:/ {print $1; exit}' "${bundle}/images.txt")
-ai_archive=$(mirror path "$ai_image")
-ai_off() { # VALUES OUT: the AI templates off
+ob_image=$(awk '!/^#/ && $1 ~ /^ghcr\.io\/user187x\/coder-workspace-obsidian:/ {print $1; exit}' "${bundle}/images.txt")
+ob_archive=$(mirror path "$ob_image")
+ob_off() { # VALUES OUT: the Obsidian template off
 	python3 - "$1" "$2" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
-s, n = re.subn(r"(\n  aiTemplates:\n(?:    #.*\n)*    enabled: )true", r"\1false", s)
+s, n = re.subn(r"(\n  obsidianTemplate:\n(?:    #.*\n)*    enabled: )true", r"\1false", s)
 if n != 1:
-    sys.exit("aiTemplates.enabled not found in " + sys.argv[1])
+    sys.exit("obsidianTemplate.enabled not found in " + sys.argv[1])
 open(sys.argv[2], "w").write(s)
 PY
 }
 
-# --no-lmstudio: the files that change, staged under nolms/ (put in place of the originals, which are excluded).
-nolms_dir="${dist}/.no-lmstudio-${version}" nolms=() nolms_src=()
+# --no-obsidian: the files that change, staged under nolms/ (put in place of the originals, which are excluded).
+nolms_dir="${dist}/.no-private-${version}" nolms=() nolms_src=()
 rm -rf "$nolms_dir"
-if ((!lmstudio)); then
-	mkdir -p "${nolms_dir}/nolms/coder-airgapped" "${nolms_dir}/nolms/$(dirname "$ai_archive")"
-	ai_off "${chart}/values.yaml" "${nolms_dir}/nolms/coder-airgapped/values.yaml"
-	grep -vF "${ai_image} " "${bundle}/images.txt" >"${nolms_dir}/nolms/images.txt"
-	grep -vF "  $(basename "$ai_archive")" "${bundle}/$(dirname "$ai_archive")/SHA256SUMS" \
-		>"${nolms_dir}/nolms/$(dirname "$ai_archive")/SHA256SUMS"
-	nolms=(--exclude="helm-chart/${ai_archive}" --exclude='helm-chart/images.txt'
-		--exclude="helm-chart/$(dirname "$ai_archive")/SHA256SUMS" --exclude='helm-chart/coder-airgapped/values.yaml')
+if ((!private)); then
+	mkdir -p "${nolms_dir}/nolms/coder-airgapped" "${nolms_dir}/nolms/$(dirname "$ob_archive")"
+	ob_off "${chart}/values.yaml" "${nolms_dir}/nolms/coder-airgapped/values.yaml"
+	grep -vF "${ob_image} " "${bundle}/images.txt" >"${nolms_dir}/nolms/images.txt"
+	grep -vF "  $(basename "$ob_archive")" "${bundle}/$(dirname "$ob_archive")/SHA256SUMS" \
+		>"${nolms_dir}/nolms/$(dirname "$ob_archive")/SHA256SUMS"
+	nolms=(--exclude="helm-chart/${ob_archive}" --exclude='helm-chart/images.txt'
+		--exclude="helm-chart/$(dirname "$ob_archive")/SHA256SUMS" --exclude='helm-chart/coder-airgapped/values.yaml')
 	nolms_src=(-C "$nolms_dir" nolms)
-	echo "--no-lmstudio: without the AI image (LM Studio), the AI templates off"
+	echo "--no-obsidian: without the Obsidian image, the Obsidian template off"
 fi
 
-# charts/: every chart of ours packaged - from a copy with the AI templates off for --no-lmstudio - with the index of
+# charts/: every chart of ours packaged - from a copy with the Obsidian template off for --no-obsidian - with the index of
 # a Helm repository and their checksums (git ignores the folder; every tarball ships it)
 charts="${bundle}/charts"; rm -rf "$charts"; mkdir -p "$charts"
 src_chart=$(mktemp -d)/coder-airgapped; cp -r "$chart" "$src_chart"
 find "$src_chart" -name __pycache__ -type d -prune -exec rm -rf {} +
-((lmstudio)) || ai_off "${chart}/values.yaml" "${src_chart}/values.yaml"
+((private)) || ob_off "${chart}/values.yaml" "${src_chart}/values.yaml"
 helm package "$src_chart" -d "$charts" | sed "s|.*saved it to: ${bundle}/|packaged |"
 CHART_DIR="$src_chart" mirror decorator-charts "$charts" | sed "s|^${bundle}/|packaged |"
 rm -rf "$(dirname "$src_chart")"
@@ -149,8 +150,8 @@ fi
 [[ -n "$layer_base" && "$layer_base" != none ]] || { echo "no layer bundle (no earlier release to build it on)"; rm -rf "$nolms_dir"; exit 0; }
 # (staged as layer-files/: the excludes below match names before --transform, so they leave the staged files alone)
 staging="${dist}/.layer-${version}"; rm -rf "$staging"; mkdir -p "${staging}/layer-files"
-# (--no-lmstudio: the AI image left out of the layer too)
-LAYER_SKIP_IMAGES=$( ((lmstudio)) || echo '^ghcr\.io/user187x/coder-workspace-ai:') \
+# (--no-obsidian: the Obsidian image left out of the layer too)
+LAYER_SKIP_IMAGES=$( ((private)) || echo '^ghcr\.io/user187x/coder-workspace-obsidian:') \
 	"${bundle}/layer-support" build "$layer_base" "${staging}/layer-files"
 while read -r f; do
 	mkdir -p "${staging}/layer-files/prereqs"; cp "${bundle}/prereqs/${f}" "${staging}/layer-files/prereqs/"

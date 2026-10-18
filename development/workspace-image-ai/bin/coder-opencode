@@ -1,0 +1,33 @@
+#!/bin/sh
+# The OpenCode app of ubuntu-opencode, in the Start folder: OpenCode on the workspace's Unsloth. Once Unsloth's server
+# answers (coder-unsloth-start runs at every start), `unsloth start opencode` loads a model - the one loaded in Unsloth,
+# else the first GGUF model of the model library (~/models) or of the Cloud Drive (~/cloud-drive/models) - at the
+# template's Context length, gives OpenCode an API key of this Unsloth, and starts it. Without a model: what to do.
+#   coder-opencode [CONTEXT]
+CONTEXT="${1:-${CODER_AI_CONTEXT:-32768}}"
+i=0
+until curl -fs -m 2 http://127.0.0.1:8888/api/health >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -eq 1 ]; then echo "Waiting for Unsloth's server (it starts with the workspace's desktop)..."; fi
+	if [ "$i" -ge 90 ]; then
+		echo "Unsloth's server does not answer: see /tmp/unsloth-studio.log, or restart the workspace."
+		exec "${SHELL:-bash}"
+	fi
+	sleep 2
+done
+# a model loaded already (in the app, or by an earlier OpenCode): OpenCode on it
+if unsloth start opencode --no-launch </dev/null >/tmp/opencode-attach.log 2>&1; then
+	exec unsloth start opencode
+fi
+model=""
+for d in $(coder-unsloth-models | tr ':' ' '); do
+	model="$(find -L "$d" -maxdepth 3 -type f -iname '*.gguf' ! -iname 'mmproj*' 2>/dev/null | sort | head -n 1)"
+	if [ -n "$model" ]; then break; fi
+done
+if [ -z "$model" ]; then
+	echo "No model: add a GGUF model to the model library (Templates > Images > Model library) or to your Cloud"
+	echo "Drive's models folder, or load one in the Unsloth app on the desktop; then open OpenCode again."
+	exec "${SHELL:-bash}"
+fi
+echo "Loading $(basename "$model") in Unsloth (context: $CONTEXT tokens)..."
+exec unsloth start opencode --model "$model" --context-length "$CONTEXT"

@@ -2,8 +2,53 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.65` (fork `474bc71e0`), workspace image `coder-workspace:1.8.6`, dataflow image
-`coder-workspace-dataflow:1.1.1`, AI image `coder-workspace-ai:1.0.1`, model scanner `coder-garak:0.17.1-2`.
+Coder `2.0.0-platform.67` (fork `1f50059bf`), workspace image `coder-workspace:1.8.7`, dataflow image
+`coder-workspace-dataflow:1.1.2`, AI image `coder-workspace-ai:2.0.0`, Obsidian image `coder-workspace-obsidian:1.0.0`,
+model scanner `coder-garak:0.17.1-2`.
+
+* **Unsloth Studio replaces LM Studio:** the AI image 2.0.0 carries Unsloth Studio (AGPL-3.0) - its desktop app (the
+  provided `unsloth.AppImage`) and its server, installed at build time by the app's own installer (CUDA PyTorch,
+  llama.cpp's CUDA build with CPU fallback, Node), offline at run time; each home links to it (under 1 MB). UBUNTU
+  UNSLOTH (the Unsloth app on the desktop) takes over UBUNTU LM STUDIO (renamed, its workspaces offered the update);
+  UBUNTU OPENCODE runs OpenCode on the workspace's Unsloth (`unsloth start opencode`: a model loaded at the Context
+  length, an API key of it). Models from the model library and the Cloud Drive's `models` folder.
+  `build-ai-image.sh [TAG] [--cpu]`.
+* **UBUNTU OBSIDIAN:** Obsidian 1.14.4 (the provided package) on its own image, its window the desktop's app, the
+  vault `~/Obsidian`, updates off; internal use only (`build-bundle.sh --no-obsidian`, which replaces
+  `--no-lmstudio`). `build-obsidian-image.sh`.
+* **FileBrowser Quantum** (2.0.1, the provided release binary, unpacked from UPX for scanning) is the File Browser app in
+  the workspace image 1.8.7 (and dataflow 1.1.2): under the app's path, on 127.0.0.1, no sign-in or update check of its
+  own; an image built on an older workspace image keeps its former File Browser.
+* **The Workspace image parameter is a dropdown:** the template's image (stored as such, so a template update brings
+  its new image), every version built or imported in Templates › Images (the ConfigMap `coder-workspace-images`, kept
+  by the platform service), or Another image… with an example and a plain check; a workspace whose image was removed
+  is offered the list instead of "Invalid parameter value", and one created before (an earlier tag of the template's
+  image) runs the template's image. Another image… now brings its Image to run field as soon as it is chosen, and the
+  list is in order (the template's image, Templates › Images, earlier versions, Another image… last): both used
+  try(), which Coder's form settles before the choice and the version's ConfigMap data are known.
+* **Workspace start fixed:** File Browser's launch kept the startup script's output open, so every workspace on the
+  new templates ended in "start_error" ("script exited without closing output pipes"), its apps working; a running
+  workspace shows it until its next start.
+* **Cloud Drives shared between users:** admins turn it on and choose whether they approve each share (Cloud Drive >
+  Sharing); users ask each other in chat (Ask for their Cloud Drive - a request card), the owner shares it read only
+  or read and write, and it is at `~/cloud-drive-shared/<owner>` in the requester's workspaces from their next start -
+  and at once in the Cloud Drive window (its drive switcher: Mine, or each drive shared with you; read only hides
+  Upload, New folder and Delete, and the service refuses writes too). The Sharing view names the running workspaces a
+  restart brings the shares to. The Accounts table draws the shares with the Cloud Drive's cables: from the socket at
+  the owner's row to a plug at the row of whom it is shared with (green prongs read and write, blue read only; point
+  at one for who and how).
+* **Encryption with a PEM or a PFX:** Password, PEM, or PFX - the certificate read out of the Account's P12 (Coder
+  hands it back to its owner only) or a chosen file, in the browser, with legacy RC2/3DES exports too; the password
+  never leaves the page. A note says so first.
+* **Lock Down's menu:** Disconnect / Reconnect Network, Privilege Escalation Disable / Enable (a new icon), Lock Down /
+  Unlock, Freeze / Unfreeze, each red while its lock is on and green while off.
+* **Templates:** delete versions from the history (Source Code > Versions); admins rename the base template in Create
+  new template; icon fields upload an image from their menu; Overview values without quotes; a file picked in Source
+  Code's tree is centred (no more jitter).
+* **Workspaces:** the update icon pulses in the workspace page's orange; the Cloud Drive's Refresh spins, then shows a
+  check.
+
+Before (platform.64-65):
 
 * **The model library's security scan (garak):** every model added waits in a hold, mounted nowhere, until a scan Job
   (`ghcr.io/user187x/coder-garak`: garak 0.17.1 with its detector models and probe data, CPU PyTorch, llama.cpp's

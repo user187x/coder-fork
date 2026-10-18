@@ -57,16 +57,17 @@ variable "cluster_admin_roles" {
 }
 
 # Which apps the workspace has: "developer" (ubuntu-vnc-desktop: code-server), "dataflow" (ubuntu-dataflow:
-# Apache NiFi, Apache Airflow), or one of the AI templates on the AI workspace image: "lmstudio" (ubuntu-lmstudio:
-# LM Studio on the desktop, code-server) and "opencode" (ubuntu-opencode: the OpenCode agent, code-server; LM Studio
-# serving its models). Everything else is the same. The chart pushes this template once per set (templates/job.yaml).
+# Apache NiFi, Apache Airflow), one of the AI templates on the AI workspace image: "unsloth" (ubuntu-unsloth: Unsloth
+# Studio on the desktop, code-server) and "opencode" (ubuntu-opencode: the OpenCode agent, code-server; Unsloth serving
+# its models), or "obsidian" (ubuntu-obsidian: Obsidian on the desktop, on its own image). Everything else is the same.
+# The chart pushes this template once per set (templates/job.yaml).
 variable "app_set" {
   type        = string
-  description = "developer (code-server), dataflow (Apache NiFi, Apache Airflow), lmstudio (LM Studio) or opencode (OpenCode on LM Studio)."
+  description = "developer (code-server), dataflow (Apache NiFi, Apache Airflow), unsloth (Unsloth Studio), opencode (OpenCode on Unsloth) or obsidian (Obsidian)."
   default     = "developer"
   validation {
-    condition     = contains(["developer", "dataflow", "lmstudio", "opencode"], var.app_set)
-    error_message = "app_set must be developer, dataflow, lmstudio or opencode."
+    condition     = contains(["developer", "dataflow", "unsloth", "opencode", "obsidian"], var.app_set)
+    error_message = "app_set must be developer, dataflow, unsloth, opencode or obsidian."
   }
 }
 
@@ -145,28 +146,108 @@ variable "images_registry" {
 
 locals {
   dataflow      = var.app_set == "dataflow"
-  # The AI templates: LM Studio (its app on the desktop and its server) in both, OpenCode's app in ubuntu-opencode.
-  ai            = contains(["lmstudio", "opencode"], var.app_set)
+  # The AI templates: Unsloth Studio (its app on the desktop and its server) in both, OpenCode's app in ubuntu-opencode.
+  ai = contains(["unsloth", "opencode"], var.app_set)
+  # The Obsidian template: Obsidian is the desktop's app; no code-server.
+  obsidian      = var.app_set == "obsidian"
   default_image = var.workspace_image != "" ? var.workspace_image : "codercom/enterprise-base:ubuntu"
-  # The Workspace image parameter's, where the template offers one.
-  workspace_image = length(data.coder_parameter.workspace_image) > 0 ? data.coder_parameter.workspace_image[0].value : local.default_image
+  # The Workspace image parameter's choice (data.coder_parameter.workspace_image), where the template offers one:
+  # "template" - the template's own image, whatever it is at each start (so a template update brings its new image);
+  # "custom" - the image entered below it; else an image of Templates › Images. A value from before the choices that
+  # names an image of the template's own repository (the template's image as it was then) runs the template's image
+  # now: an earlier one would not match the template's scripts.
+  image_repository = replace(local.default_image, "/:[^:/]+$/", "")
+  image_choice     = length(data.coder_parameter.workspace_image) > 0 ? data.coder_parameter.workspace_image[0].value : "template"
+  workspace_image = (local.image_choice == "custom" ? try(data.coder_parameter.workspace_image_custom[0].value, local.default_image)
+    : local.image_choice == "template" || local.image_choice == "" || startswith(local.image_choice, "${local.image_repository}:")
+  ? local.default_image : local.image_choice)
+  # The images the cluster keeps (data.kubernetes_config_map_v1.workspace_images): every version built or imported in
+  # Templates › Images; and the template's earlier images the nodes keep - a workspace that chose the template's image
+  # before the choices has one of those as its value, offered (as the template's image) so its update goes through.
+  # Not try(): Coder's form reads the ConfigMap from the version's plan in a later pass, and try() would settle on none
+  # first - the dropdown would never list them.
+  images_kept = jsondecode(length(data.kubernetes_config_map_v1.workspace_images) > 0 ? lookup(
+  coalesce(data.kubernetes_config_map_v1.workspace_images[0].data, {}), "images", "{}") : "{}")
+  images_registry_choices = [for i in lookup(local.images_kept, "registry", []) : i
+  if startswith(i.ref, "${var.images_registry}/")]
+  images_earlier = [for ref in lookup(local.images_kept, "nodes", []) : ref
+  if ref != local.default_image && replace(ref, "/:[^:/]+$/", "") == local.image_repository]
 }
 
-# The workspace's image: the template's own, or one from Templates > Images (built or imported there; in the cluster's
-# registry), so a workspace can run on an image made for it. Its pull reference, as the Images view shows it. Changed on
-# a running workspace, it takes effect at its next start.
+# What the platform service keeps of the images a workspace may run (the image builder's ConfigMap): {"registry":
+# [{ref, name, version, description}], "nodes": [refs]}.
+data "kubernetes_config_map_v1" "workspace_images" {
+  count = var.images_registry != "" ? 1 : 0
+  metadata {
+    name      = "coder-workspace-images"
+    namespace = var.namespace
+  }
+}
+
+# The workspace's image: the template's own (it follows the template), one of the images built or imported in
+# Templates › Images (each version the registry keeps), or another one entered by hand. A dropdown, so a workspace whose
+# image was removed is offered what there is instead. Changed on a running workspace, it takes effect at its next start.
 data "coder_parameter" "workspace_image" {
   count        = var.images_registry != "" ? 1 : 0
   name         = "workspace_image"
   display_name = "Workspace image"
-  description  = "The template's image, or one from Templates › Images (${var.images_registry}/<name>:<version>). An image built on the workspace image has everything this template runs."
+  description  = "What the workspace runs. **The template's image** follows the template (recommended). The images built or imported in Templates › Images are listed by name and version; one built on the workspace image has everything this template runs. **Another image…** lets you enter any image the cluster can pull."
+  type         = "string"
+  form_type    = "dropdown"
+  default      = "template"
+  mutable      = true
+  icon         = "/icon/docker.svg"
+  option {
+    name        = "The template's image"
+    value       = "template"
+    description = "${local.default_image}: kept up to date with the template."
+    icon        = "/icon/docker.svg"
+  }
+  # The images built or imported in Templates › Images, the template's earlier images, then Another image…: one block,
+  # so Coder's form keeps this order (it puts options it learns in a later pass - the ConfigMap's, from the version's
+  # plan - after those it knew first).
+  dynamic "option" {
+    for_each = concat(
+      [for i in local.images_registry_choices : {
+        name        = "${i.name} : ${i.version}"
+        value       = i.ref
+        description = i.description != "" ? "Templates › Images: ${i.description}" : "Templates › Images (${i.ref})"
+      }],
+      [for ref in local.images_earlier : {
+        name        = "The template's image (as before, ${regex(":([^:/]+)$", ref)[0]})"
+        value       = ref
+        description = "This workspace's choice from before: it runs the template's image now, ${local.default_image}."
+      }],
+      [{
+        name        = "Another image…"
+        value       = "custom"
+        description = "An image from any registry the cluster can pull from: enter it below."
+      }],
+    )
+    content {
+      name        = option.value.name
+      value       = option.value.value
+      description = option.value.description
+      icon        = "/icon/docker.svg"
+    }
+  }
+}
+
+# Another image: shown only when chosen above. Not try(): Coder's form (its preview engine) evaluates the choice in
+# passes, and try() would settle on "" in the first, before the choice is known - the field would never show; one() of
+# the splat is null where the template offers no choice.
+data "coder_parameter" "workspace_image_custom" {
+  count        = one(data.coder_parameter.workspace_image[*].value) == "custom" ? 1 : 0
+  name         = "workspace_image_custom"
+  display_name = "Image to run"
+  description  = "The image's full reference, as `docker pull` takes it: registry/repository:tag, or @sha256:digest. For example ${var.images_registry != "" ? "${var.images_registry}/my-image:3" : "registry.example.com/team/dev:1.0"} or ${local.default_image}. Built on the workspace image, it has everything this template runs; the cluster must be able to pull it."
   type         = "string"
   default      = local.default_image
   mutable      = true
   icon         = "/icon/docker.svg"
   validation {
-    regex = "^(${replace(local.default_image, ".", "\\.")}|${replace(var.images_registry, ".", "\\.")}/[a-z0-9][a-z0-9-]{1,38}[a-z0-9]:[0-9]+)$"
-    error = "The template's image (${local.default_image}), or one from Templates › Images: ${var.images_registry}/<name>:<version>."
+    regex = "^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@sha256:[0-9a-f]{64})?$"
+    error = "An image reference such as registry.example.com/team/dev:1.0: lower-case registry and repository names, then a :tag (or @sha256:digest), no spaces."
   }
 }
 
@@ -277,16 +358,15 @@ data "coder_parameter" "start_directory" {
   }
 }
 
-# The AI templates: how many tokens LM Studio gives a model it loads (its default context length; LM Studio's own,
-# 8192, is too little for OpenCode, whose instructions alone take some 10 000), and OpenCode's limit per model (or the
-# model's own maximum, if less). More context takes more memory.
+# The AI templates: how many tokens a model gets when OpenCode loads it in Unsloth (OpenCode's instructions alone take
+# some 10 000; the Unsloth app sets its own per model). More context takes more memory.
 data "coder_parameter" "context_length" {
   count        = local.ai ? 1 : 0
   name         = "context_length"
   display_name = "Context length"
-  description  = "Tokens a model gets when LM Studio loads it (its default context length; OpenCode needs at least 16K). More takes more memory."
+  description  = "Tokens a model gets when OpenCode loads it in Unsloth (OpenCode needs at least 16K). More takes more memory."
   default      = "32768"
-  icon         = "/__icons/lmstudio.svg"
+  icon         = "/__icons/unsloth.svg"
   mutable      = true
   option {
     name  = "8K tokens"
@@ -306,13 +386,14 @@ data "coder_parameter" "context_length" {
   }
 }
 
-# The AI templates: NVIDIA GPUs for the workspace (nvidia.com/gpu, from the cluster's NVIDIA device plugin; LM Studio
-# runs its models on them with its CUDA engine). The workspace waits for a node that has them free; none: the CPU.
+# The AI templates: NVIDIA GPUs for the workspace (nvidia.com/gpu, from the cluster's NVIDIA device plugin; Unsloth
+# fine-tunes on them, and runs its models on them with llama.cpp's CUDA build). The workspace waits for a node that has
+# them free; none: the CPU (chat only; fine-tuning needs a GPU).
 data "coder_parameter" "gpus" {
   count        = local.ai ? 1 : 0
   name         = "gpus"
   display_name = "GPUs"
-  description  = "NVIDIA GPUs for LM Studio (nodes with the NVIDIA device plugin). The workspace waits until a node has them free; 0: the CPU only."
+  description  = "NVIDIA GPUs for Unsloth: fine-tuning, and faster models (nodes with the NVIDIA device plugin). The workspace waits until a node has them free; 0: the CPU only (chat, no fine-tuning)."
   default      = "0"
   icon         = "/icon/memory.svg"
   mutable      = true
@@ -429,10 +510,17 @@ locals {
   : local.cloud_drive_source == null || try(local.cloud_drive_source.running, false) ? "mount" : "offline")
   cloud_drive_claim = local.cloud_drive_mode != "mount" ? "" : (local.cloud_drive_source == null
   ? "coder-safe-${data.coder_workspace_owner.me.id}" : "coder-drive-src-${data.coder_workspace_owner.me.id}")
+  # The Cloud Drives other users shared with the owner (Cloud Drive > Sharing: asked for in chat, accepted by their
+  # owner, approved by an admin): [{owner, name, claim, readOnly}], each owner's volume, mounted at
+  # /mnt/cloud-drive-peers/<name> (read only unless shared read and write) and linked at ~/cloud-drive-shared/<name>;
+  # none in a workspace shared with others.
+  cloud_drive_peers = [for p in try(local.cloud_drive_state.peers[data.coder_workspace_owner.me.id], []) : p
+  if local.cloud_drive_mode != "" && !local.cloud_drive_shared]
 }
 
 # The Cloud Drive's state, kept by the platform service (the chart's coder-workspace Role lets Coder's service account
-# read this one ConfigMap): {"shared": [workspace ids], "sources": {owner id: {workspace, path, running}}}.
+# read this one ConfigMap): {"shared": [workspace ids], "sources": {owner id: {workspace, path, running}},
+# "peers": {user id: [{owner, name, claim, readOnly}]}}.
 data "kubernetes_config_map_v1" "cloud_drive" {
   count = var.user_storage ? 1 : 0
   metadata {
@@ -501,11 +589,10 @@ resource "coder_agent" "main" {
   }
 
   # Admins' terminals, k9s and apps find the cluster sign-in first, then their own ~/.kube/config.
-  # The AI templates: OpenCode reads its settings for this workspace (LM Studio as the provider) from this file, which
-  # the startup script writes (coder-opencode-config, in the AI workspace image).
+  # The AI templates: the Context length OpenCode loads a model with (coder-opencode, in the AI workspace image).
   env = merge(
     local.cluster_admin ? { KUBECONFIG = "${local.cluster_kubeconfig}:/home/coder/.kube/config" } : {},
-    local.ai ? { OPENCODE_CONFIG = "/home/coder/.config/opencode/coder-workspace.json" } : {},
+    local.ai ? { CODER_AI_CONTEXT = local.context_length } : {},
   )
 
   startup_script = templatefile("${path.module}/scripts/startup.sh", {
@@ -604,14 +691,16 @@ resource "coder_agent" "main" {
   # platform:end metrics
 }
 
-# In ubuntu-lmstudio the desktop is LM Studio's window (the app starts there), so it is the LM Studio app.
+# In ubuntu-unsloth the desktop is Unsloth Studio's window, and in ubuntu-obsidian Obsidian's (the app starts there), so
+# it is that app.
 resource "coder_app" "novnc" {
   count        = var.desktop ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "novnc"
-  display_name = var.app_set == "lmstudio" ? "LM Studio" : "Desktop"
-  # Coder's own icon (served by the dashboard; the noVNC logo was on the internet); LM Studio's (files/icons/lmstudio.svg)
-  icon         = var.app_set == "lmstudio" ? "/__icons/lmstudio.svg" : "/icon/desktop.svg"
+  display_name = var.app_set == "unsloth" ? "Unsloth" : local.obsidian ? "Obsidian" : "Desktop"
+  # Coder's own icon (served by the dashboard; the noVNC logo was on the internet); the app's (files/icons/*.svg)
+  icon = (var.app_set == "unsloth" ? "/__icons/unsloth.svg" : local.obsidian ? "/__icons/obsidian.svg"
+  : "/icon/desktop.svg")
   # Path-based (no wildcard DNS/route needed). noVNC opens its websocket relative to the host
   # root, so pass the prefixed path explicitly ("main" = agent name, as in filebrowser above).
   url          = "http://localhost:6901?autoconnect=true&resize=remote&compression=0&path=@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/novnc/websockify"
@@ -625,25 +714,28 @@ resource "coder_app" "novnc" {
   }
 }
 
+# FileBrowser Quantum (scripts/startup.sh starts it under the app's path, which its health check is under too). Coder
+# strips the app's path from a request and joins the rest to this URL's path, so the URL carries the full path back
+# (FileBrowser Quantum redirects anything outside it there: with a bare URL, an endless redirect).
 resource "coder_app" "filebrowser" {
   count        = var.file_browser ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "filebrowser"
   display_name = "File Browser"
   icon         = "/icon/folder.svg"
-  url          = "http://localhost:13339"
+  url          = "http://localhost:13339/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/filebrowser/"
   subdomain    = false
   share        = "owner"
 
   healthcheck {
-    url       = "http://localhost:13339/health"
+    url       = "http://localhost:13339/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/filebrowser/health"
     interval  = 5
     threshold = 3
   }
 }
 
 resource "coder_app" "code-server" {
-  count        = local.dataflow ? 0 : 1
+  count        = local.dataflow || local.obsidian ? 0 : 1
   agent_id     = coder_agent.main.id
   slug         = "code-server"
   display_name = "code-server"
@@ -659,15 +751,16 @@ resource "coder_app" "code-server" {
   }
 }
 
-# ubuntu-opencode: OpenCode, the AI coding agent, in a terminal in the Start folder, on the workspace's LM Studio (its
-# settings: OPENCODE_CONFIG, above). Quitting it closes the terminal; it opens again from the button.
+# ubuntu-opencode: OpenCode, the AI coding agent, in a terminal in the Start folder, on the workspace's Unsloth
+# (coder-opencode: a model loaded at the Context length, an API key of it). Quitting it closes the terminal; it opens
+# again from the button.
 resource "coder_app" "opencode" {
   count        = var.app_set == "opencode" ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "opencode"
   display_name = "OpenCode"
   icon         = "/__icons/opencode.svg" # files/icons/opencode.svg, served by templates/icons.yaml
-  command      = "cd ${jsonencode(data.coder_parameter.start_directory.value)} 2>/dev/null; exec opencode"
+  command      = "cd ${jsonencode(data.coder_parameter.start_directory.value)} 2>/dev/null; exec coder-opencode ${local.context_length}"
   share        = "owner"
 }
 
@@ -996,6 +1089,15 @@ resource "kubernetes_deployment_v1" "main" {
               name       = "safe"
             }
           }
+          # The Cloud Drives shared with the owner (local.cloud_drive_peers).
+          dynamic "volume_mount" {
+            for_each = local.cloud_drive_peers
+            content {
+              mount_path = "/mnt/cloud-drive-peers/${volume_mount.value.name}"
+              name       = "peer-drive-${volume_mount.key}"
+              read_only  = volume_mount.value.readOnly
+            }
+          }
           # Whether it is connected: the pod's annotation platform.coder/cloud-drive, kept current by the kubelet.
           dynamic "volume_mount" {
             for_each = var.user_storage ? [1] : []
@@ -1033,7 +1135,7 @@ resource "kubernetes_deployment_v1" "main" {
           }
           # platform:end code-server-ha
           # The AI templates: the model library (Templates > Images), read-only: the same GGUF models in every AI
-          # workspace (LM Studio lists them).
+          # workspace (Unsloth scans it).
           dynamic "volume_mount" {
             for_each = var.user_storage && local.ai ? [1] : []
             content {
@@ -1182,6 +1284,17 @@ resource "kubernetes_deployment_v1" "main" {
             name = "safe"
             persistent_volume_claim {
               claim_name = local.cloud_drive_claim
+            }
+          }
+        }
+        # The Cloud Drives shared with the owner: their owners' volumes (local.cloud_drive_peers).
+        dynamic "volume" {
+          for_each = local.cloud_drive_peers
+          content {
+            name = "peer-drive-${volume.key}"
+            persistent_volume_claim {
+              claim_name = volume.value.claim
+              read_only  = volume.value.readOnly
             }
           }
         }

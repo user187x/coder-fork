@@ -7,13 +7,13 @@
 #      (coder-airgapped-base and coder-airgapped-layer) to the Application's chart repository (docker and helm must be
 #      logged in to it, as for the install; a private CA as then);
 #   3. points the Application's two sources at this release's charts (targetRevision), and turns the ubuntu-dataflow
-#      template off unless its image is in the registry (--dataflow), and the AI templates (ubuntu-lmstudio,
-#      ubuntu-opencode) likewise (--ai);
+#      template off unless its image is in the registry (--dataflow), the AI templates (ubuntu-unsloth,
+#      ubuntu-opencode) likewise (--ai), and the Obsidian template (ubuntu-obsidian) likewise (--obsidian);
 #   4. shows the change (the file is kept as FILE.<time>.bak);
 #   5. --apply: kubectl apply -f FILE, and asks Argo CD to refresh the Application.
 #
 #   ./update-application.sh --app FILE [--push] [--apply] [--registry R] [--dataflow off|keep|IMAGE]
-#                           [--ai off|keep|IMAGE] [--dry-run]
+#                           [--ai off|keep|IMAGE] [--obsidian off|keep|IMAGE] [--dry-run]
 #
 #   --app FILE         the Application file you applied (both documents, the repository Secret and the Application)
 #   --push             push the image and the charts first (the registry: --registry, else global.registry in FILE)
@@ -23,8 +23,10 @@
 #   --dataflow keep    it is on: the layer chart's image is in the registry already
 #                      (<registry>/user187x/coder-workspace-dataflow:<tag>; the helper says which)
 #   --dataflow IMAGE   it is on, on this image (a full reference)
-#   --ai off|keep|IMAGE  the same for the AI templates (LM Studio, OpenCode) and their image,
+#   --ai off|keep|IMAGE  the same for the AI templates (Unsloth, OpenCode) and their image,
 #                      ghcr.io/user187x/coder-workspace-ai:<tag> (default off)
+#   --obsidian off|keep|IMAGE  the same for the Obsidian template and its image,
+#                      ghcr.io/user187x/coder-workspace-obsidian:<tag> (default off)
 #   --apply            apply FILE and refresh the Application in Argo CD (kubectl pointed at Argo CD's cluster)
 #   --dry-run          show what would change; push, write and apply nothing
 #
@@ -37,7 +39,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 die() { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 say() { printf '\033[1;34m==> %s\033[0m\n' "$*"; }
 
-app="" push=0 apply=0 registry="" dataflow=off ai=off dry=0
+app="" push=0 apply=0 registry="" dataflow=off ai=off obsidian=off dry=0
 while (($#)); do
 	case "$1" in
 	--app) app="${2:?--app FILE}"; shift ;;
@@ -46,6 +48,7 @@ while (($#)); do
 	--registry) registry="${2:?--registry <harbor>/<project>}"; shift ;;
 	--dataflow) dataflow="${2:?--dataflow off|keep|IMAGE}"; shift ;;
 	--ai) ai="${2:?--ai off|keep|IMAGE}"; shift ;;
+	--obsidian) obsidian="${2:?--obsidian off|keep|IMAGE}"; shift ;;
 	--dry-run) dry=1 ;;
 	-h | --help) sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
 	*) die "unknown option: $1 (--help)" ;;
@@ -80,6 +83,10 @@ echo "    its ubuntu-dataflow template's image: ${dataflow_image:-?}"
 ai_image=$( (tar -xzOf "$layer_chart" coder-airgapped-layer/values.yaml 2>/dev/null || true) |
 	sed -n 's/^  aiImage:.*"\([^"]*\)".*/\1/p' | head -n1)
 echo "    its AI templates' image: ${ai_image:-?}"
+# The Obsidian template's image (coder-workspace.obsidianImage).
+obsidian_image=$( (tar -xzOf "$layer_chart" coder-airgapped-layer/values.yaml 2>/dev/null || true) |
+	sed -n 's/^  obsidianImage:.*"\([^"]*\)".*/\1/p' | head -n1)
+echo "    its Obsidian template's image: ${obsidian_image:-?}"
 
 if [[ -n "$sums" && -f "$sums" ]]; then
 	(cd "$here" && sha256sum --quiet -c SHA256SUMS) || die "a file of this update is damaged (SHA256SUMS)"
@@ -132,6 +139,14 @@ keep)
 	;;
 *) [[ "$ai" == */* || "$ai" == *:* ]] || die "--ai: off, keep or an image reference" ;;
 esac
+case "$obsidian" in
+off) ;;
+keep)
+	[[ -n "$obsidian_image" ]] || die "--obsidian keep: no coder-workspace.obsidianImage in $(basename "$layer_chart"); give the image"
+	obsidian=$(in_registry "$obsidian_image")
+	;;
+*) [[ "$obsidian" == */* || "$obsidian" == *:* ]] || die "--obsidian: off, keep or an image reference" ;;
+esac
 
 # ---- 2. push
 if ((push)); then
@@ -155,17 +170,19 @@ fi
 # ---- 3. the Application: both sources at this version; the dataflow and AI templates
 stamp=$(date +%Y%m%d-%H%M%S)
 updated=$(mktemp); trap 'rm -f "$updated"' EXIT
-python3 - "$app" "$updated" "$version" "$dataflow" "$ai" <<'PY'
+python3 - "$app" "$updated" "$version" "$dataflow" "$ai" "$obsidian" <<'PY'
 import re, sys
 
-path, out, version, dataflow, ai = sys.argv[1:6]
+path, out, version, dataflow, ai, obsidian = sys.argv[1:7]
 raw = open(path, newline="").read()
 nl = "\r\n" if "\r\n" in raw else "\n"
 lines = raw.replace("\r\n", "\n").split("\n")
 # The optional templates: their switch, their image key, the choice (off, or the image), and the note on "off".
 OPTIONAL = [("dataflowTemplate", "dataflowImage", dataflow,
              "  # ubuntu-dataflow (NiFi, Airflow): its image is not in the registry"),
-            ("aiTemplates", "aiImage", ai, "  # the AI templates (LM Studio, OpenCode): their image is not in the registry")]
+            ("aiTemplates", "aiImage", ai, "  # the AI templates (Unsloth, OpenCode): their image is not in the registry"),
+            ("obsidianTemplate", "obsidianImage", obsidian,
+             "  # ubuntu-obsidian (Obsidian): its image is not in the registry")]
 try:  # where PyYAML is installed, the file is parsed before (and after) the change
     import yaml
 except ImportError:
@@ -303,6 +320,7 @@ try:
         and str(by_chart["coder-airgapped-layer"]["targetRevision"]) == version
         and layer_values["coder-workspace"]["dataflowTemplate"]["enabled"] is (dataflow != "off")
         and layer_values["coder-workspace"]["aiTemplates"]["enabled"] is (ai != "off")
+        and layer_values["coder-workspace"]["obsidianTemplate"]["enabled"] is (obsidian != "off")
         and "global" in layer_values
     )
 except (yaml.YAMLError, KeyError, StopIteration, TypeError) as e:

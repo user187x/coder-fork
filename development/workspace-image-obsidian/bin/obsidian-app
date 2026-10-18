@@ -1,0 +1,4 @@
+#!/bin/sh
+# Obsidian in a workspace pod: without Chromium's sandbox (no user namespaces in a pod) and its GPU process (the
+# desktop is a VNC display).
+exec /opt/Obsidian/obsidian --no-sandbox --disable-gpu --disable-dev-shm-usage "$@"

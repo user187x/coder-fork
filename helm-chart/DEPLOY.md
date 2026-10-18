@@ -171,7 +171,7 @@ helm logged in as for the install; `HELM_PUSH_ARGS="--ca-file ca.crt"` for a pri
 applies it and asks Argo CD to refresh; Coder restarts on the new image with no gap. The ubuntu-dataflow template
 (Apache NiFi and Airflow) runs on its own image, which the update does not carry: the helper turns that template off
 (`coder-workspace.dataflowTemplate.enabled: false`) unless you give it the image (`--dataflow keep` when it is in
-your registry, `--dataflow <image>` for another). The AI templates (LM Studio, OpenCode) likewise: off unless you give
+your registry, `--dataflow <image>` for another). The AI templates (Unsloth, OpenCode) likewise: off unless you give
 it their image (`--ai keep` or `--ai <image>`). Back: restore the `.bak` file and apply it. The full bundle carries
 the same helper (`argocd/update-application.sh`).
 
@@ -420,10 +420,16 @@ own, never on a command line), or uploaded as a `docker save` or OCI archive (`.
 new version is imported the same way. **In use** lists the images workspaces run now and the templates' own, each
 opened or imported from there.
 
-**Running a workspace on an image.** The chart's templates take any image here as their **Workspace image** parameter
-(`coder-workspace.imagesRegistry`, `localhost:5000/coder-images` by default; `""` takes it away): a new workspace on
-it (the image's page has a button per template), or an existing one switched to it in its settings, from its next
-start. An image built on the workspace image has everything the templates run.
+**Running a workspace on an image.** The chart's templates offer the images here in their **Workspace image**
+parameter (`coder-workspace.imagesRegistry`, `localhost:5000/coder-images` by default; `""` takes it away), a dropdown:
+**The template's image** (the default; it follows the template, so a template update brings its new image), every
+version built or imported here that the registry keeps (the platform service lists them in the ConfigMap
+`coder-workspace-images`, which the templates read), and **Another image…**, which asks for any image the cluster can
+pull, with an example and a plain-language check. A new workspace on one (the image's page has a button per template),
+or an existing one switched to one in its settings, from its next start. A workspace whose image is gone (deleted
+here) is offered the list again at its next update instead of an error; one created before the dropdown, whose value
+is an earlier tag of the template's own image, runs the template's current image. An image built on the workspace
+image has everything the templates run.
 
 **Pictures:** the pictures offered as backgrounds (Appearance > Background image) and in the logo and avatar
 editors are part of the Coder image (`site/static/pictures/`), whatever the install (`./make`, Argo CD, plain Helm); a
@@ -435,7 +441,7 @@ background chosen from them is stored as its path and drawn from Coder. `helm-ch
 address the cluster reaches; up to 20 GB each (`SAFE_ISO_MAX_GIB`). Personal ones go in each user's Cloud Drive.
 
 **The model library** (the same storage): language models in GGUF format for the AI workspaces, read-only at
-`~/models` in each, where LM Studio lists them. Uploaded or fetched like ISOs; up to 100 GB each
+`~/models` in each, where Unsloth lists them. Uploaded or fetched like ISOs; up to 100 GB each
 (`SAFE_MODEL_MAX_GIB`). The AI workspaces also list each user's own, in their Cloud Drive's `models` folder.
 
 Builds start from the workspace image in the builder's own registry in the cluster, so BuildKit needs no access
@@ -486,40 +492,61 @@ volume (`imageBuilder.enabled`) and the platform service's permission to manage 
   on EKS). Elsewhere it stops the workspace and copies its home onto a bigger volume.
 
 > **Good to know – workspaces in a strict air gap:** everything a workspace runs is in the workspace image: the
-> desktop, Firefox, code-server, File Browser, tmux, k9s/kubectl and the JetBrains Mono
-> Nerd Font. Nothing is downloaded when a workspace starts (`coder-workspace:1.8.0` and later).
+> desktop, Firefox, code-server, File Browser (FileBrowser Quantum, from `coder-workspace:1.8.7`: the provided
+> `filebrowser-quantum` release binary, under the app's path, no sign-in of its own, no update check), tmux,
+> k9s/kubectl and the JetBrains Mono Nerd Font. Nothing is downloaded when a workspace starts (`coder-workspace:1.8.0`
+> and later).
 
-## AI workspaces: LM Studio and OpenCode
+## AI workspaces: Unsloth Studio and OpenCode
 
-Two more templates, on one image (`ghcr.io/user187x/coder-workspace-ai`: the workspace image + LM Studio 0.4.26 and
-OpenCode 1.18.34; `coder-workspace.aiTemplates`, on by default):
+Two more templates, on one image (`ghcr.io/user187x/coder-workspace-ai`: the workspace image + Unsloth Studio and
+OpenCode 1.18.34; `coder-workspace.aiTemplates`, on by default). Unsloth Studio replaced LM Studio: on a deployment that
+had **UBUNTU LM STUDIO**, the chart takes that template over as **UBUNTU UNSLOTH** (`ubuntu-lmstudio` renamed
+`ubuntu-unsloth`, its old default name and icon replaced), so its workspaces and history carry on; each is offered the
+update, and runs Unsloth from its next start after it.
 
-* **UBUNTU LM STUDIO** (`ubuntu-lmstudio`): its **LM Studio** app is the workspace's desktop with LM Studio's window
-  on it - chat with a model, load and unload models, see its server. `lms` in the terminal; code-server.
+* **UBUNTU UNSLOTH** (`ubuntu-unsloth`): its **Unsloth** app is the workspace's desktop with Unsloth Studio's window
+  on it (its desktop app, the provided `unsloth.AppImage`) - chat with GGUF models, fine-tune (on a GPU), datasets,
+  exports. `unsloth` in the terminal; code-server.
 * **UBUNTU OPENCODE** (`ubuntu-opencode`): its **OpenCode** app opens the OpenCode agent in a terminal in the Start
-  folder, on the workspace's own LM Studio; code-server, and the desktop with LM Studio.
+  folder, on the workspace's own Unsloth: `unsloth start opencode` loads the model loaded in Unsloth, else the first
+  GGUF model of the model library or of the Cloud Drive, at the template's **Context length** (32K tokens by default;
+  OpenCode needs at least 16K), gives OpenCode an API key of this Unsloth and starts it. code-server, and the desktop
+  with Unsloth.
 
-Both run LM Studio's server on `127.0.0.1:1234` (OpenAI-compatible, the workspace's own; Open Ports forwards it). A
-model loads when it is first asked for, with the template's **Context length** (32K tokens by default; OpenCode needs
-at least 16K), and unloads after an hour unused. OpenCode's settings (`~/.config/opencode/coder-workspace.json`,
-written at every start) list every language model LM Studio has, the default the first trained for tool use;
-`coder-opencode-config` writes them again after models are added.
+Both run Unsloth's server on `127.0.0.1:8888` (its desktop app starts it; OpenAI-compatible at `/v1`, the workspace's
+own, behind its own API keys; Open Ports forwards it).
 
 * **Models:** nothing comes with the bundle and nothing is downloaded: put GGUF files in the model library
   (Templates > Images > Model library; every AI workspace has them at `~/models`) or in your own Cloud Drive's
-  `models` folder (`~/cloud-drive/models`); each start links them into LM Studio. A coding agent wants a model
-  trained for tool use, 7B or more (e.g. Qwen2.5-Coder 7B Instruct, 4-bit: about 5 GB).
+  `models` folder (`~/cloud-drive/models`); Unsloth scans both (`UNSLOTH_STUDIO_MODELS_DIRS`). A coding agent wants a
+  model with a tool-call chat template, 7B or more (e.g. Qwen2.5-Coder 7B Instruct, 4-bit: about 5 GB).
 * **Resources:** the templates default to 4 CPU cores and 8 GB of memory (up to 16 cores and 32 GB). **GPUs** (0 by
-  default) asks for `nvidia.com/gpu` (nodes with the NVIDIA device plugin); LM Studio's CUDA engine uses them, its
-  CPU engine needs AVX2.
-* **No internet at run time:** LM Studio's update check fails quietly; OpenCode's update check, model catalogue,
-  language-server downloads, sharing and default plugins are off. LM Studio's engines are the image's, linked into
-  each home (about 110 MB per workspace instead of 1.5 GB).
-* **Licences:** OpenCode is MIT. **LM Studio's terms allow personal and internal business use only**: the image and
-  the templates are for the organization's own clusters. A bundle that leaves the organization (a public release) is
-  built with `development/tools/build-bundle.sh --no-lmstudio`: no AI image, the AI templates off.
-* **Images:** `development/tools/build-ai-image.sh` builds the image (LM Studio's AppImage and OpenCode's release
-  pinned by SHA-256) and checks it offline; `TEST_MODEL=<file.gguf>` also chats through LM Studio and OpenCode.
+  default) asks for `nvidia.com/gpu` (nodes with the NVIDIA device plugin): Unsloth fine-tunes on them (CUDA 12.8,
+  Turing and newer) and llama.cpp's CUDA build runs models on them; without one, chat runs on the CPU (llama.cpp's CPU
+  backends) and fine-tuning is unavailable.
+* **No internet at run time:** Unsloth Studio is installed in the image (`/opt/unsloth`: its Python environments,
+  PyTorch, llama.cpp, Node), with its update check off and Hugging Face offline; each workspace's `~/.unsloth` links to
+  the install (under 1 MB per home) and keeps only its own data (chats, accounts, settings, outputs, exports).
+  OpenCode's update check, model catalogue, language-server downloads, sharing and default plugins are off.
+* **Licences:** Unsloth Studio is AGPL-3.0, OpenCode MIT: the image ships in bundles.
+* **Images:** `development/tools/build-ai-image.sh` builds the image (the `unsloth.AppImage` kept untracked at the
+  repository's root, and OpenCode's release, pinned by SHA-256; Unsloth's own installer, which the AppImage carries,
+  downloads its Python packages, llama.cpp and Node at build time) and checks it offline: the app and its server start,
+  a chat through Unsloth's API, OpenCode on it. `--cpu` builds a much smaller CPU-only image (the default carries CUDA
+  PyTorch: about 10 GB more).
+
+## Obsidian workspaces
+
+**UBUNTU OBSIDIAN** (`ubuntu-obsidian`, `coder-workspace.obsidianTemplate`, on by default), on its own image
+(`ghcr.io/user187x/coder-workspace-obsidian`: the workspace image + Obsidian 1.14.4, from the `obsidian.deb` kept
+untracked at the repository's root): its **Obsidian** app is the workspace's desktop with Obsidian's window, opened on
+the vault `~/Obsidian` (a folder of the workspace's home, made at the first start); File Browser and the terminal; no
+code-server. Obsidian runs without Chromium's sandbox (a pod has no user namespaces; its SUID helper is removed) and
+with its automatic updates off (no internet: the image is its version). Obsidian's own terms apply: the image is for the
+organization's own clusters, and a bundle that leaves the organization (a public release) is built with
+`development/tools/build-bundle.sh --no-obsidian` (no Obsidian image, the template off).
+`development/tools/build-obsidian-image.sh` builds it (the package pinned by SHA-256) and checks it offline.
 
 ## The model library's security scan (garak)
 
@@ -578,9 +605,13 @@ claims and volumes keep the earlier name, `safe` (`/api/safe`, `coder-safe-<user
   `coder-cloud-drive`, which the template reads when a workspace starts; Coder's service account may read that one
   ConfigMap). One shared while it ran keeps the volume it started with until it restarts: the Cloud Drive's
   **Workspaces** says so.
-* **Encryption (each owner's choice):** in **Encryption** the owner wraps a key of their own with a password (12
-  characters or more, never stored) or their certificate (an RSA certificate, PEM or DER - its public part; e.g.
-  `openssl pkcs12 -in you.p12 -clcerts -nokeys`). The recovery kit downloads first - where the files are (endpoint,
+* **Encryption (each owner's choice):** in **Encryption** the owner wraps a key of their own with a **Password** (12
+  characters or more, never stored), a certificate pasted as **PEM** (an RSA certificate, PEM or DER - its public
+  part), or one read out of their **PFX**: a note first says what happens to its password, then the PKCS#12 file kept
+  in Account > Certificates (Coder gives it back to its owner only, still encrypted - never to an admin) or a .pfx /
+  .p12 they choose is opened in the browser with its password (AES, 3DES or the legacy RC2 of older exports), and its
+  public certificate goes into the form. The password stays in that page's memory only - never sent to the server,
+  stored or logged - and is cleared once the certificate is out. The recovery kit downloads first - where the files are (endpoint,
   bucket, prefix), how many and how much, the scheme, the key wrapped for `openssl enc` (password) or `openssl
   pkeyutl` (certificate), and the steps to get every file back with the AWS CLI or GeeseFS - and encryption turns on
   only once the owner says it is kept and none of their workspaces has the drive (stop them first). Every object is
@@ -593,6 +624,20 @@ claims and volumes keep the earlier name, `safe` (`/api/safe`, `coder-safe-<user
   libraries. The nodes' encrypted mounts reach MinIO by its ClusterIP, which no certificate can name, so they do not
   check its certificate (GeeseFS takes no CA); the platform service checks it. An S3 service of your own needs an
   https endpoint for it.
+* **Sharing between users (admins turn it on: Cloud Drive > Sharing):** one user asks another for their Cloud Drive
+  in chat (a conversation's menu: **Ask for their Cloud Drive**, read only or read and write); the request is a card
+  in their conversation, where its owner shares it **read only**, **read and write** (when asked for) or declines.
+  While **Admins approve each share** is on (the default), an admin approves it in Sharing before it is mounted. An
+  active share mounts the owner's volume in the requester's workspaces (read only unless shared read and write) at
+  `~/cloud-drive-shared/<owner>`, from their next start (the ConfigMap `coder-cloud-drive`'s `peers`; the Cloud
+  Drive's **Workspaces** says which running ones a restart brings it to); none in a workspace shared with others. The
+  share also opens at once in the requester's Cloud Drive window (its drive switcher: Mine, or each drive shared with
+  them; the file routes take `?drive=<owner id>`, read with any active share, written only with a read and write one -
+  the service checks, the window hides Upload, New folder and Delete). The Accounts table draws every active share
+  (admins; others their own) as a Cloud Drive cable from the owner's row (a socket) to the requester's (a plug; green
+  prongs read and write, blue read only). The owner, the requester or an admin ends a share at any time (from the
+  requester's next restart; at once in the window). Turned off, no request can be made and no share is mounted (they
+  are kept for when it is back on). Kept in the platform service's volume (`/data/cloud-drive-peers.json`).
 * **A workspace folder as the Cloud Drive (Source):** the owner picks one of their workspaces and a folder of its home
   (not the home itself, not a hidden folder). The platform service starts a small S3 server in that workspace
   (`drivesource.py`, through the exec API, as the workspace's user; every request signed with a key of its own),

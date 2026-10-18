@@ -150,6 +150,7 @@ import safe  # noqa: E402  (the safe: each account's own files on S3, on the Wor
 import provisioners  # noqa: E402  (Provisioner Daemons: stuck jobs, their terraform processes, a re-kick)
 import dr  # noqa: E402  (Persistence > Disaster recovery: Coder's database dumped or copied outside the cluster)
 import modelscan  # noqa: E402  (the Model Library's security gate: garak scans before a model is released)
+import drivepeers  # noqa: E402  (Cloud Drives shared between users: asked for in chat, approved by admins)
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -5412,6 +5413,8 @@ class ChatStore:
                 ("file_name", "TEXT NOT NULL DEFAULT ''"),
                 ("file_type", "TEXT NOT NULL DEFAULT ''"),
                 ("file_size", "INTEGER NOT NULL DEFAULT 0"),
+                # a Cloud Drive share (drivepeers) the message is about: its card in the conversation
+                ("drive_request", "TEXT NOT NULL DEFAULT ''"),
             ):
                 if column not in columns:
                     db.execute(
@@ -5502,6 +5505,7 @@ class ChatStore:
                  "size": r["file_size"], "type": r["file_type"]}
                 if "file_name" in r.keys() and r["file_name"] else None
             ),
+            "driveRequest": (r["drive_request"] or None) if "drive_request" in r.keys() else None,
         }
 
     # ---- group chats
@@ -5989,17 +5993,18 @@ class ChatStore:
             hit = self.by_client.get((user_id, client_id))
             return hit[1] if hit and time.time() - hit[0] < 600 else None
 
-    def send(self, user, admin, peer, text, image=None, page="", client_id="", attachment=None):
+    def send(self, user, admin, peer, text, image=None, page="", client_id="", attachment=None, drive=""):
         """image: (content type, bytes) or None; page: where it was taken (path on Coder's host). attachment: an upload
-        (take_upload). client_id: the sender's id for this message; sending it again returns the first message."""
+        (take_upload). client_id: the sender's id for this message; sending it again returns the first message.
+        drive: a Cloud Drive share's id (drivepeers): the message shows its card."""
         with self.lock, self.connect() as db:
             hit = self.by_client.get((user["id"], client_id)) if client_id else None
             if hit and time.time() - hit[0] < 600:
                 return hit[1]
             cur = db.execute(
                 """INSERT INTO chat_messages (from_id, from_name, from_display, to_id, to_name, to_display, text, sent_at,
-                                from_admin, to_admin, image_type, page, file_name, file_type, file_size)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                from_admin, to_admin, image_type, page, file_name, file_type, file_size, drive_request)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     user["id"],
                     user["username"],
@@ -6016,6 +6021,7 @@ class ChatStore:
                     attachment["name"] if attachment else "",
                     attachment["type"] if attachment else "",
                     attachment["size"] if attachment else 0,
+                    drive or "",
                 ),
             )
             if attachment:
@@ -9381,6 +9387,29 @@ def safe_shared_workspaces():
         "AND (user_acl <> '{}'::jsonb OR group_acl <> '{}'::jsonb)")}
 
 
+def safe_user(user_id):
+    """{id, username, name, admin} of an account (Coder's database), for Cloud Drive shares; None if there is none."""
+    pool = LOGOS.pool if LOGOS else None
+    if not pool:
+        return None
+    rows = pool.query("SELECT id::text, username, name, rbac_roles FROM users WHERE id = $1::uuid AND deleted = false",
+                      [user_id])
+    if not rows:
+        return None
+    roles = rows[0][3] or []
+    if isinstance(roles, str):
+        roles = [r for r in roles.strip("{}").split(",") if r]
+    return {"id": rows[0][0], "username": rows[0][1], "name": rows[0][2] or "", "admin": bool(set(roles) & ADMIN_ROLES)}
+
+
+def drive_chat_post(user, to_id, text, share_id):
+    """A Cloud Drive share's message (drivepeers): from the user to the other one, carrying the share's card."""
+    peer = safe_user(to_id)
+    if not (peer and CHAT):
+        return
+    CHAT.send(user, bool(set(user.get("roles") or []) & ADMIN_ROLES), peer, text, drive=share_id)
+
+
 def safe_owner_workspaces(owner_id):
     """An account's workspaces (Coder's database): [{id, name}]; None before the database is up."""
     pool = LOGOS.pool if LOGOS else None
@@ -9423,6 +9452,8 @@ def main():
     safe.setup(log, KUBE, safe_accounts, lambda user: imagebuilder.can_edit(user, ADMIN_ROLES),
                lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), workspace_info,
                shared=safe_shared_workspaces, workspaces=safe_owner_workspaces)
+    drivepeers.setup(log, lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), safe_user,
+                     drive_chat_post, safe.publish_now)
     safe.start()
     modelscan.setup(log, KUBE, lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES))
     safe.LIBRARY_HOOKS.update(added=modelscan.added, deleted=modelscan.deleted, decorate=modelscan.decorate)
