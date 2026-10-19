@@ -2749,12 +2749,17 @@ _contents = {}
 
 def image_contents():
     """What each image of ours holds (image-contents.json beside this file, from development/tools/image-contents.py),
-    read once; {"images": {}} where it is missing."""
+    read once; {"images": {}} where it is missing. An image's add-ons (its addons.json as built) in the shape the
+    reports give them (addons_of: every part there, a Python environment or none)."""
     if "data" not in _contents:
         try:
             with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "image-contents.json")) as f:
-                _contents["data"] = json.load(f)
-        except (OSError, ValueError):
+                data = json.load(f)
+            for image in (data.get("images") or {}).values():
+                if image.get("addons") is not None:
+                    image["addons"] = addons_of(json.dumps(image["addons"]))
+            _contents["data"] = data
+        except (OSError, ValueError, AttributeError):
             _contents["data"] = {"images": {}}
     return _contents["data"]
 

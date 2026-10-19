@@ -228,6 +228,11 @@ def ai_checks(B, chart, default_render):
           and startup.index("visudo -cqf") < startup.index("/etc/passwd /etc/shadow"), "")
     check("main.tf: the pod's hostname is the owner's and the workspace's names (a DNS label)",
           "hostname = local.hostname" in tf and re.search(r'hostname = trim\(substr\(replace\(lower\(', tf) is not None, "")
+    # A launcher of a terminal emulator with Terminal=true (XFCE's launcher editor writes it) opened Terminator inside
+    # xfce4-terminal, showing Terminator's start-up warnings: the home's launchers of terminals are put back at start
+    check("startup.sh: the home's terminal launchers never run in a terminal (Terminal=true undone at start)",
+          "grep -q '^Categories=.*TerminalEmulator'" in startup and "s/^Terminal=true$/Terminal=false/" in startup
+          and startup.index("Terminal=false/") < startup.index("Xtigervnc :1 -auth"), "")
     check("startup.sh: only copies reach the computer's clipboard (Xtigervnc -SendPrimary=0)",
           "-SendPrimary=0" in startup, "")
     # The Model Library's scanner (garak) is a plug-in: imported in the dashboard, never shipped with the platform
@@ -510,6 +515,17 @@ def main():
           "# platform:begin code-server-ha" in tf["main.tf"] and '"/app/csha.py", "front"' in tf["main.tf"]
           and "CODER_CODE_SERVER_HA" in tf["main.tf"]
           and "CODER_CODE_SERVER_HA" in open(os.path.join(tf_dir, "scripts", "startup.sh")).read(), "")
+    # Coder reads the platform's sections from this template (its decorator: the Source Code view's Materialized, and
+    # every template made from the prototype gets them at build): the fork's own extraction, run on it, where the fork
+    # is checked out (CODER_FORK, else ~/workspace/coder). A for expression's names once broke it ([for p in ...]).
+    import shutil
+    fork = os.path.expanduser(os.environ.get("CODER_FORK", "~/workspace/coder"))
+    if os.path.isfile(os.path.join(fork, "coderd/templatedecorator/decorator.go")) and shutil.which("go"):
+        dec = subprocess.run(["go", "test", "-count=1", "-run", "TestTheChartsPrototype", "./coderd/templatedecorator/"],
+                             cwd=fork, capture_output=True, text=True, timeout=900,
+                             env=dict(os.environ, CODER_DECORATOR_PROTOTYPE=tf_dir, GOPROXY="off", GOFLAGS="-mod=mod"))
+        check("template: Coder's decorator reads its platform sections (the fork's extraction, on this template)",
+              dec.returncode == 0 and dec.stdout.startswith("ok"), (dec.stdout + dec.stderr).strip()[-300:])
     shipped = re.findall(r"^  ([\w.-]+\.(?:sh|py)): \|$", r, re.M)
     check("template: every script the .tf files read is in files/scripts/ and in the push's ConfigMap",
           refs and all(os.path.isfile(os.path.join(tf_dir, "scripts", s)) and s in shipped for s in refs),

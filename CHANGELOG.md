@@ -2,10 +2,25 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.77` (fork `b679b7fda`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
+Coder `2.0.0-platform.78` (fork `ffd388ce4`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **Fixed: Materialized in a template's Source Code view** (platform.78, `coderd/templatedecorator`): it said "The
+  template decorator's sections cannot be read" since platform.74 - the decorator took a for expression's own name
+  (`[for p in ... : p.claim]`, the shared Cloud Drives' volumes) for a resource outside the platform's sections, and
+  refused the base template. The same refusal left templates made from the prototype without the platform's sections
+  at build (Lock Down, certificates, Cloud Drive, metrics): they get them again at their next build. References are
+  read from each attribute's whole expression now, and `chart_checks.py` runs the decorator's extraction on the
+  chart's template (where the fork is checked out).
+* **Fixed: opening an image in Images crashed the page** (platform.78, `imagebuilder.py`): "Cannot read properties of
+  undefined (reading 'packages')" - the Coder fork tree read the add-ons' Python part, which the workspace images'
+  addons.json does not have. The service gives the catalog's add-ons in the reports' shape (every part there), and the
+  tree takes any part missing.
+* **Fixed: the desktop's terminal opened inside another terminal** (the template): a home's copy of Terminator's
+  launcher with Terminal=true (what XFCE's launcher editor writes when "Run in terminal" is ticked) made the dock run
+  `xfce4-terminal -x terminator`, a second window showing Terminator's start-up warnings (no Keybinder, no Notify).
+  At every start the home's launchers of terminal emulators are put back to run on their own; a chart check keeps it.
 * **The model scanner is a plug-in** (platform.77, `modelscan.py`, `safe.py`): garak is no longer pinned, bundled or
   pushed (`modelScanner.image: ""`; its line left `images.txt` and the image-builder part). `build-garak-image.sh`
   writes the archive to `dist/plugins/` (with its `.sha256`), and Model library > **Import scanner** hooks it up:

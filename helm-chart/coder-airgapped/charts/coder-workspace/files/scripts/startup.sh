@@ -216,6 +216,14 @@ if [ ! -e ~/.config/coder-workspace/xfwm4-no-compositing ]; then
  mkdir -p ~/.config/coder-workspace && touch ~/.config/coder-workspace/xfwm4-no-compositing
 fi
 
+# A terminal emulator never runs "in a terminal": XFCE's launcher editor (the dock's Edit Launcher) writes
+# Terminal=true into the home's copy of a launcher when "Run in terminal" is ticked, and Terminator then opens inside
+# xfce4-terminal, which shows Terminator's start-up warnings. The home's launchers of terminal emulators run on their own.
+for f in ~/.local/share/applications/*.desktop; do
+ { [ -f "$f" ] && grep -q '^Categories=.*TerminalEmulator' "$f" && grep -q '^Terminal=true$' "$f"; } || continue
+ sed -i 's/^Terminal=true$/Terminal=false/' "$f" && log "Desktop: $(basename "$f") runs on its own again (not in a terminal)"
+done
+
 # TigerVNC's X server on display :1, started directly (not through vncserver, which warns that a password-less
 # server is open to every user of the machine). It listens on no TCP port, only on a Unix socket that only this
 # user can open (directory 0700, socket 0600): no other user and no other pod can reach it, so it needs no

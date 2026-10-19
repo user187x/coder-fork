@@ -1273,6 +1273,11 @@ class TrackedWorkspaceImageTest(unittest.TestCase):
         self.assertTrue(shipped and all(ref.startswith("ghcr.io/user187x/") for ref in shipped))
         for i in shipped.values():
             self.assertTrue(i["steps"] and i["digest"].startswith("sha256:"), i["ref"])
+            # add-ons as the reports give them: every part there (addons.json has no "python" part)
+            if i["addons"] is not None:
+                self.assertEqual(set(i["addons"]), {"base", "builtAt", "software", "packages", "python"}, i["ref"])
+                self.assertIsInstance(i["addons"]["python"]["packages"], list)
+        self.assertTrue(any(i["addons"] for i in shipped.values()))  # the workspace images have them
 
     def test_addons_read_from_the_image(self):
         import json
