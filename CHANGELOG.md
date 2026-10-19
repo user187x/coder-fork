@@ -2,10 +2,17 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.81` (fork `0450ceb45`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
+Coder `2.0.0-platform.82` (fork `ab28cfacb`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **Fixed: a template's Parameters usage repeated itself** (fork, the template's Overview): the insights report
+  counts a parameter once per definition, so every template version with other options or wording added another card
+  (UBUNTU's Workspace image had 8, CPU and Memory 2 each). Now one card per parameter, named, described (in plain
+  text, not its Markdown) and ordered as the active version has it, its values' counts added up; a value the template
+  no longer offers says so, and a parameter it no longer has is marked.
+* **Fixed: At a glance overflowed with a long value** (fork, the settings pages): a version's name without spaces
+  (troubling_holmes10) ran past the panel; it now breaks after its _ or - and never past the edge.
 * **Create new template keeps to seven modules** (fork): on the deployment's base, the module step offers Git Clone,
   Dotfiles, Personalize, File Browser, Git Config, code-server and VS Code Desktop - the server lists no other and
   refuses to compose any other (a Go test) - in that order, without the category tabs.
