@@ -6,8 +6,8 @@
 # mirror-images.sh pulls the public ones by that digest (save) and pushes every image under its tag (push).
 
 [ui]            images/ui/             push      the user interface: Coder (the fork - the dashboard and its server), the platform service (coder-ui-updates) and the announcement service (coder-banner), what they run on, and their databases
-ghcr.io/user187x/coder-platform:2.0.0-platform.85-airgap  sha256:e7316b42a2ec8accffa5734b6c4879cfd92d895ff3a03d71a0ce5842decfc6fb   coder (server); = the fork's platform.85 (897b19a56) + Terraform provider mirror
-ghcr.io/user187x/coder-ui-updates:code-fcc06a52d011       sha256:36e69347b0d0c270c4ee48802484f62aa49e023bd8c57c8bf1b96b03674acb31   coder-ui-updates (the platform service) and the Images builder's scans: its code (helm-chart/coder-airgapped/files/ui-updates, development/tools/build-ui-image.sh) on coder-image-tools 1.0.0 - the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
+ghcr.io/user187x/coder-platform:2.0.0-platform.86-airgap  sha256:3818a71359665ec27d67a1b46f7b3f95a8a1d1b7b758d0a5b7e7a1792d0fe762   coder (server); = the fork's platform.86 (96a726a61) + Terraform provider mirror
+ghcr.io/user187x/coder-ui-updates:code-42d582b41750       sha256:b6f7c65d22b523a747411fbef826e89b1d6ee8a2a6a04c12fc316446ea75d393   coder-ui-updates (the platform service) and the Images builder's scans: its code (helm-chart/coder-airgapped/files/ui-updates, development/tools/build-ui-image.sh) on coder-image-tools 1.0.0 - the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
 docker.io/library/python:3.13-alpine                      sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a   coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor)
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage
 

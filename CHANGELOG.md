@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.85` (fork `897b19a56`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.86` (fork `96a726a61`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
@@ -19,7 +19,8 @@ is a plug-in now (`dist/plugins/`, not in the bundle).
   (`cloud-drive.sh status`: attached, waiting, unanswered, offline, ... - its agent's metadata `cloud_drive`, in the
   Cloud Drive's platform section, so templates made in Create new template have it too, and no metric display); the
   service reads it from Coder's database for its connections (`attachment`), and the page reads them every two seconds
-  while one waits. Workspaces need their template's new version (DATAFLOW, UBUNTU) to report it; until then they show
+  while one waits - and again at once as one of your workspaces starts or changes state (platform.86: .85 read them
+  only when the page opened, so a workspace started after that showed neither until it was attached). Workspaces need their template's new version (DATAFLOW, UBUNTU) to report it; until then they show
   no cloud.
 * **More than four apps in a carousel** (fork, the Workspaces table): four at a time, an app at a time - its arrows,
   the arrow keys, a sideways scroll - with a bar for where it is; the apps out of view are not tabbed to. Before, the
