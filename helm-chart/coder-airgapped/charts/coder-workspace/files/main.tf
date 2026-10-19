@@ -460,6 +460,8 @@ locals {
   cluster_kubeconfig = "/home/coder/.kube/coder-cluster.yaml"
   # The host the workspace's agent reaches Coder on (Lock Down's Network keeps it; the dataflow template's NiFi route).
   coder_host = regex("^[a-z]+://([^/:]+)", data.coder_workspace.me.access_url)[0]
+  # Coder's host as browsers reach it, with its port if it has one (NiFi and Airflow make their links with it).
+  access_host = replace(replace(data.coder_workspace.me.access_url, "https://", ""), "http://", "")
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -574,7 +576,8 @@ resource "coder_script" "cloud_drive" {
     mount = local.cloud_drive_claim != "" ? local.cloud_drive_mount : ""
     # the `cloud-drive` command: the Cloud Drive mounted into folders of the workspace (scripts/cloud-drive-cli.py)
     cli = base64encode(file("${path.module}/scripts/cloud-drive-cli.py"))
-    # File Browser's helper, here too: every template gets the current one with this section (scripts/filebrowser.sh)
+    # File Browser's helper, here too: every template gets the current one with this section (scripts/filebrowser.sh,
+    # which asks this script for the drives)
     filebrowser = base64encode(file("${path.module}/scripts/filebrowser.sh"))
     # the folders and files shared with the owner, for their links: [{id, owner, item}]
     items = base64encode(jsonencode([for p in local.cloud_drive_peers : { id = p.id, owner = p.name, item = p.item }
@@ -638,13 +641,12 @@ resource "coder_agent" "main" {
     cluster_oidc_issuer    = var.cluster_oidc_issuer
     cluster_oidc_client_id = var.cluster_oidc_client_id
     app_set                = var.app_set
-    access_host            = replace(replace(data.coder_workspace.me.access_url, "https://", ""), "http://", "")
+    code_server            = !local.dataflow
     start_directory        = data.coder_parameter.start_directory.value
     context_length         = local.context_length
     desktop                = var.desktop
     desktop_theme          = var.desktop ? data.coder_parameter.desktop_theme[0].value : "classic"
     file_browser           = var.file_browser
-    cloud_drive_link       = var.user_storage ? var.user_storage_path : ""
     # coder-filebrowser: File Browser started with every Cloud Drive here as a source of its own
     filebrowser = base64encode(file("${path.module}/scripts/filebrowser.sh"))
   })
@@ -800,8 +802,9 @@ resource "coder_app" "opencode" {
 }
 
 # The dataflow template's apps, in place of code-server: path-based like the others, so they open in the
-# dashboard's panels (same origin). Started by the startup script. NiFi learns its path from the headers the cluster's
-# Gateway adds (the HTTPRoute nifi_route below).
+# dashboard's panels (same origin). Each started by a script of its own (coder_script.nifi and coder_script.airflow
+# below, beside the startup script). NiFi learns its path from the headers the cluster's Gateway adds (the HTTPRoute
+# nifi_route below).
 resource "coder_app" "nifi" {
   count        = local.dataflow ? 1 : 0
   agent_id     = coder_agent.main.id
@@ -828,8 +831,35 @@ resource "coder_app" "nifi" {
 # own route does (the longest path wins), with these headers set. Nothing else in front of NiFi; Coder still decides
 # who may open the app. Needs Coder's service account to manage HTTPRoutes in the namespace (the chart's Role).
 locals {
-  nifi_path   = "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/nifi"
-  coder_https = startswith(data.coder_workspace.me.access_url, "https://")
+  nifi_path    = "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/nifi"
+  airflow_path = "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow"
+  coder_https  = startswith(data.coder_workspace.me.access_url, "https://")
+}
+
+# NiFi and Airflow at every start, each in a script of its own (the workspace's Logs show them by name): their homes
+# in ~/.nifi and ~/airflow, their app paths and Coder's host.
+resource "coder_script" "nifi" {
+  count        = local.dataflow ? 1 : 0
+  agent_id     = coder_agent.main.id
+  display_name = "Apache NiFi"
+  icon         = "/__icons/nifi.svg" # files/icons/nifi.svg, served by templates/icons.yaml
+  run_on_start = true
+  script = templatefile("${path.module}/scripts/apache_nifi.sh", {
+    path        = local.nifi_path
+    access_host = local.access_host
+  })
+}
+
+resource "coder_script" "airflow" {
+  count        = local.dataflow ? 1 : 0
+  agent_id     = coder_agent.main.id
+  display_name = "Apache Airflow"
+  icon         = "/icon/airflow.svg" # Coder's own icon
+  run_on_start = true
+  script = templatefile("${path.module}/scripts/apache_airflow.sh", {
+    path        = local.airflow_path
+    access_host = local.access_host
+  })
 }
 
 resource "kubernetes_manifest" "nifi_route" {
@@ -882,7 +912,7 @@ resource "coder_app" "airflow" {
   slug         = "airflow"
   display_name = "Apache Airflow"
   icon         = "/icon/airflow.svg" # Coder's own icon
-  # Airflow serves under the full app path (its base_url, in the startup script), so the URL carries it too.
+  # Airflow serves under the full app path (its base_url, in scripts/apache_airflow.sh), so the URL carries it too.
   url       = "http://localhost:8090/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow/"
   subdomain = false
   share     = "owner"

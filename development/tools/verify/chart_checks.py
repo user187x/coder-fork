@@ -211,9 +211,11 @@ def ai_checks(B, chart, default_render):
           "obsidian" not in (tf + startup).lower() and "local.dataflow ? 0 : 1" in tf, "")
     # "(cd X && app >log 2>&1 &)" backgrounds a bash that keeps the script's output open: the agent then reports
     # start_error ("script exited without closing output pipes"); the whole subshell is redirected instead
-    held = [ln.strip() for ln in startup.splitlines()
+    tpl_scripts = os.path.join(chart, "charts", "coder-workspace", "files", "scripts")
+    held = ["%s: %s" % (n, ln.strip()) for n in sorted(os.listdir(tpl_scripts)) if n.endswith(".sh")
+            for ln in open(os.path.join(tpl_scripts, n)).read().splitlines()
             if re.search(r"\(.*&&.*&\)\s*$", ln) and not ln.lstrip().startswith("#")]
-    check("startup.sh: no background subshell keeps the script's output open", not held, held[:3])
+    check("template scripts: no background subshell keeps the script's output open", not held, held[:3])
     # A metric's output is its value: reading a /proc entry of a process that ended meanwhile fails the redirection
     # before a trailing 2>/dev/null applies, and "bash: line N: /proc/...: No such file" showed in the dashboard
     metadata = open(os.path.join(chart, "charts", "coder-workspace", "files", "scripts", "metadata.sh")).read()
@@ -608,11 +610,40 @@ def main():
     # drive is connected or disconnected.
     cd_sh = open(os.path.join(tf_dir, "scripts", "cloud-drive.sh")).read()
     check("template: File Browser shows every Cloud Drive here as a source of its own (read only where shared so)",
-          "CLOUD_DRIVE_LINK" in fb and '"$HOME/cloud-drive-shared"' in fb and "readOnly" in fb
+          '"$HOME/cloud-drive-shared"' in cd_sh and "readOnly" in cd_sh and "readOnly" in fb
           and "rule filePath" in fb and "rule folderPath" in fb and "sidebarLinks" in fb
-          and 'CLOUD_DRIVE_LINK="$LINK" "$FB" restart' in cd_sh
-          and 'declare -f sync_link files_again files_check' in cd_sh
-          and "cloud_drive_link       = var.user_storage ? var.user_storage_path" in tf["main.tf"], "")
+          and 'cloud_drive drives | jq' in fb and 'cloud_drive targets |' in fb and 'cloud_drive links |' in fb
+          and '"$FB" restart' in cd_sh and 'setsid "$SELF" watch' in cd_sh
+          and 'declare -f sync_link files_again files_check watch probe source_of drives targets links' in cd_sh, "")
+    # The Cloud Drive's logic is in its own script alone: File Browser asks it which drives are here (it writes itself
+    # to /tmp/coder-cloud-drive/cloud-drive.sh at start, per container), and the startup script knows nothing of it.
+    cd_paths = ("cloud-drive-shared", "/mnt/cloud-drive", "CLOUD_DRIVE_LINK", "cloud_drive_link")
+    leaked = ["%s: %s" % (n, p) for n, text in (("startup.sh", startup), ("filebrowser.sh", fb)) for p in cd_paths
+              if p in "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))]
+    check("template: the Cloud Drive's logic in one script (cloud-drive.sh; File Browser asks it, startup.sh has none)",
+          not leaked and "cloud_drive_link" not in tf["main.tf"]
+          and "SELF=/tmp/coder-cloud-drive/cloud-drive.sh" in cd_sh
+          and "cloud_drive_sh=/tmp/coder-cloud-drive/cloud-drive.sh" in fb
+          and cd_sh.index("write_self\n") < cd_sh.index("sync_link\nlink_shared\nfiles_again"), leaked[:3])
+    # NiFi and Airflow start in scripts of their own (the dataflow template's only), beside the startup script, which
+    # knows nothing of them.
+    nifi_sh = open(os.path.join(tf_dir, "scripts", "apache_nifi.sh")).read()
+    airflow_sh = open(os.path.join(tf_dir, "scripts", "apache_airflow.sh")).read()
+    code = "\n".join(re.sub(r"\s+#.*$", "", ln) for ln in startup.splitlines()
+                     if not ln.lstrip().startswith("#")).lower()
+    check("template: NiFi and Airflow each a coder_script of its own (apache_nifi.sh, apache_airflow.sh), dataflow only",
+          not any(w in code for w in ("nifi", "airflow", "dataflow"))
+          and re.search(r'resource "coder_script" "nifi" \{\n  count        = local\.dataflow \? 1 : 0\n(?:.*\n){0,6}?'
+                        r'  script = templatefile\("\$\{path\.module\}/scripts/apache_nifi\.sh"', tf["main.tf"])
+          and re.search(r'resource "coder_script" "airflow" \{\n  count        = local\.dataflow \? 1 : 0\n(?:.*\n){0,6}?'
+                        r'  script = templatefile\("\$\{path\.module\}/scripts/apache_airflow\.sh"', tf["main.tf"])
+          and "nifi.web.proxy.context.path=$NIFI_PATH" in nifi_sh and "exec airflow standalone" in airflow_sh
+          and "code_server            = !local.dataflow" in tf["main.tf"], "")
+    # Beside the startup script, Airflow's line in ~/.bashrc waits for the startup script's default ~/.bashrc (added
+    # first, it would keep the default out).
+    check("apache_airflow.sh: its ~/.bashrc line after the startup script's default ~/.bashrc",
+          "bashrc_ready && break" in airflow_sh and "/usr/share/coder-workspace/ubuntu-bashrc" in airflow_sh
+          and "/usr/share/coder-workspace/ubuntu-bashrc" in startup, "")
     # Every workspace, whatever started it: the PID file per container (one in the home names another process after a
     # restart); the helper also comes with the Cloud Drive's platform section (the decorator gives templates made in
     # the builder the base's current one at every build), the newer one kept; the watcher's check takes over a File
@@ -620,7 +651,7 @@ def main():
     cd_section = re.search(r"# platform:begin cloud-drive\n(.*?)# platform:end cloud-drive", tf["main.tf"], re.S)
     check("template: File Browser keeps every Cloud Drive through restarts and in every template (builder-made too)",
           "pidfile=/tmp/" in fb and '"/proc/$1/comm"' in fb and "HELPER_VERSION=" in fb and "install)" in fb
-          and "check) flock -n 9" in fb and "timeout 10 test" in fb and 'grep -qxF "$config"' in fb
+          and "check) flock -n 9" in fb and "timeout 10 test" in cd_sh and 'grep -qxF "$config"' in fb
           and bool(cd_section) and 'filebrowser = base64encode(file("${path.module}/scripts/filebrowser.sh"))'
           in cd_section.group(1)
           and 'bash "$fb_helper" install' in cd_sh and 'bash "$fb_helper" install' in startup
@@ -634,7 +665,7 @@ def main():
           and "cloud_drive_peer_volumes" in tf["main.tf"] and "for_each = local.cloud_drive_peer_volumes" in tf["main.tf"]
           and "items = base64encode(jsonencode(" in tf["main.tf"]
           and 'ITEMS=/mnt/cloud-drive-items' in cd_sh and '-lname "$ITEMS/*" -delete' in cd_sh
-          and "(shared items)" in cd_sh and 'source_of "$item"' in fb and "unique_names" in fb, "")
+          and "(shared items)" in cd_sh and 'source_of "$item"' in cd_sh and "unique_names" in fb, "")
     # The desktop's look: the Desktop theme parameter (where the template has the desktop), put in the home by the
     # workspace image's coder-desktop-theme before the desktop starts (an image without it: skipped).
     check("template: the Desktop theme parameter (Serenade by default, or Classic) applied before the desktop starts",

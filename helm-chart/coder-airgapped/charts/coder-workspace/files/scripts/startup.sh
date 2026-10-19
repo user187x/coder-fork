@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # The workspace's startup script (coder_agent.main in ../main.tf): the shell defaults, the cluster sign-in for admins,
-# the desktop and the apps (code-server, File Browser; in the ubuntu-dataflow template, Apache NiFi and Apache Airflow
-# in place of code-server; in the AI template, ubuntu-opencode, Unsloth Studio and its server too). A
-# template made in Create new template may leave out the desktop or File Browser (its desktop and file_browser
-# variables). Runs at every start; each step is safe to repeat.
+# the desktop and the apps (code-server, File Browser; in the AI template, ubuntu-opencode, Unsloth Studio and its
+# server too). A template made in Create new template may leave out the desktop or File Browser (its desktop and
+# file_browser variables). Runs at every start; each step is safe to repeat.
+# Scripts of their own run beside it (each its coder_script in main.tf, in the workspace's Logs under its name): the
+# ubuntu-dataflow template's Apache NiFi and Apache Airflow (apache_nifi.sh, apache_airflow.sh), the Cloud Drive
+# (cloud-drive.sh: everything the workspace does with it), Lock Down and the certificate.
 # The .tf file renders this with templatefile(), so Terraform template syntax applies here: a shell variable in
 # braces is written with two dollar signs ($${HOME}), and a percent sign before a brace is doubled (%%{).
 set -e
@@ -16,14 +18,13 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
-APP_SET='${app_set}'                   # developer (code-server), dataflow (NiFi, Airflow) or opencode (AI)
-DESKTOP='${desktop}'                   # true: the desktop (noVNC's Desktop app)
-DESKTOP_THEME='${desktop_theme}'       # the Desktop theme parameter: serenade or classic (coder-desktop-theme)
-FILE_BROWSER='${file_browser}'         # true: File Browser
-AI_CONTEXT='${context_length}'         # the AI template's Context length parameter: the tokens OpenCode loads a model with
-ACCESS_HOST='${access_host}'           # Coder's host, as browsers reach it (NiFi and Airflow make their links with it)
-START_DIR='${start_directory}'         # the Start folder parameter: where the terminal and File Browser open
-CLOUD_DRIVE_LINK='${cloud_drive_link}' # where the owner's Cloud Drive is linked (none without it)
+APP_SET='${app_set}'             # developer, dataflow or opencode (the AI template: Unsloth Studio below)
+CODE_SERVER_APP='${code_server}' # true: the code-server app (every template but ubuntu-dataflow)
+DESKTOP='${desktop}'             # true: the desktop (noVNC's Desktop app)
+DESKTOP_THEME='${desktop_theme}' # the Desktop theme parameter: serenade or classic (coder-desktop-theme)
+FILE_BROWSER='${file_browser}'   # true: File Browser
+AI_CONTEXT='${context_length}'   # the AI template's Context length parameter: the tokens OpenCode loads a model with
+START_DIR='${start_directory}'   # the Start folder parameter: where the terminal and File Browser open
 # Path-based apps are proxied under this prefix ("main" = the agent's name).
 APPS="/@$OWNER_NAME/$WORKSPACE_NAME.main/apps"
 # One line per step, for the workspace page's Logs panel (the agent keeps this script's output, with the time).
@@ -280,7 +281,7 @@ fi
 # HA (CODER_CODE_SERVER_HA, the template's code_server_ha) it runs elsewhere: the relay in this pod answers instead.
 if [ -n "$${CODER_CODE_SERVER_HA:-}" ]; then
  log "code-server: high availability - its instance runs apart from the workspace (the relay answers on 13337)"
-elif [ "$APP_SET" != dataflow ]; then
+elif [ "$CODE_SERVER_APP" = true ]; then
  CODE_SERVER="$(command -v code-server || true)"
  if [ -z "$CODE_SERVER" ]; then
   if [ ! -x /tmp/code-server/bin/code-server ]; then
@@ -302,18 +303,17 @@ fi
 # 3. File Browser (when the template has it): FileBrowser Quantum, the workspace image's (an image without it gets
 # none: there is nothing to download it from without internet), started by coder-filebrowser (scripts/filebrowser.sh):
 # under the app's path, on 127.0.0.1 only, no sign-in of its own; the Start folder, and each Cloud Drive here as a
-# source of its own (Quantum opens no link out of a source's folder; the Cloud Drive's watcher restarts it as the drive
-# is connected or disconnected). Its settings are written at every start (the Start folder may have changed); its
-# database stays in the home. The helper is installed here and by the Cloud Drive's script, the newer one kept. An image
-# built on an older workspace image still has the former File Browser: started with its own flags.
+# source of its own (it asks the Cloud Drive's script which they are, and that script starts it again as they change).
+# Its settings are written at every start (the Start folder may have changed); its database stays in the home. The
+# helper is installed here and by the Cloud Drive's script, the newer one kept. An image built on an older workspace
+# image still has the former File Browser: started with its own flags.
 if [ "$FILE_BROWSER" != true ]; then
  log "File Browser: not in this template"
 elif ! command -v filebrowser >/dev/null; then
  log "File Browser: not in this image: skipped"
 elif filebrowser version 2>/dev/null | grep -q "FileBrowser Quantum"; then
  mkdir -p "$HOME/.config/filebrowser-quantum" "$HOME/.local/bin"
- printf 'APPS=%q\nSTART_DIR=%q\nCLOUD_DRIVE_LINK=%q\n' "$APPS" "$START_DIR" "$CLOUD_DRIVE_LINK" \
-  >"$HOME/.config/filebrowser-quantum/env"
+ printf 'APPS=%q\nSTART_DIR=%q\n' "$APPS" "$START_DIR" >"$HOME/.config/filebrowser-quantum/env"
  fb_helper="$(mktemp)" && echo '${filebrowser}' | base64 -d >"$fb_helper" && bash "$fb_helper" install
  rm -f "$fb_helper"
  log "$("$HOME/.local/bin/coder-filebrowser" start)"
@@ -326,70 +326,7 @@ else
  log "File Browser: started in $START_DIR (log: /tmp/filebrowser.log)"
 fi
 
-# 4. Apache NiFi and Apache Airflow: the ubuntu-dataflow template's apps, in place of code-server, with no network.
-# The workspace image has both: /opt/nifi (its NARs unpacked there, read-only) and /opt/airflow.
-if [ "$APP_SET" = dataflow ]; then
- # NiFi: from /opt/nifi as the image installed it (its NARs unpacked there, read-only); everything it writes is a
- # link into ~/.nifi: conf (the image's, the first time; then the user's flows and settings), logs, state,
- # repositories, work areas. Unsecured HTTP on 127.0.0.1:8080, for this workspace only (the app is its owner's
- # alone). The app's path reaches it in the proxy headers the cluster's Gateway adds (the template's HTTPRoute), so
- # its pages and API calls go through Coder's proxy; it accepts them for this path and Coder's host only.
- if [ -x /opt/nifi/bin/nifi.sh ]; then
-  NIFI_HOME=/home/coder/.nifi
-  mkdir -p "$NIFI_HOME"
-  (cd "$NIFI_HOME" && mkdir -p logs run state database_repository flowfile_repository content_repository \
-   provenance_repository status_repository nar_repository assets connector_assets diagnostics \
-   work/uploads work/python work/jetty work/docs)
-  if [ ! -f "$NIFI_HOME/conf/nifi.properties" ]; then
-   cp -r /opt/nifi/conf.dist "$NIFI_HOME/conf"
-   # A key of its own for the flows' sensitive properties (kept with them).
-   NIFI_KEY="$(head -c 32 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 32)"
-   sed -i "s|^nifi.sensitive.props.key=.*|nifi.sensitive.props.key=$NIFI_KEY|" "$NIFI_HOME/conf/nifi.properties"
-  fi
-  # Its path and Coder's host, every start: renaming the workspace changes the path.
-  sed -i -e "s|^nifi.web.proxy.context.path=.*|nifi.web.proxy.context.path=$APPS/nifi|" \
-   -e "s|^nifi.web.proxy.host=.*|nifi.web.proxy.host=$ACCESS_HOST,$ACCESS_HOST:443|" "$NIFI_HOME/conf/nifi.properties"
-  if ! curl -fs http://127.0.0.1:8080/nifi-api/flow/about >/dev/null; then
-   JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 /opt/nifi/bin/nifi.sh start </dev/null >/tmp/nifi-start.log 2>&1
-   log "Apache NiFi: starting (log: ~/.nifi/logs/nifi-app.log)"
-  else
-   log "Apache NiFi: running already"
-  fi
- else
-  log "Apache NiFi is not in this image (/opt/nifi): skipped"
- fi
-
- # Airflow: standalone (its API server, scheduler, DAG processor and triggerer; SQLite in ~/airflow) under the full
- # app path (base_url), every user an admin (the app is its owner's alone), with Airflow's example DAGs. The same
- # settings in ~/.airflowrc for the airflow command in terminals.
- if [ -x /opt/airflow/bin/airflow ]; then
-  AIRFLOW_BASE="$APPS/airflow"
-  cat >/home/coder/.airflowrc <<AIRFLOWRC
-export AIRFLOW_HOME=/home/coder/airflow
-export AIRFLOW__API__HOST=127.0.0.1
-export AIRFLOW__API__PORT=8090
-export AIRFLOW__API__WORKERS=1
-export AIRFLOW__API__BASE_URL=https://$ACCESS_HOST$AIRFLOW_BASE
-export AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://127.0.0.1:8090$AIRFLOW_BASE/execution/
-export AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=True
-export AIRFLOW__CORE__LOAD_EXAMPLES=True
-export PATH="/opt/airflow/bin:\$PATH"
-AIRFLOWRC
-  grep -qs "airflowrc" /home/coder/.bashrc || echo '[ -f ~/.airflowrc ] && . ~/.airflowrc' >>/home/coder/.bashrc
-  if ! curl -fs "http://127.0.0.1:8090$AIRFLOW_BASE/api/v2/monitor/health" >/dev/null; then
-   # The whole subshell redirected (and exec'd): a background job holding the agent's output keeps the script from
-   # ending (a start error).
-   (. /home/coder/.airflowrc && mkdir -p "$AIRFLOW_HOME/dags" && exec airflow standalone) </dev/null >/tmp/airflow.log 2>&1 &
-   log "Apache Airflow: starting (log: /tmp/airflow.log)"
-  else
-   log "Apache Airflow: running already"
-  fi
- else
-  log "Apache Airflow is not in this image (/opt/airflow): skipped"
- fi
-fi
-
-# 5. Unsloth Studio (the AI template, ubuntu-opencode), on the AI workspace image, with no network: its home linked to
+# 4. Unsloth Studio (the AI template, ubuntu-opencode), on the AI workspace image, with no network: its home linked to
 # the image's install (its Python environments and llama.cpp are not copied into every home), its window on the
 # desktop, which starts its server on 127.0.0.1:8888 (OpenAI-compatible: OpenCode's provider, with the model OpenCode
 # loads at the Context length's tokens); it scans the model library (~/models) and the owner's Cloud Drive

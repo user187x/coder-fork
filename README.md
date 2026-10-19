@@ -214,7 +214,9 @@ The full feature list, with where each piece lives and how it is tested, is
   - k9s, kubectl and kubelogin;
   - the JetBrains Mono Nerd Font.
 - **The template's scripts are files** (`files/scripts/`, formatted with `shfmt -i 1`): the startup script, the
-  certificate install, the agent activity monitor, and every metric as a function of one `metadata.sh`.
+  dataflow template's `apache_nifi.sh` and `apache_airflow.sh` (each its own script in the workspace's Logs), the
+  Cloud Drive's one `cloud-drive.sh`, the certificate install, the agent activity monitor, and every metric as a
+  function of one `metadata.sh`.
 - **The image documents itself:** each build records what it adds over its base in
   `/usr/share/coder-workspace/addons.json`: every program with the version it reports, and the apt packages asked
   for.

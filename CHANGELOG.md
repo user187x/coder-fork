@@ -6,6 +6,22 @@ Coder `2.0.0-platform.84` (fork `399ab8d36`), workspace image `coder-workspace:1
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **The template's startup script, decoupled** (template DEFAULT, and every template the chart pushes): Apache NiFi
+  and Apache Airflow start in scripts of their own, `apache_nifi.sh` and `apache_airflow.sh`. Each is a `coder_script`
+  of the dataflow template only, shown in the workspace's Logs under its own name, with a failure of its own (NiFi's
+  start log is shown when it does not start). The startup script no longer knows of them (whether the template has
+  code-server comes as its own value). The scripts run side by side, so Airflow's line in `~/.bashrc` waits for the
+  startup script's default `~/.bashrc` (added first, it would have kept the default out).
+* **The Cloud Drive in one script** (`cloud-drive.sh`): the link and the watcher that follows it, the drives shared
+  with the owner, the `cloud-drive` command's install, and which drives File Browser shows. At start it writes itself
+  (that start's values and its functions) to `/tmp/coder-cloud-drive/cloud-drive.sh`, which runs the watcher and
+  answers File Browser. File Browser's helper (version 5) asks it which drives are here, where their links are and
+  where they lead, instead of knowing the drives' paths itself; the startup script no longer passes the drive's link.
+  The `cloud-drive` command stays its own file, because the platform service runs the same one. Checked by running
+  the old and new scripts as the agent does, in the dataflow image with no network: the same links, the same File
+  Browser sources and rules (an older File Browser build too), NiFi, Airflow and File Browser answering, the drive
+  followed off and on, and no script holding the agent's output open. An older startup script (a template made in
+  Create new template keeps its own) works with the new Cloud Drive script. New chart checks keep the layout.
 * **Fixed: a workspace set to Serenade started Classic** (template DEFAULT, the dataflow image): the dataflow image
   1.1.2 was built on a workspace image from before the desktop themes, so it had no `coder-desktop-theme` and the
   choice was skipped. Rebuilt as `coder-workspace-dataflow:1.1.3` on workspace image 1.9.3 (NiFi and Airflow offline
