@@ -2,10 +2,29 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.84` (fork `399ab8d36`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.85` (fork `897b19a56`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **Fixed: a Cloud Drive connected or disconnected on the Workspaces page took up to minutes to reach the
+  workspace.** The workspace followed its pod's annotation through the downward API, and the kubelet sometimes took
+  over 90 seconds to update that file (seen on the dev cluster). The platform service now also tells the running
+  workspace at once, by exec (`cloud-drive.sh push`), and the workspace follows whichever of the two was written last:
+  the change is in the workspace within a second, and the annotation still decides when a push does not arrive (a
+  template version from before it, a workspace still starting: pushed again for a minute). Checked against an
+  annotation file left stale: disconnect about a second, connect under one, no flapping back when the file catches up.
+* **The Cloud Drive attaching, on the Workspaces page** (fork, service, template): beside a running workspace's
+  Running, an orange cloud with an unplugged plug in it, glowing and pulsing, while its Cloud Drive is connected but
+  not attached in its container yet; its cable stays red as long. The workspace says it itself
+  (`cloud-drive.sh status`: attached, waiting, unanswered, offline, ... - its agent's metadata `cloud_drive`, in the
+  Cloud Drive's platform section, so templates made in Create new template have it too, and no metric display); the
+  service reads it from Coder's database for its connections (`attachment`), and the page reads them every two seconds
+  while one waits. Workspaces need their template's new version (DATAFLOW, UBUNTU) to report it; until then they show
+  no cloud.
+* **More than four apps in a carousel** (fork, the Workspaces table): four at a time, an app at a time - its arrows,
+  the arrow keys, a sideways scroll - with a bar for where it is; the apps out of view are not tabbed to. Before, the
+  apps past the fourth were left out (DATAFLOW has five with the Terminal). The update and restart buttons stay to its
+  right, never in it.
 * **The template's startup script, decoupled** (template DEFAULT, and every template the chart pushes): Apache NiFi
   and Apache Airflow start in scripts of their own, `apache_nifi.sh` and `apache_airflow.sh`. Each is a `coder_script`
   of the dataflow template only, shown in the workspace's Logs under its own name, with a failure of its own (NiFi's

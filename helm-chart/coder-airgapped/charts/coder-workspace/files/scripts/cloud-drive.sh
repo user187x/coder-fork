@@ -4,8 +4,9 @@
 # mounts the volumes and sets the pod's annotation). Runs at every start.
 #
 # ~/cloud-drive links to it while the pod's annotation platform.coder/cloud-drive says so. The platform service sets the
-# annotation, the pod sees it at /etc/platform/cloud-drive (the downward API) within a second, and the watcher started
-# here follows it: no restart.
+# annotation and, by exec, tells this script at once (cloud-drive.sh push); the pod sees the annotation at
+# /etc/platform/cloud-drive (the downward API) too, but the kubelet may take a minute or more to update that file. The
+# watcher started here follows whichever of the two was written last, every second: no restart.
 #   on              its volume, mounted out of the way (MOUNT), when this workspace started with one
 #   off             none: disconnected by the owner (dragging its cable away), or shared with others (the Cloud
 #                   Drive is the owner's alone)
@@ -36,6 +37,13 @@
 #   cloud-drive.sh targets  the folders the drives' links lead to, a line each
 #   cloud-drive.sh links    the drives' links in the home, a line each: the owner's drive's link, the folder of the
 #                           shared ones (it holds only links)
+#   cloud-drive.sh push S   the platform service's word as it changes the annotation (on, off, source:<folder>): the
+#                           watcher follows it within a second; it waits for that (up to 5 seconds) and says status
+#   cloud-drive.sh status   how the owner's drive is here, a word - the agent's metadata cloud_drive (main.tf), which
+#                           the dashboard shows: attached (linked, its storage answers), unanswered (linked, its storage
+#                           does not answer), waiting (it should be here and is not yet), offline (no volume: its
+#                           source workspace was not running at this start), shared (none: the workspace is shared
+#                           with others), detached (disconnected)
 # main.tf renders this with templatefile(): link, mode, mount, cli, filebrowser and items are the template's values (a
 # shell variable in braces is written with two dollar signs).
 LINK='${link}'
@@ -43,6 +51,7 @@ MODE='${mode}'
 MOUNT='${mount}'
 ITEMS_LIST='${items}'
 STATE=/etc/platform/cloud-drive
+PUSHED=/tmp/coder-cloud-drive/pushed
 PEERS=/mnt/cloud-drive-peers
 ITEMS=/mnt/cloud-drive-items
 SHARED="$HOME/cloud-drive-shared"
@@ -52,15 +61,32 @@ CLI="$HOME/.local/bin/cloud-drive"
 MOUNTS="$HOME/.config/cloud-drive/mounts.json"
 FB="$HOME/.local/bin/coder-filebrowser"
 
-# ~/cloud-drive as the annotation says: a link to the volume, to the source folder, or none.
-sync_link() {
- local state target aside
- state="$(cat "$STATE" 2>/dev/null)"
- case "$state" in
- off) target="" ;;
- source:/*) target="$${state#source:}" ;;
- *) target="$MOUNT" ;;
+# The state now: the annotation's file, or what the platform service pushed (its time, the state) - whichever was
+# written last (the kubelet writes the file only when the annotation changed). Nothing pushed yet: the file (the read in
+# braces, so its redirection's error is silenced too).
+state_now() {
+ local at state file_at
+ file_at="$(stat -L -c %Y "$STATE" 2>/dev/null || echo 0)"
+ if { read -r at state <"$PUSHED"; } 2>/dev/null && [ "$${at:-0}" -ge "$file_at" ]; then
+  echo "$state"
+ else
+  cat "$STATE" 2>/dev/null
+ fi
+}
+
+# Where ~/cloud-drive should lead in a state: the volume, the source folder, or nowhere (off; no volume).
+target_of() {
+ case "$1" in
+ off) echo "" ;;
+ source:/*) echo "$${1#source:}" ;;
+ *) echo "$MOUNT" ;;
  esac
+}
+
+# ~/cloud-drive as the state says: a link to the volume, to the source folder, or none.
+sync_link() {
+ local target aside
+ target="$(target_of "$(state_now)")"
  if [ -z "$target" ]; then
   if [ -L "$LINK" ]; then
    rm -f "$LINK" && echo "Cloud Drive: not here ($LINK removed)"
@@ -209,17 +235,62 @@ links() {
  fi
 }
 
+status() {
+ local state target
+ state="$(state_now)"
+ target="$(target_of "$state")"
+ if [ -z "$target" ]; then
+  if [ -L "$LINK" ]; then
+   echo waiting # on its way out
+  elif [ "$state" = off ]; then
+   echo detached
+  elif [ "$MODE" = shared ] || [ "$MODE" = offline ]; then
+   echo "$MODE"
+  else
+   echo waiting
+  fi
+ elif [ "$(readlink "$LINK" 2>/dev/null)" != "$target" ]; then
+  echo waiting
+ elif timeout 2 test -d "$LINK/"; then
+  echo attached
+ else
+  echo unanswered
+ fi
+}
+
+push() {
+ case "$${1:-}" in
+ on | off | source:/*) ;;
+ *)
+  echo "push: on, off or source:<folder>" >&2
+  return 2
+  ;;
+ esac
+ printf '%s %s\n' "$(date +%s)" "$1" >"$PUSHED.new" && mv "$PUSHED.new" "$PUSHED" || return 1
+ local target
+ target="$(target_of "$1")"
+ for _ in $(seq 25); do
+  if { [ -z "$target" ] && [ ! -L "$LINK" ]; } || [ "$(readlink "$LINK" 2>/dev/null)" = "$target" ]; then
+   break
+  fi
+  sleep 0.2
+ done
+ status
+}
+
 # This script as this start has it (its values and functions), for the watcher and File Browser.
 write_self() {
  mkdir -p "$(dirname "$SELF")" && chmod 700 "$(dirname "$SELF")" || return 1
  {
   echo '#!/usr/bin/env bash'
   echo "# The workspace's Cloud Drive (the template's scripts/cloud-drive.sh), as its start of $(date -u +%FT%TZ) wrote it."
-  declare -p LINK MOUNT STATE PEERS ITEMS SHARED SELF CLI MOUNTS FB
-  declare -f sync_link files_again files_check watch probe source_of drives targets links
+  declare -p LINK MODE MOUNT STATE PUSHED PEERS ITEMS SHARED SELF CLI MOUNTS FB
+  declare -f state_now target_of sync_link files_again files_check watch probe source_of drives targets links status \
+   push
   echo 'case "$${1:-}" in'
-  echo 'watch | drives | targets | links) "$1" ;;'
-  echo '*) echo "usage: $0 watch | drives | targets | links" >&2 && exit 2 ;;'
+  echo 'watch | drives | targets | links | status) "$1" ;;'
+  echo 'push) push "$${2:-}" ;;'
+  echo '*) echo "usage: $0 watch | drives | targets | links | status | push on|off|source:<folder>" >&2 && exit 2 ;;'
   echo 'esac'
  } >"$SELF.new" && chmod 0755 "$SELF.new" && mv "$SELF.new" "$SELF"
 }

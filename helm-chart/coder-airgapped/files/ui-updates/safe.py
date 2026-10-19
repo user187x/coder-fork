@@ -5,9 +5,11 @@ Every workspace of the account mounts it (PersistentVolumeClaim coder-safe-<user
 driver ru.yandex.s3.csi), and the Workspaces page opens it. Its owner may disconnect a workspace from it (and connect it
 again; a new workspace is connected): the workspace template mounts the volume out of the way (/mnt/cloud-drive) and a
 watcher in the workspace links ~/cloud-drive to it while its pod's annotation platform.coder/cloud-drive says "on" -
-which it reads through the downward API, so a change shows in the running workspace within a second, no restart. The
-disconnected workspaces are kept in LINKS_FILE; a watcher here keeps every running workspace pod's annotation so (a
-pod starts "on", from its template). This module keeps, every RECONCILE_EVERY seconds: the
+which it reads through the downward API, and which this module also tells it at once, by exec (the workspace's
+cloud-drive.sh push: the kubelet may take a minute or more to update the annotation's file), so a change shows in the
+running workspace within a second, no restart. The workspace says whether the drive is attached (its agent's metadata
+cloud_drive, read from Coder's database): connections' "attachment". The disconnected workspaces are kept in
+LINKS_FILE; a watcher here keeps every running workspace pod's annotation so (a pod starts "on", from its template). This module keeps, every RECONCILE_EVERY seconds: the
 bucket; the Secret the safes' volumes name for mounting (coder-user-storage-mount: the keys, and an endpoint the nodes
 reach - GeeseFS runs on the node, outside the cluster's DNS, so the chart's MinIO by its ClusterIP); and for every
 account a PersistentVolume (Retain: removing it never removes files) and its claim.
@@ -32,7 +34,8 @@ account a PersistentVolume (Retain: removing it never removes files) and its cla
   POST /__coder-ui/api/safe/settings/quota {quotaGiB} | {reset: true}   admins: every account's capacity
   GET  /__coder-ui/api/safe/connections       the caller's workspaces disconnected from it, those whose running pod
                                               predates the connections (their template version), those shared with
-                                              others (never connected), whether it is encrypted, its source workspace
+                                              others (never connected), whether it is encrypted, its source workspace;
+                                              how the drive is in each started one (attachment: attached, waiting, ...)
   POST /__coder-ui/api/safe/connections/<workspace id> {connected}   the caller's own workspace (dis)connected
   GET  /__coder-ui/api/safe/encryption        the caller's encryption: off / encrypting / on / decrypting, how
   POST /__coder-ui/api/safe/encryption/prepare {method: password, password} | {method: pki, certificate}
@@ -164,6 +167,12 @@ QUOTA_GIB_RANGE = (1, 10240)
 LINKS_FILE = os.environ.get("SAFE_LINKS_FILE", "/data/cloud-drive-links.json")
 LINK_ANNOTATION = "platform.coder/cloud-drive"
 LINK_WATCH_SECONDS = 5
+# The workspace's Cloud Drive script (scripts/cloud-drive.sh, which writes itself there at its start): told each change
+# of the annotation at once (push), it answers how the drive is then (its status word).
+PUSH_HELPER = "/tmp/coder-cloud-drive/cloud-drive.sh"
+PUSH_RETRY, PUSH_TRIES = 3, 20  # a workspace whose script has not run yet is tried again for a minute
+# A workspace's word on its drive (its agent's metadata) older than this: its agent has gone quiet ("stale").
+ATTACH_FRESH = 20
 WORKSPACE_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 # What the workspace templates read when a workspace starts (ConfigMap STATE_CONFIGMAP, key "state", JSON): the
 # workspaces shared with others (they never mount their owner's Cloud Drive), and each account's source workspace.
@@ -186,7 +195,7 @@ SOURCE_CONTAINER = os.environ.get("SAFE_SOURCE_CONTAINER", "dev")
 SOURCE_HOME = "/home/coder"
 SOURCE_RETRY = 30  # seconds between attempts to start a source's server
 
-LOG = KUBE = USERS = CAN_EDIT = IS_ADMIN = WORKSPACE_INFO = SHARED = WORKSPACES = None
+LOG = KUBE = USERS = CAN_EDIT = IS_ADMIN = WORKSPACE_INFO = SHARED = WORKSPACES = ATTACHMENT = None
 # The backend's last check (every reconcile round, and on demand): connected or not, and how fast.
 _status = {"connected": None, "error": None, "checkedAt": None, "latencyMs": None}
 _imports = {}  # (library, file name) -> its download from a URL: {name, url, bytes, total, error, done, by, startedAt}
@@ -199,17 +208,22 @@ _pending = {}  # user id -> a prepared key: {key, keyId, method, record, at}
 _jobs = {}  # user id -> encrypting or decrypting: {action, done, total, error, startedAt, finishedAt}
 _shared = {"ids": {}, "at": 0}  # the workspaces shared with others: {workspace id: owner id}, as last read
 _published = {"state": None}  # the ConfigMap's state as last written
+_wanted = {}  # pod name -> the annotation as last set here (a retried push gives way to a newer one)
+_attach_seen = {}  # workspace id -> (its status word, time): its answer to the last push
 _sources_seen = {}  # owner id -> {running, pod, started, tried, error}
 
 
-def setup(log, kube, users, can_edit=None, is_admin=None, workspace_info=None, shared=None, workspaces=None):
+def setup(log, kube, users, can_edit=None, is_admin=None, workspace_info=None, shared=None, workspaces=None,
+          attachment=None):
     """users(): [(id, username)] of every account (Coder's database); can_edit(user): may change the libraries;
     is_admin(user): may change the backend; workspace_info(token, id): the workspace (Coder's API), if the session may
     see it; shared(): {workspace id: owner id} of the workspaces shared with other users or groups (Coder's
-    database), None while it cannot be read; workspaces(owner id): [{id, name}] of the account's workspaces."""
-    global LOG, KUBE, USERS, CAN_EDIT, IS_ADMIN, WORKSPACE_INFO, SHARED, WORKSPACES
-    LOG, KUBE, USERS, CAN_EDIT, IS_ADMIN, WORKSPACE_INFO, SHARED, WORKSPACES = (
-        log, kube, users, can_edit, is_admin, workspace_info, shared, workspaces)
+    database), None while it cannot be read; workspaces(owner id): [{id, name}] of the account's workspaces;
+    attachment(owner id): [(workspace id, value, collected at, job status)] of the account's started workspaces whose
+    agent reports its Cloud Drive (metadata cloud_drive, Coder's database), None while it cannot be read."""
+    global LOG, KUBE, USERS, CAN_EDIT, IS_ADMIN, WORKSPACE_INFO, SHARED, WORKSPACES, ATTACHMENT
+    LOG, KUBE, USERS, CAN_EDIT, IS_ADMIN, WORKSPACE_INFO, SHARED, WORKSPACES, ATTACHMENT = (
+        log, kube, users, can_edit, is_admin, workspace_info, shared, workspaces, attachment)
 
 
 # ---------------------------------------------------------------------------------------------------- the backend
@@ -411,7 +425,68 @@ def link(pod, want):
                           patch_type="application/merge-patch+json")
     if status != 200:
         raise RuntimeError("pod %s: HTTP %s" % (meta["name"], status))
+    _wanted[meta["name"]] = want
     return True
+
+
+def push_link(pod_name, wid, want):
+    """The workspace told at once (its Cloud Drive script, by exec), its answer kept (attachment): True when it took
+    it. False when it has no such script (a template version from before it, or a start before the script ran)."""
+    try:
+        code, out, err = kexec.exec_in(KUBE, NAMESPACE, pod_name, SOURCE_CONTAINER, [PUSH_HELPER, "push", want],
+                                       timeout=15)
+    except Exception as e:  # noqa: BLE001 - the annotation stands; the workspace follows it once its file is updated
+        LOG(event="cloud-drive-push-failed", pod=pod_name, link=want, error=str(e)[:200])
+        return False
+    word = (out.split() or [""])[-1]
+    if code != 0 or not word:
+        return False
+    _attach_seen[wid] = (word, time.time())
+    LOG(event="cloud-drive-push", workspace=wid, pod=pod_name, link=want, status=word)
+    return True
+
+
+def push_soon(pod_name, wid, want, first=True):
+    """push_link in the background: tried again every PUSH_RETRY seconds (PUSH_TRIES times) while the workspace's
+    script is not there yet - it is written as the workspace starts - unless the annotation changed meanwhile."""
+    def run():
+        for i in range(PUSH_TRIES):
+            if _wanted.get(pod_name, want) != want:
+                return
+            if (first or i) and push_link(pod_name, wid, want):
+                return
+            time.sleep(PUSH_RETRY)
+    threading.Thread(target=run, daemon=True, name="cloud-drive-push").start()
+
+
+def attachment(user_id):
+    """{workspace id: word} - how the account's Cloud Drive is in each of its started workspaces whose template reports
+    it: the word of its agent's metadata (scripts/cloud-drive.sh status: attached, waiting, unanswered, offline,
+    shared, detached), or its answer to a push when that is newer; "starting" before a first word (its build or its
+    agent still starting), "stale" when its agent has not said for ATTACH_FRESH seconds. {} while Coder's database
+    cannot be read."""
+    try:
+        rows = ATTACHMENT(user_id) if ATTACHMENT else None
+    except Exception as e:  # noqa: BLE001 - no attachment is shown then, nothing else changes
+        LOG(event="cloud-drive-attachment-failed", error=str(e)[:200])
+        rows = None
+    now = time.time()
+    for wid in [w for w, (_, at) in _attach_seen.items() if now - at > 600]:
+        _attach_seen.pop(wid, None)
+    out = {}
+    for wid, value, collected, job in rows or []:
+        words = (value or "").split()
+        if job != "succeeded" or collected <= 0 or not words:
+            word, at = "starting", 0
+        elif now - collected > ATTACH_FRESH:
+            word, at = "stale", collected
+        else:
+            word, at = words[0], collected
+        seen = _attach_seen.get(wid)
+        if seen and seen[1] > at and job == "succeeded":
+            word = seen[0]
+        out[wid] = word
+    return out
 
 
 def shared_now():
@@ -442,6 +517,7 @@ def links_once():
         if wid and link(pod, want):
             LOG(event="cloud-drive-link", workspace=wid, pod=pod["metadata"]["name"], link=want,
                 shared=wid in shared, by="watcher")
+            push_soon(pod["metadata"]["name"], wid, want)
     sources_once()
     publish_state(shared)
 
@@ -595,7 +671,7 @@ def connections(user):
     src = sources().get(user["id"])
     return {"disconnected": off, "older": older, "shared": shared, "sharedWithVolume": exposed,
             "encrypted": encryption_on(user["id"]), "restart": stale_mounts(user["id"], src, set(shared)),
-            "source": source_view(user["id"], src) if src else None}
+            "source": source_view(user["id"], src) if src else None, "attachment": attachment(user["id"])}
 
 
 PEER_MOUNT_DIRS = ("/mnt/cloud-drive-peers/", "/mnt/cloud-drive-items/")
@@ -677,7 +753,13 @@ def set_connected(h, user, wid, body):
         src = {v["workspace"]: v["path"] for v in sources().values()}.get(wid)
         linked, _ = link_pods(wid)
         for pod in linked:
-            link(pod, ("source:" + src if src else "on") if want else "off")
+            state = ("source:" + src if src else "on") if want else "off"
+            link(pod, state)
+            _wanted[pod["metadata"]["name"]] = state
+            # at once, waiting for the workspace's answer (its drive attached or not); tried again in the background
+            # while its script is not there yet
+            if not push_link(pod["metadata"]["name"], wid, state):
+                push_soon(pod["metadata"]["name"], wid, state, first=False)
             applied = True
     LOG(event="cloud-drive-link", workspace=wid, name=ws.get("name"), connected=want, by=user["username"],
         running=applied)

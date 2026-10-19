@@ -614,7 +614,27 @@ def main():
           and "rule filePath" in fb and "rule folderPath" in fb and "sidebarLinks" in fb
           and 'cloud_drive drives | jq' in fb and 'cloud_drive targets |' in fb and 'cloud_drive links |' in fb
           and '"$FB" restart' in cd_sh and 'setsid "$SELF" watch' in cd_sh
-          and 'declare -f sync_link files_again files_check watch probe source_of drives targets links' in cd_sh, "")
+          and 'declare -f state_now target_of sync_link files_again files_check watch probe source_of drives targets links' in cd_sh, "")
+    # The kubelet may take a minute or more to update the annotation's file in the pod: the platform service also
+    # tells the workspace at once (cloud-drive.sh push, by exec), and the watcher follows whichever was written last.
+    # The workspace says whether the drive is attached (status: its agent's metadata cloud_drive, in the Cloud Drive's
+    # platform section), which the service reads from Coder's database for the Workspaces page.
+    safe_py = open(os.path.join(chart, "files/ui-updates/safe.py")).read()
+    ui_py = open(os.path.join(chart, "files/ui-updates/ui-service.py")).read()
+    agent_part = re.search(r'resource "coder_agent" "main" \{.*?# platform:begin cloud-drive\n(.*?)# platform:end cloud-drive',
+                           tf["main.tf"], re.S)
+    check("Cloud Drive: told at once (push by exec), the newer of it and the annotation's file followed",
+          'if { read -r at state <"$PUSHED"; } 2>/dev/null && [ "$${at:-0}" -ge "$file_at" ]; then' in cd_sh
+          and 'file_at="$(stat -L -c %Y "$STATE"' in cd_sh and "push) push" in cd_sh
+          and 'PUSH_HELPER = "/tmp/coder-cloud-drive/cloud-drive.sh"' in safe_py
+          and '[PUSH_HELPER, "push", want]' in safe_py and "push_soon(pod[\"metadata\"][\"name\"], wid, want)" in safe_py, "")
+    check("Cloud Drive: the workspace says whether it is attached (metadata cloud_drive), the service reads it",
+          bool(agent_part) and 'key          = "9_cloud_drive"' in agent_part.group(1)
+          and "for_each = var.user_storage ? [1] : []" in agent_part.group(1)
+          and "cloud-drive.sh status 2>/dev/null || echo starting" in agent_part.group(1)
+          and all(w in cd_sh for w in ("echo attached", "echo unanswered", "echo detached", "echo waiting"))
+          and "m.key ~ '(^|_)cloud_drive$'" in ui_py and "attachment=safe_cloud_drive_attachment" in ui_py
+          and '"attachment": attachment(user["id"])' in safe_py, "")
     # The Cloud Drive's logic is in its own script alone: File Browser asks it which drives are here (it writes itself
     # to /tmp/coder-cloud-drive/cloud-drive.sh at start, per container), and the startup script knows nothing of it.
     cd_paths = ("cloud-drive-shared", "/mnt/cloud-drive", "CLOUD_DRIVE_LINK", "cloud_drive_link")

@@ -729,6 +729,23 @@ resource "coder_agent" "main" {
     timeout      = 1
   }
   # platform:end metrics
+
+  # platform:begin cloud-drive
+  # Whether the owner's Cloud Drive is attached in the workspace now, a word (scripts/cloud-drive.sh status: attached,
+  # waiting, unanswered, ...; "starting" before that script ran): not a metric display (key ending in "cloud_drive"). The
+  # platform service reads it from Coder's database for the Workspaces page - an orange cloud beside Running and a red
+  # cable until the drive is attached.
+  dynamic "metadata" {
+    for_each = var.user_storage ? [1] : []
+    content {
+      display_name = "Cloud Drive"
+      key          = "9_cloud_drive"
+      script       = "/tmp/coder-cloud-drive/cloud-drive.sh status 2>/dev/null || echo starting"
+      interval     = 2
+      timeout      = 4
+    }
+  }
+  # platform:end cloud-drive
 }
 
 resource "coder_app" "novnc" {

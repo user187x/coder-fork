@@ -9495,6 +9495,26 @@ def safe_shared_workspaces():
         "AND (user_acl <> '{}'::jsonb OR group_acl <> '{}'::jsonb)")}
 
 
+def safe_cloud_drive_attachment(owner_id):
+    """How an account's Cloud Drive is in each of its started workspaces (Coder's database): [(workspace id, value,
+    collected at (epoch seconds; 0 or less: never), job status)] of the latest builds that start them, whose agent has
+    the template's metadata cloud_drive (scripts/cloud-drive.sh status); None before the database is up."""
+    pool = LOGOS.pool if LOGOS else None
+    if not pool:
+        return None
+    return [(r[0], r[1] or "", float(r[2]), r[3]) for r in pool.query(
+        """SELECT w.id::text, m.value, extract(epoch FROM m.collected_at)::float8, b.job_status::text
+           FROM workspaces w
+           JOIN LATERAL (SELECT wb.job_id, wb.transition, pj.job_status
+                           FROM workspace_builds wb JOIN provisioner_jobs pj ON pj.id = wb.job_id
+                          WHERE wb.workspace_id = w.id ORDER BY wb.build_number DESC LIMIT 1) b ON true
+           JOIN workspace_resources r ON r.job_id = b.job_id
+           JOIN workspace_agents a ON a.resource_id = r.id AND a.parent_id IS NULL AND NOT a.deleted
+           JOIN workspace_agent_metadata m ON m.workspace_agent_id = a.id AND m.key ~ '(^|_)cloud_drive$'
+          WHERE w.owner_id = $1::uuid AND NOT w.deleted AND b.transition = 'start'
+            AND b.job_status IN ('pending', 'running', 'succeeded')""", [owner_id])]
+
+
 def safe_user(user_id):
     """{id, username, name, admin} of an account (Coder's database), for Cloud Drive shares; None if there is none."""
     pool = LOGOS.pool if LOGOS else None
@@ -9559,7 +9579,8 @@ def main():
     lockdown.start()
     safe.setup(log, KUBE, safe_accounts, lambda user: imagebuilder.can_edit(user, ADMIN_ROLES),
                lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), workspace_info,
-               shared=safe_shared_workspaces, workspaces=safe_owner_workspaces)
+               shared=safe_shared_workspaces, workspaces=safe_owner_workspaces,
+               attachment=safe_cloud_drive_attachment)
     drivepeers.setup(log, lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), safe_user,
                      drive_chat_post, safe.publish_now, people=lambda: list(chat_people().values()),
                      item=lambda owner, path: safe.item_kind(owner, path, fresh=True), admins=chat_admins)

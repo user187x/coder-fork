@@ -1777,6 +1777,11 @@ class CloudDriveConnectionsTest(unittest.TestCase):
             {"id": wid, "name": "dev", "owner_id": owners[wid]} if wid in owners else None)
         self.h = mock.Mock()
         self.h.token.return_value = "t"
+        # the workspace's Cloud Drive script, by exec: (pod, command) of each call; its answer
+        self.execs, self.answer = [], (0, "attached\n", "")
+        self.safe.kexec = mock.Mock()
+        self.safe.kexec.exec_in.side_effect = lambda kube, ns, pod, container, cmd, **kw: (
+            self.execs.append((pod, cmd)) or self.answer)
 
     def tearDown(self):
         self.dir.cleanup()
@@ -1784,13 +1789,62 @@ class CloudDriveConnectionsTest(unittest.TestCase):
     def test_disconnect_and_connect_again_at_once_in_the_running_pod(self):
         self.assertEqual(self.safe.connections(self.OWNER),
                          {"disconnected": [], "older": [self.OLD], "shared": [], "sharedWithVolume": [],
-                          "encrypted": False, "restart": [], "source": None})
+                          "encrypted": False, "restart": [], "source": None, "attachment": {}})
         out = self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": False})
         self.assertEqual((out["disconnected"], out["applied"]), ([self.WS], True))
         self.assertEqual(self.kube.patches, [("coder-ws-1", {"platform.coder/cloud-drive": "off"})])
         out = self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": True})
         self.assertEqual(out["disconnected"], [])
         self.assertEqual(self.kube.patches[-1], ("coder-ws-1", {"platform.coder/cloud-drive": "on"}))
+
+    def test_the_workspace_is_told_at_once_and_says_how_its_drive_is(self):
+        # the kubelet may take a minute to update the annotation's file in the pod: the workspace is told by exec
+        self.answer = (0, "detached\n", "")
+        self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": False})
+        self.assertEqual(self.execs, [("coder-ws-1", [self.safe.PUSH_HELPER, "push", "off"])])
+        # its answer stands over an older reading of its agent's metadata, a newer reading over it
+        t = self.safe.time.time()
+        self.safe.ATTACHMENT = lambda owner: [(self.WS, "attached", t - 5, "succeeded")]
+        self.assertEqual(self.safe.connections(self.OWNER)["attachment"], {self.WS: "detached"})
+        self.safe.ATTACHMENT = lambda owner: [(self.WS, "waiting", t + 5, "succeeded")]
+        self.assertEqual(self.safe.attachment(self.OWNER["id"]), {self.WS: "waiting"})
+
+    def test_attachment_words(self):
+        t = self.safe.time.time()
+        rows = [("a", "attached", t - 1, "succeeded"),  # its agent's word
+                ("b", "", -62135596800.0, "succeeded"),  # never collected yet (0001-01-01)
+                ("c", "attached", t - 120, "succeeded"),  # its agent went quiet
+                ("d", "attached", t - 1, "running"),  # its build still runs: a reading of the previous start
+                ("e", "unanswered extra", t - 1, "succeeded")]
+        self.safe.ATTACHMENT = lambda owner: rows
+        self.assertEqual(self.safe.attachment(self.OWNER["id"]),
+                         {"a": "attached", "b": "starting", "c": "stale", "d": "starting", "e": "unanswered"})
+        # Coder's database not readable: nothing, no error
+        self.safe.ATTACHMENT = lambda owner: (_ for _ in ()).throw(OSError("down"))
+        self.assertEqual(self.safe.attachment(self.OWNER["id"]), {})
+
+    def test_a_workspace_without_its_script_yet_is_told_again(self):
+        self.safe.PUSH_RETRY = 0.01
+        self.answer = (126, "", "no such file")
+        out = self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": False})
+        self.assertTrue(out["applied"])
+        for _ in range(200):
+            if len(self.execs) >= 3:
+                break
+            self.safe.time.sleep(0.01)
+        self.answer = (0, "detached\n", "")
+        for _ in range(200):
+            if self.WS in self.safe._attach_seen:
+                break
+            self.safe.time.sleep(0.01)
+        self.assertEqual(self.safe._attach_seen[self.WS][0], "detached")
+        self.assertTrue(all(cmd == [self.safe.PUSH_HELPER, "push", "off"] for _, cmd in self.execs))
+        # a newer state: the retries of the older one give way
+        self.safe._wanted["coder-ws-1"] = "on"
+        n = len(self.execs)
+        self.safe.push_soon("coder-ws-1", self.WS, "off")
+        self.safe.time.sleep(0.1)
+        self.assertEqual(len(self.execs), n)
 
     def test_a_restarted_workspace_gets_its_disconnection_back(self):
         self.safe.set_connected(self.h, self.OWNER, self.WS, {"connected": False})
