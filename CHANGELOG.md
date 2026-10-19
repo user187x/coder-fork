@@ -2,10 +2,17 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.80` (fork `48b7ca115`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
+Coder `2.0.0-platform.81` (fork `0450ceb45`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **Create new template keeps to seven modules** (fork): on the deployment's base, the module step offers Git Clone,
+  Dotfiles, Personalize, File Browser, Git Config, code-server and VS Code Desktop - the server lists no other and
+  refuses to compose any other (a Go test) - in that order, without the category tabs.
+* **Fixed: a template made with only its display name changed could not be deleted** (fork): the new template's ID
+  stayed the base's ("platform"), so its Delete asked for a name it never showed (TEST). The ID now starts from the
+  display name and follows it until it is edited; a template's Delete dialog names its ID beside its display name.
+  The stuck TEST template was deleted.
 * **New workspace in the settings pages' look** (fork, `CreateWorkspacePageView.tsx`): a template's Create workspace
   page has the workspace settings page's header (Templates / the template, its version, View source), section list
   with At a glance (template, owner, preset, CPU, memory, GPU, disk, theme), and cards - General (name and a

@@ -117,6 +117,7 @@ air-gapped end-to-end checks (`development/tools/airgap-e2e/`); `verify` is the 
 | Workspace image parameter: a dropdown of the template's image (follows the template), Templates › Images' images and Another image… with guidance; earlier literal values run the template's image | chart, service | verify, live |
 | Template versions deleted from the history (not the active one, one building, or one a workspace runs) | fork | go test, vitest |
 | Create new template: admins rename the base template; icon fields upload an image (Emoji or icon / Upload image) | fork | vitest |
+| Create new template on the deployment's base: seven modules only (Git Clone, Dotfiles, Personalize, File Browser, Git Config, code-server, VS Code Desktop; the server lists and composes no other), no category tabs; the new template's ID follows its display name until edited (never the base's ID); a template's Delete names its ID beside its display name | fork | Go test, vitest |
 | Source Code: a file picked in the tree is centred, without the hash jump | fork | vitest |
 
 ## 5. Administration and monitoring

@@ -252,7 +252,8 @@ The full feature list, with where each piece lives and how it is tested, is
   of their programs and versions, OS and Python packages, configuration and build steps, read from the images as
   built (`image-contents.py`), with a filter over all of it.
 - **The base template is a prototype, its platform parts a decorator:** Create new template starts every template
-  from UBUNTU (Desktop, File Browser and Terminal each in or out) with the template's own logic only; Coder injects
+  from UBUNTU (Desktop, File Browser and Terminal each in or out, and any of seven modules: Git Clone, Dotfiles,
+  Personalize, File Browser, Git Config, code-server, VS Code Desktop) with the template's own logic only; Coder injects
   the platform's sections (the certificate, Lock Down, the Cloud Drive, the metrics, code-server HA) into every
   template when it is built. Source Code shows the code and, beside it, the **Materialized** main.tf; **Global files**
   lists what every template gets.
