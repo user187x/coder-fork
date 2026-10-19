@@ -5,7 +5,7 @@
 #   - Apache Airflow (/opt/airflow, a virtual environment pinned with Airflow's own constraints).
 # Built by ../tools/build-dataflow-image.sh, which downloads NiFi (checked against Apache's SHA-512) beforehand: the
 # build itself needs the network only for apt and pip.
-ARG BASE=ghcr.io/user187x/coder-workspace:1.9.2
+ARG BASE=ghcr.io/user187x/coder-workspace:1.9.3
 FROM ${BASE}
 ARG NIFI_VERSION=2.12.0
 ARG AIRFLOW_VERSION=3.3.2

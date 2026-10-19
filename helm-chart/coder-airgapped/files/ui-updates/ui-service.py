@@ -89,6 +89,11 @@
        Chat); its id ("g:<hex>") is the conversation's peer in every chat call. Nobody sees it before its first
        message; that first message, the admin's, comes up for every member in front of everything (state / poll
        "focus") until they click it: POST /__coder-ui/api/chat/focus/ack {"group"}. Never again for that thread.
+  Forced Focus (admins): POST /__coder-ui/api/chat/send also takes {"focus": true}: the message comes up in front of
+       everything for the user (every member of a group chat) until they acknowledge it: state / poll "focus" items
+       with "forced": true, POST /__coder-ui/api/chat/focus/ack {"message": id}. POST /__coder-ui/api/chat/focus/force
+       {"to"} (Force Response): the newest admin message in that conversation, forced on them again. The poll takes
+       fv=<focus version> and answers when one is forced or acknowledged.
 
   Default images (resources/defaults/, mounted from ConfigMaps coder-ui-updates-default-logo / -avatar into
   DEFAULTS_DIR): the logo a fresh installation starts with (written to the logo table when this service creates it),
@@ -5384,6 +5389,10 @@ class ChatStore:
         # must not bring them back.
         self.left = {}
         self.presence_ver = int(time.time() * 1000)
+        # Messages an admin forced onto someone's screen (Forced Focus, Force Response): {user id: {message id}} not
+        # acknowledged yet; the version wakes the polls when one is forced or acknowledged.
+        self.forced = {}
+        self.focus_ver = int(time.time() * 1000)
         # Files attached to messages, on the volume beside the SQLite file; an upload waits (pending) until it is sent.
         self.files_dir = os.path.join(os.path.dirname(os.path.abspath(path)), "chat-files")
         os.makedirs(self.files_dir, exist_ok=True)
@@ -5449,8 +5458,13 @@ class ChatStore:
                   PRIMARY KEY (group_id, user_id));
                 CREATE TABLE IF NOT EXISTS chat_focus_ack (
                   group_id TEXT NOT NULL, user_id TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (group_id, user_id));
+                CREATE TABLE IF NOT EXISTS chat_forced (
+                  message_id INTEGER NOT NULL, user_id TEXT NOT NULL, forced_by TEXT NOT NULL, at TEXT NOT NULL,
+                  acked_at TEXT, PRIMARY KEY (message_id, user_id));
             """
             )
+            for r in db.execute("SELECT message_id, user_id FROM chat_forced WHERE acked_at IS NULL"):
+                self.forced.setdefault(r[1], set()).add(r[0])
             self.groups = {}
             for r in db.execute("SELECT * FROM chat_groups"):
                 self.groups[r["id"]] = {"id": r["id"], "title": r["title"], "createdBy": r["created_by"],
@@ -5554,14 +5568,61 @@ class ChatStore:
         ids = {gid: g["focusMessage"] for gid, g in self.groups.items()
                if g["focus"] and g["focusMessage"] and user_id in g["members"] and g["createdBy"] != user_id
                and (gid, user_id) not in self.acks}
-        if not ids:
+        forced = sorted(self.forced.get(user_id, set()))
+        if not ids and not forced:
             return out
         with self.connect() as db:
             for gid, mid in ids.items():
                 r = db.execute("SELECT * FROM chat_messages WHERE id = ?", (mid,)).fetchone()
                 if r:
                     out.append({"group": self.group_peer(gid), "message": self._message(r)})
+            # forced messages (an admin's Forced Focus, Force Response): the conversation is the group chat, or the
+            # admin who wrote it; one deleted since asks nothing
+            for mid in forced:
+                r = db.execute("SELECT * FROM chat_messages WHERE id = ?", (mid,)).fetchone()
+                if not r:
+                    continue
+                peer = (self.group_peer(r["to_id"]) if r["to_id"] in self.groups else
+                        {"id": r["from_id"], "username": r["from_name"], "name": r["from_display"] or "",
+                         "admin": bool(r["from_admin"])})
+                out.append({"group": peer, "message": self._message(r), "forced": True})
         return out
+
+    def force(self, by, message_id, user_ids):
+        """Forced Focus: the message comes up in front of everything for these users until they acknowledge it (again
+        when it was acknowledged before)."""
+        at = now()
+        with self.lock, self.connect() as db:
+            db.executemany(
+                """INSERT INTO chat_forced (message_id, user_id, forced_by, at) VALUES (?, ?, ?, ?)
+                   ON CONFLICT (message_id, user_id) DO UPDATE SET forced_by = excluded.forced_by, at = excluded.at,
+                   acked_at = NULL""",
+                [(message_id, uid, by["username"], at) for uid in user_ids])
+        with self.changed:
+            for uid in user_ids:
+                self.forced.setdefault(uid, set()).add(message_id)
+            self.focus_ver += 1
+            self.changed.notify_all()
+
+    def ack_forced(self, user_id, message_id):
+        """The user acknowledged a forced message: False when it was not forced on them (or acknowledged already)."""
+        if message_id not in self.forced.get(user_id, set()):
+            return False
+        with self.lock, self.connect() as db:
+            db.execute("UPDATE chat_forced SET acked_at = ? WHERE message_id = ? AND user_id = ?",
+                       (now(), message_id, user_id))
+        with self.changed:
+            self.forced.get(user_id, set()).discard(message_id)
+            self.focus_ver += 1
+            self.changed.notify_all()
+        return True
+
+    def newest_admin_message(self, peer_id):
+        """Force Response: the newest message an admin wrote in this conversation - to the user, or in the group chat."""
+        with self.connect() as db:
+            r = db.execute("SELECT * FROM chat_messages WHERE to_id = ? AND from_admin = 1 ORDER BY id DESC LIMIT 1",
+                           (peer_id,)).fetchone()
+        return self._message(r) if r else None
 
     def ack_focus(self, user_id, group_id):
         with self.lock, self.connect() as db:
@@ -6243,7 +6304,7 @@ class ChatStore:
                 (user_id, peer_id, last_id),
             )
 
-    def wait(self, user_id, after, typing_known, clear_known, avail_known=0, presence_known=None):
+    def wait(self, user_id, after, typing_known, clear_known, avail_known=0, presence_known=None, focus_known=None):
         """Until a message newer than `after` concerns this user, or who is typing to them differs from typing_known
         (a sorted list), or a conversation of theirs was deleted after clear_known, or CHAT_POLL_SECONDS pass. Typing
         signals expire without a notification: re-checked every second."""
@@ -6257,6 +6318,7 @@ class ChatStore:
                     or self.last_clear(user_id) > clear_known
                     or self.avail_ver > avail_known
                     or (presence_known is not None and self.presence_ver > presence_known)
+                    or (focus_known is not None and self.focus_ver > focus_known)
                     or time.time() >= deadline
                 ):
                     return typing
@@ -8516,6 +8578,7 @@ class Handler(BaseHTTPRequestHandler):
                     "cursor": CHAT.newest(user["id"]),
                     "typing": CHAT.typing_to(user["id"]),
                     "focus": CHAT.focus_pending(user["id"]),
+                    "focusVersion": CHAT.focus_ver,
                     "clearVersion": max(CHAT.last_clear(user["id"]), CHAT.clear_ver),
                     **chat_availability(),
                 },
@@ -8571,6 +8634,7 @@ class Handler(BaseHTTPRequestHandler):
                 cleared = int((q.get("cleared") or ["0"])[0] or 0)
                 avail = int((q.get("av") or ["0"])[0] or 0)
                 pv = int((q.get("pv") or ["0"])[0] or 0) if q.get("pv") else None
+                fv = int((q.get("fv") or ["0"])[0] or 0) if q.get("fv") else None
             except ValueError:
                 return self.send_json(
                     400, {"error": "after, cleared and av must be numbers."}
@@ -8578,7 +8642,7 @@ class Handler(BaseHTTPRequestHandler):
             known = sorted(
                 p for p in (q.get("typing") or [""])[0].split(",") if chat_peer_id_ok(p)
             )
-            typing = CHAT.wait(user["id"], after, known, cleared, avail, pv)
+            typing = CHAT.wait(user["id"], after, known, cleared, avail, pv, fv)
             CHAT.tab(user["id"], tab) if tab else CHAT.touch(user["id"])
             return self.send_json(
                 200,
@@ -8586,6 +8650,7 @@ class Handler(BaseHTTPRequestHandler):
                     "messages": CHAT.since(user["id"], after),
                     "typing": typing,
                     "focus": CHAT.focus_pending(user["id"]),
+                    "focusVersion": CHAT.focus_ver,
                     "cleared": CHAT.cleared_since(user["id"], cleared),
                     "clearVersion": max(CHAT.last_clear(user["id"]), cleared),
                     **chat_availability(),
@@ -8769,6 +8834,31 @@ class Handler(BaseHTTPRequestHandler):
             group = CHAT.create_group(user, members, focus=payload.get("focus", True) is not False)
             log(event="chat-group", by=user["username"], group=group["id"], members=len(members))
             return self.send_json(200, {"peer": group})
+        if what == "focus/ack" and payload.get("message") is not None:  # a forced message, acknowledged
+            try:
+                acked = CHAT.ack_forced(user["id"], int(payload["message"]))
+            except (TypeError, ValueError):
+                return self.send_json(400, {"error": "message: a message id."})
+            if not acked:
+                return self.send_json(404, {"error": "That message is not waiting for you."})
+            log(event="chat-focus-ack", user=user["username"], message=int(payload["message"]))
+            return self.send_json(200, {"ok": True})
+        if what == "focus/force":  # Force Response: the newest admin message in the conversation, forced on them
+            if not admin:
+                return self.send_json(403, {"error": "Only admins force a response."})
+            peer_id = str(payload.get("to") or "")
+            if not chat_peer_id_ok(peer_id) or peer_id == user["id"]:
+                return self.send_json(400, {"error": "to: the user (or group chat) to answer."})
+            message = CHAT.newest_admin_message(peer_id)
+            if not message:
+                return self.send_json(404, {"error": "No admin has written to them yet: send a message with Forced "
+                                                     "Focus instead."})
+            members = (list(CHAT.group(peer_id)["members"]) if CHAT_GROUP_RE.match(peer_id) and CHAT.group(peer_id)
+                       else [peer_id])
+            members = [m for m in members if m != message["from"]]
+            CHAT.force(user, message["id"], members)
+            log(event="chat-force-response", by=user["username"], to=peer_id, message=message["id"])
+            return self.send_json(200, {"message": message})
         if what == "focus/ack":  # a member clicked a group chat's first message
             group_id = str(payload.get("group") or "")
             if not CHAT_GROUP_RE.match(group_id) or not CHAT.in_group(user["id"], group_id):
@@ -8874,6 +8964,11 @@ class Handler(BaseHTTPRequestHandler):
         page = str(payload.get("page") or "")[:300] if image else ""
         page = page if page.startswith("/") else ""
         message = CHAT.send(user, admin, peer, text, image, page, client_id, attachment)
+        forced = bool(payload.get("focus")) and admin
+        if forced:
+            # Forced Focus: in front of everything on their screen (every member's, in a group chat) until acknowledged
+            members = list((group or {}).get("members") or {}) if group else [peer["id"]]
+            CHAT.force(user, message["id"], [m for m in members if m != user["id"]])
         log(
             event="chat",
             sender=user["username"],
@@ -8881,6 +8976,7 @@ class Handler(BaseHTTPRequestHandler):
             id=message["id"],
             image=bool(image),
             file=bool(attachment),
+            forced=forced,
         )  # never the text
         self.send_json(200, {"message": message})
 
@@ -9454,7 +9550,7 @@ def main():
                shared=safe_shared_workspaces, workspaces=safe_owner_workspaces)
     drivepeers.setup(log, lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES), safe_user,
                      drive_chat_post, safe.publish_now, people=lambda: list(chat_people().values()),
-                     item=lambda owner, path: safe.item_kind(owner, path, fresh=True))
+                     item=lambda owner, path: safe.item_kind(owner, path, fresh=True), admins=chat_admins)
     safe.start()
     modelscan.setup(log, KUBE, lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES))
     safe.LIBRARY_HOOKS.update(added=modelscan.added, deleted=modelscan.deleted, decorate=modelscan.decorate)

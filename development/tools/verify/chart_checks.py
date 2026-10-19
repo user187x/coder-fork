@@ -214,6 +214,22 @@ def ai_checks(B, chart, default_render):
     held = [ln.strip() for ln in startup.splitlines()
             if re.search(r"\(.*&&.*&\)\s*$", ln) and not ln.lstrip().startswith("#")]
     check("startup.sh: no background subshell keeps the script's output open", not held, held[:3])
+    # A metric's output is its value: reading a /proc entry of a process that ended meanwhile fails the redirection
+    # before a trailing 2>/dev/null applies, and "bash: line N: /proc/...: No such file" showed in the dashboard
+    metadata = open(os.path.join(chart, "charts", "coder-workspace", "files", "scripts", "metadata.sh")).read()
+    leaky = [ln.strip() for ln in metadata.splitlines()
+             if re.search(r'<\s*"?/proc/\$', ln) and not re.search(r"\{[^}]*<[^}]*;\s*\}\s*2>/dev/null", ln)]
+    check("metadata.sh: a process's /proc entry is read with its errors silenced (in braces)", not leaky, leaky[:3])
+    # The Linux user and the hostname are the owner's, not "coder": the account renamed by editing its files (usermod
+    # refuses while its processes run), after a sudo rule for the new name that visudo accepted
+    check("startup.sh: the Linux user renamed after the owner (sudo rule checked first, files edited, USER set)",
+          "visudo -cqf" in startup and "/etc/sudoers.d/coder-user" in startup and "/etc/passwd /etc/shadow" in startup
+          and "/etc/group /etc/gshadow" in startup and 'export USER="$(id -un)"' in startup
+          and startup.index("visudo -cqf") < startup.index("/etc/passwd /etc/shadow"), "")
+    check("main.tf: the pod's hostname is the owner's and the workspace's names (a DNS label)",
+          "hostname = local.hostname" in tf and re.search(r'hostname = trim\(substr\(replace\(lower\(', tf) is not None, "")
+    check("startup.sh: only copies reach the computer's clipboard (Xtigervnc -SendPrimary=0)",
+          "-SendPrimary=0" in startup, "")
     # Coder's form evaluates parameters in passes (the choice, then the version plan's data sources): try() settles
     # before they are known - a conditional field would never show, the dropdown never list the images kept
     check("main.tf: no try() on what Coder's form learns late (a conditional count, the images kept)",

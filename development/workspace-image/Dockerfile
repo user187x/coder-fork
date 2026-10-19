@@ -1,6 +1,8 @@
 # The workspace image of the ubuntu-vnc-desktop template: Coder's enterprise-base with, preinstalled,
 #   - the desktop the template starts (XFCE, TigerVNC, noVNC, websockify) - no apt-get at workspace start, so it
-#     also works without internet. light-locker and LightDM are left out: the screen locker needs a display manager,
+#     also works without internet; noVNC shares the clipboard with the computer both ways, and only the viewer in use
+#     resizes the desktop (novnc/: two viewers no longer fight over its size).
+#     light-locker and LightDM are left out: the screen locker needs a display manager,
 #     crashes in a container at every session start and leaves core.<pid> files in the user's home directory.
 #     The XFCE screensaver is not started either (it would lock the VNC desktop behind a password the user lacks);
 #   - Chromium (xtradeb's build, desktop/chromium-policies.json), XFCE's default web browser, and Terminator its
@@ -11,7 +13,9 @@
 #     (github.com/mehedirm6244/Miserable_Xfce, pinned): Tokyo Night colours, its GTK, window and icon themes, fonts
 #     and background, a floating dock (rofi, docklike, eww's sidebar and System stats) and picom's animations
 #     (fdev31's animation-pr fork) - built and assembled in the picom, eww and serenade stages below;
-#   - JetBrains Mono Nerd Font (fonts/), the default monospace and desktop font (fontconfig, XFCE, its terminal);
+#   - JetBrains Mono Nerd Font (fonts/), the default monospace and desktop font, and every terminal's: fontconfig's
+#     monospace, XFCE, its terminal, Terminator (terminals/), GNOME's monospace setting, and code-server's terminal
+#     (code-server/: code-server serves the font to the browser); Noto Color Emoji after it for emoji;
 #   - tmux 3.8 with the bundled configuration (packages/tmux-installation.deb, package tmux-mirror); the template
 #     runs tmux-mirror-setup for users who have no tmux configuration yet;
 #   - command-line tools: btop, bat (Ubuntu's binary is batcat; bat links to it), vim, eza, fzf, grc, jq, yq (Ubuntu's:
@@ -122,6 +126,9 @@ RUN set -e; m=/src/home; h=/out/usr/share/coder-desktop/serenade/home; \
 	sed -e 's/^backend = "glx";/backend = "xrender";/' -e 's/^vsync = true;/vsync = false;/' \
 		"$m/.config/picom.conf" >"$h/.config/picom.conf"; \
 	grep -q '^backend = "xrender";' "$h/.config/picom.conf" && grep -q '^vsync = false;' "$h/.config/picom.conf"; \
+	sed -i "s/^animation-dampening = 20;/&\n# Not the dock: it opens at 0 pixels high, and picom (this fork) then crashed on its rounded corners and shadow\n# about every other start (coder-desktop-theme starts it again if it does).\nanimation-exclude = [ \"window_type = 'dock'\" ];/" \
+		"$h/.config/picom.conf"; \
+	grep -q "^animation-exclude = \[ \"window_type = 'dock'\" \];" "$h/.config/picom.conf"; \
 	sed 's/"Roboto 16"/"Overpass 14"/' "$m/.config/rofi/config.rasi" >"$h/.config/rofi/config.rasi"; \
 	cp -a "$m/.config/eww" "$h/.config/eww"; \
 	rm -f "$h/.config/eww/sidebar/weather.yuck" "$h/.config/eww/sidebar/spotify.yuck" "$h"/.config/eww/scripts/weather* \
@@ -168,7 +175,7 @@ RUN apt-get update \
 
 RUN apt-get update \
 	&& apt-get install -y xfce4 xfce4-goodies xfce4-terminal dbus-x11 tigervnc-standalone-server novnc websockify \
-		fontconfig light-locker- lightdm- lightdm-gtk-greeter- \
+		fontconfig fonts-noto-color-emoji light-locker- lightdm- lightdm-gtk-greeter- \
 	&& ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html \
 	&& rm -f /etc/xdg/autostart/light-locker.desktop /etc/xdg/autostart/xfce4-screensaver.desktop \
 	&& rm -rf /var/lib/apt/lists/*
@@ -185,10 +192,12 @@ RUN cp /etc/skel/.bashrc /usr/share/coder-workspace/ubuntu-bashrc \
 	&& cp /usr/share/coder-workspace/bashrc /etc/skel/.bashrc \
 	&& chmod 0644 /usr/share/coder-workspace/* /etc/skel/.bashrc
 
-# JetBrains Mono Nerd Font: installed, and preferred for "monospace".
+# JetBrains Mono Nerd Font: installed, and preferred for "monospace", with Noto Color Emoji right after it for what
+# it lacks (a terminal shows a box for a character no font has: the prompt's 💥 did).
 COPY fonts/ /usr/share/fonts/truetype/jetbrains-mono-nerd/
 COPY fontconfig/60-jetbrains-mono-nerd.conf /etc/fonts/conf.d/60-jetbrains-mono-nerd.conf
-RUN fc-cache -f >/dev/null && fc-match monospace | grep -q 'JetBrainsMono'
+RUN fc-cache -f >/dev/null && fc-match monospace | grep -q 'JetBrainsMono' \
+	&& fc-match 'monospace:charset=1f4a5' | grep -q 'Noto Color Emoji'
 
 # XFCE defaults (users without their own settings): the desktop and terminal fonts, and the desktop background
 # (XFCE's dark cp-dark wallpaper).
@@ -272,6 +281,18 @@ COPY --from=serenade /out/ /
 COPY desktop/coder-desktop-theme /usr/local/bin/coder-desktop-theme
 COPY desktop/classic/ /usr/share/coder-desktop/classic/
 COPY desktop/coder-compositor.desktop /etc/xdg/autostart/coder-compositor.desktop
+# Every terminal's font, the Nerd Font: Terminator in a home without its own config, and GNOME's monospace setting
+# (Terminator's "system font", and any program that asks for it); XFCE's terminal has it already (xfce/).
+COPY terminals/terminator-config /etc/xdg/terminator/config
+COPY terminals/90_coder-workspace.gschema.override /usr/share/glib-2.0/schemas/
+# noVNC: the clipboard shared with the computer both ways, and only the viewer in use resizing the desktop - modules
+# its page loads after its own.
+COPY novnc/coder-clipboard.js novnc/coder-resize.js /usr/share/novnc/app/
+RUN glib-compile-schemas /usr/share/glib-2.0/schemas \
+	&& GSETTINGS_BACKEND=memory gsettings get org.gnome.desktop.interface monospace-font-name | grep -q 'JetBrainsMono Nerd Font' \
+	&& sed -i 's|</head>|    <script type="module" crossorigin="anonymous" src="app/coder-clipboard.js"></script>\n    <script type="module" crossorigin="anonymous" src="app/coder-resize.js"></script>\n</head>|' \
+		/usr/share/novnc/vnc.html \
+	&& test "$(grep -c -e 'app/coder-clipboard.js' -e 'app/coder-resize.js' /usr/share/novnc/vnc.html)" = 2
 RUN chmod 0755 /usr/local/bin/coder-desktop-theme /usr/local/bin/picom /usr/local/bin/eww \
 	&& fc-cache -f >/dev/null && fc-list | grep -qi overpass \
 	&& for t in Zafiro Numix-Apps Fluent-dark; do gtk-update-icon-cache -q -f "/usr/share/icons/$t"; done \
@@ -319,6 +340,14 @@ RUN curl -fsSL -o /tmp/basic-ftp.tgz "https://registry.npmjs.org/basic-ftp/-/bas
 	&& tar -xzf /tmp/basic-ftp.tgz -C "$d" --strip-components=1 --no-same-owner \
 	&& rm -f /tmp/basic-ftp.tgz \
 	&& /usr/lib/code-server/lib/node -e 'const f = require(process.argv[1]); if (require(process.argv[1] + "/package.json").version !== process.argv[2] || typeof f.Client !== "function") process.exit(1); require("/usr/lib/code-server/node_modules/get-uri")' "$d" "${BASIC_FTP_VERSION}"
+# code-server's terminal in the Nerd Font: the browser draws it, so code-server serves the font itself (its /_static
+# route: code-server/nerd-font.css and the font) and its page loads it; a built-in extension makes it the terminal's
+# default font (code-server/coder-workspace-defaults: only defaults, a user's own setting wins).
+COPY fonts/JetBrainsMonoNerdFont-Light.ttf code-server/nerd-font.css /usr/lib/code-server/src/browser/media/fonts/
+COPY code-server/coder-workspace-defaults/ /usr/lib/code-server/lib/vscode/extensions/coder-workspace-defaults/
+RUN f=/usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.html \
+	&& sed -i 's|^\(\t*\)\(<link rel="stylesheet" href="{{WORKBENCH_WEB_BASE_URL}}/out/vs/code/browser/workbench/workbench.css">\)|\1<link rel="stylesheet" href="{{BASE}}/_static/src/browser/media/fonts/nerd-font.css">\n\1\2|' "$f" \
+	&& test "$(grep -c 'fonts/nerd-font.css' "$f")" = 1
 COPY --from=filebrowser /out/filebrowser /usr/local/bin/filebrowser
 RUN chmod 0755 /usr/local/bin/filebrowser && filebrowser version | grep -q "FileBrowser Quantum"
 

@@ -2,10 +2,65 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.74` (fork `78563a90c`), workspace image `coder-workspace:1.9.2`, dataflow image
+Coder `2.0.0-platform.76` (fork `86382f86c`), workspace image `coder-workspace:1.9.3`, dataflow image
 `coder-workspace-dataflow:1.1.2`, AI image `coder-workspace-ai:2.0.0`, model scanner `coder-garak:0.17.1-2`, image
 registry `coder-registry:3.1.2-1`.
 
+* **Cloud Drive share approvals reach the admins** (platform.76, `drivepeers.py`): a share waiting for an admin told
+  nobody - admins found it only in Cloud Drive > Sharing. Every admin now gets an "Approve Cloud Drive share" chat
+  message (not the admin who made it wait) whose card approves or denies it in place, and whose two names open that
+  person's Cloud Drive. In Accounts, both people's rows carry an Approve button (beside Chat; its menu has Deny and
+  Inspect drive; several waiting: a list).
+* **Admins look into a Cloud Drive** (`safe.py`): any account's, read only (list, glance, download; logged as
+  `cloud-drive-admin-view`) - but never one its owner encrypted. From the share card's names, the Accounts button and
+  the chat console; the Cloud Drive window shows it as "<name>'s (admin view, read only)".
+* **Forced Focus** (platform.76, the chat): the Accounts chat button's menu sends a message that comes up in front of
+  everything on the user's dashboard until they Acknowledge or Reply (`/api/chat/send` `focus`, `/api/chat/focus/ack`
+  `message`); the console's Force Response does it with the newest admin message of the conversation
+  (`/api/chat/focus/force`). Kept across restarts; the long poll wakes for it (`fv`).
+* **The chat console moves to Controls › Settings › Chat** (platform.76): a card at the top of the page, out of the
+  dashboard's way; Pop out gives it a window of its own, full size, and Pop back in returns it. The Chats panel's new
+  button, the chat windows' "Open in the chat console" and the bell go there; the little chat windows stay at the
+  bottom right. Choose several people (Select, or Ctrl+click) for one group chat; a conversation's right-click menu
+  has Delete, Workspace, Cloud Drive and Force Response. The Chat entry of the settings list shows the unread count.
+  Online Users is a card of the Chat page now (its old address leads there).
+* **Accounts first** (platform.76): the table, its filter and the bulk actions in a card of their own, above User Quota.
+* **The Inbox** (platform.76): its header no longer covers the first notification (the list scrolls in its own padded
+  container), and a search box between the count and the buttons narrows the notifications loaded.
+* **Overview is gone** (platform.76): User Engagement removed; Access URL, Wildcard Access URL and Experiments lead the
+  Network page's table (with the invalid-experiments warning); `/deployment` and `/deployment/overview` open Network.
+* **Your name in the workspace, not "coder"** (the template): the Linux user is the owner's Coder username (`whoami`,
+  the prompt, file owners, the desktop) - uid 1000's account renamed at every start, its home still `/home/coder` -
+  and the hostname the owner's and the workspace's names (`admin-xxx`, not `coder-<id>-<hash>`). sudo keeps working
+  (a rule for the new name, checked by `visudo`, before the rename; Lock Down's rule still comes last). The account
+  stays `coder` where sudo is not allowed (Lock Down's Sudo Command), or where the name is another account's or no
+  Linux user name. A workspace gets both from its next update.
+* **The Desktop no longer flickers with two viewers open** (workspace image 1.9.3): with Remote resizing, every noVNC
+  viewer asked the VNC server for its own window's size, and two of them (a Desktop tab and the workspace page's
+  Desktop panel, or two tabs) kept answering each other's change - some 18 resizes a second. Only the viewer in use
+  (its page has the focus) resizes the desktop now (`novnc/coder-resize.js`); the others show it as it is.
+* **Copy and paste between the desktop and your computer** (workspace image 1.9.3): noVNC shares the clipboard both
+  ways, without its Clipboard panel (`novnc/coder-clipboard.js`, loaded by its page). Copied on the desktop, it is on
+  the computer's clipboard; Ctrl+V, Ctrl+Shift+V or Shift+Insert in the desktop pastes the computer's clipboard (the
+  browser's own paste hands it over first, no permission needed); and coming back to the page hands it over too,
+  where the browser lets the page read the clipboard (Chromium, once allowed), for a paste by the mouse. Only what is
+  copied goes to the computer, not every text selected (the template starts the VNC server with `-SendPrimary=0`).
+  The panel stays, showing what the clipboard holds.
+* **The Nerd Font in every terminal, emoji included** (workspace image 1.9.3): Terminator in a home without its own
+  config (`/etc/xdg/terminator/config`), GNOME's monospace setting (Terminator's "system font"), XFCE's terminal as
+  before, and code-server's terminal - drawn by the browser, so code-server serves the font itself and a built-in
+  extension makes it the terminal's default (a user's own setting wins). Noto Color Emoji comes right after it, so
+  the prompt's 💥 after a failed command (and any emoji) shows instead of a box.
+* **Serenade's compositor stays up** (workspace image 1.9.3): picom (fdev31's fork) crashed on about every other
+  start - the dock opens 0 pixels high, and its rounded corners and shadow then failed - and nothing started it
+  again, so windows lost their rounded corners, shadows and animations. The dock is left out of the animations, and
+  `coder-desktop-theme compositor` starts picom again after a crash (its log: `/tmp/coder-picom.log`).
+* **The workspace's Ø Load no longer glitches** (platform.75, the template's `metadata.sh`): reading the command line of
+  a process that ended mid-count failed the redirection before its `2>/dev/null` applied, so
+  `bash: line 73: /proc/<pid>/cmdline: No such file or directory` became the metric's value now and then (most on a
+  busy workspace); it is read in braces now, and a chart check keeps it so. And a metric's value is never wider than
+  its column: a long reading widened the Workspace box and pushed the Cluster box aside, clipped, until a reload; it
+  is cut short now, whole on hover. A workspace gets the script from its next update.
 * **UBUNTU UNSLOTH and UBUNTU OBSIDIAN removed:** the chart pushes neither any more (`aiTemplates.unsloth`,
   `obsidianTemplate` and `obsidianImage` are gone, with their Jobs, icons and the template's `unsloth` and `obsidian`
   app sets), the Obsidian image (`coder-workspace-obsidian`, `build-obsidian-image.sh`) is no longer built or bundled,

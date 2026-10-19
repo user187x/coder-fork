@@ -9,7 +9,7 @@ your network.
 | | Current release: [**v1.39.1**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
 | Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
-| Workspace image | `ghcr.io/user187x/coder-workspace:1.9.2` (desktop with two themes, Chromium, Terminator, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
+| Workspace image | `ghcr.io/user187x/coder-workspace:1.9.3` (desktop with two themes, Chromium, Terminator, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
 | Platform service | `ghcr.io/user187x/coder-ui-updates` (its code on `coder-image-tools:1.0.0`: BuildKit helpers, trivy with its databases) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
 | Bundle | 22 images pinned by digest, in one folder per part (`images/ui/`: the user interface - Coder, the platform service, their databases; `workspaces/`, `cloud-drive/`, ...), and every chart packaged (`charts/`, a Helm repository); `-slim`: only our images; the same release in parts: `-charts` (no images) and `-images-<part>` per folder, together the bundle; `-layer`: the update for a cluster at the previous release, only what changed (often a few MB); `-decorator-update`: an Argo CD decorator install's update, the Coder image and both charts (~300 MB) |
@@ -275,12 +275,16 @@ The full feature list, with where each piece lives and how it is tested, is
     transitions;
   - a "Viewed" receipt with the user's certificate fingerprint;
   - a terminal-style full view (with an easter egg or two).
-- **Inbox:** Clear all (asks twice) beside Mark all as read.
+- **Inbox:** a search box, Clear all (asks twice) beside Mark all as read.
 - **Chat** between users and admins (with screenshots and files of any kind, sent with a progress bar), and the admins'
-  chat console; **peer-to-peer chat** between developers when admins turn it on (a People list of who is online or
-  active today, grey after 30 seconds without input; anyone can be invisible but to admins); chats kept 30 days by
-  default (admins set it, and can purge them); admins see who talks to whom, and **Online Users**: everyone online
-  now, live (active or idle, tabs, last input, running workspaces).
+  chat console - the first card of Controls › Settings › Chat, popped out into a window of its own when wanted: group
+  chats with several people chosen, a right-click menu (Delete, Workspace, Cloud Drive, Force Response), and
+  **Forced Focus** (a message in front of the user's dashboard until acknowledged); **peer-to-peer chat** between
+  developers when admins turn it on (a People list of who is online or active today, grey after 30 seconds without
+  input; anyone can be invisible but to admins); chats kept 30 days by default (admins set it, and can purge them);
+  admins see who talks to whom, and **Online Users** (a card of the Chat page): everyone online now, live (active or
+  idle, tabs, last input, running workspaces). Cloud Drive shares waiting for an admin are asked for in chat and
+  approved there or from Accounts, after a look at the drive (admins read any unencrypted Cloud Drive).
 - The **Controls** menu (Settings and quick links), an arrangeable top bar, logo and avatars (uploaded, gallery,
   defaults).
 - **Agent Activity** (optional): every command run in a workspace, for review.

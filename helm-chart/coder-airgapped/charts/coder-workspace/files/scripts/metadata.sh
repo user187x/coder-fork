@@ -70,7 +70,9 @@ _metric_process() {
  local -a args
  for i in 1 2 3 4 5 6 7 8; do
   [ "$p" -gt 1 ] 2>/dev/null || return 1
-  mapfile -d '' -t args <"/proc/$p/cmdline" 2>/dev/null || return 1
+  # (in braces: a process that ended meanwhile fails the redirection itself, which a trailing 2>/dev/null would not
+  # silence - its error became the metric's value)
+  { mapfile -d '' -t args <"/proc/$p/cmdline"; } 2>/dev/null || return 1
   [[ ${args[*]:1} == *"The workspace's metrics (the metadata of coder_agent.main"* ]] && return 0
   { read -r s <"/proc/$p/stat"; } 2>/dev/null || return 1
   s=${s##*) } # after the command's name: the state, then the parent's PID

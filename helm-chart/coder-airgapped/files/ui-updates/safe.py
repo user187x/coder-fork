@@ -16,7 +16,9 @@ account a PersistentVolume (Retain: removing it never removes files) and its cla
   GET  /__coder-ui/api/safe/list?path=a/b     a folder of it: folders and files (each file route also takes
                                               &drive=<owner id>: a Cloud Drive shared with the caller, drivepeers -
                                               only what is shared reached: a folder holding shared ones lists just
-                                              those; "access" says what the caller may do there)
+                                              those; "access" says what the caller may do there). Admins
+                                              read any account's this way (list, glance, download: "adminView"),
+                                              but not one its owner encrypted
   GET  /__coder-ui/api/safe/glance           it at a glance: how many files, how much, the newest (the Workspaces
                                               page's cards of what is shared with the caller: &drive=<owner id>
                                               &share=<share id>)
@@ -2167,6 +2169,8 @@ def mount_remove(h, user, body):
 # The routes that read or write a Cloud Drive's files: a shared one's too (?drive=).
 FILE_ROUTES = {BASE + "/api/safe/list", BASE + "/api/safe/glance", BASE + "/api/safe/download",
                BASE + "/api/safe/upload", BASE + "/api/safe/folder", BASE + "/api/safe/delete"}
+# What an admin may do in another account's Cloud Drive (?drive=, no share of it): read.
+ADMIN_VIEW_ROUTES = {BASE + "/api/safe/list", BASE + "/api/safe/glance", BASE + "/api/safe/download"}
 
 
 def handle(h, method, path, query):
@@ -2184,14 +2188,30 @@ def handle(h, method, path, query):
         return True
     q = dict(urllib.parse.parse_qsl(query or "", keep_blank_values=True))
     shared = False
+    admin_view = False
     share = None
     body = None
     viewer = user
     try:
+        # Admins read any account's Cloud Drive (?drive=<owner id>, read only: Accounts' share approvals, the chat
+        # console) - but not one its owner encrypted, which stays theirs alone. Through a share of it, as anyone.
+        if (q.get("drive") and q["drive"] != user["id"] and path in FILE_ROUTES and IS_ADMIN and IS_ADMIN(user)
+                and not drivepeers.shares_of(user["id"], q["drive"])):
+            owner_id = q["drive"]
+            if not drivepeers.USER_ID_RE.match(owner_id):
+                raise ValueError("drive: an account's id.")
+            if method != "GET" or path not in ADMIN_VIEW_ROUTES:
+                raise PermissionError("Admins only read another account's Cloud Drive.")
+            if encryption_on(owner_id):
+                raise PermissionError("Its owner encrypted this Cloud Drive: only they open it.")
+            LOG(event="cloud-drive-admin-view", admin=user["username"], owner=owner_id,
+                route=path[len(BASE + "/api/safe/"):], path=q.get("path", ""))
+            user = {"id": owner_id, "username": "%s (admin view)" % user["username"]}
+            admin_view = True
         # What of a Cloud Drive is shared with the caller (drivepeers): its owner's files, through the same file routes
         # (?drive=<owner id>), as far as a share reaches (drivepeers.access_at, for each path): read with any, written
         # only with one shared read and write; a shared folder or file itself stays (only its owner deletes it).
-        if q.get("drive") and q["drive"] != user["id"] and path in FILE_ROUTES:
+        elif q.get("drive") and q["drive"] != user["id"] and path in FILE_ROUTES:
             owner_id = q["drive"]
             mine = drivepeers.shares_of(user["id"], owner_id)
             if not mine:
@@ -2222,10 +2242,11 @@ def handle(h, method, path, query):
             h.send_json(200, summary(user))
         elif method == "GET" and path == BASE + "/api/safe/list":
             h.send_json(200, shared_listing(user["id"], viewer["id"], q.get("path", "")) if shared else
+                        {**listing(user, q.get("path", "")), "access": "read", "adminView": True} if admin_view else
                         listing(user, q.get("path", "")))
         elif method == "GET" and path == BASE + "/api/safe/glance":
             h.send_json(200, glance(user, (drivepeers.USER_BY_ID and drivepeers.USER_BY_ID(user["id"]) or
-                                           {"id": user["id"]}) if shared else None, share))
+                                           {"id": user["id"]}) if shared or admin_view else None, share))
         elif method == "GET" and path == BASE + "/api/safe/download":
             download(h, user, q.get("path", ""))
         elif method == "PUT" and path == BASE + "/api/safe/upload":

@@ -12,7 +12,8 @@
 # system's certificates (the cluster's CA among them) through p11-kit.
 #   coder-desktop-theme apply THEME   (serenade | classic)
 #   coder-desktop-theme current       the theme this home has
-#   coder-desktop-theme compositor    picom, while the theme is serenade (XFCE's autostart runs it)
+#   coder-desktop-theme compositor    picom, while the theme is serenade (XFCE's autostart runs it), started again
+#                                     when it crashes
 set -eu
 SHARE=/usr/share/coder-desktop
 STATE="$HOME/.config/coder-desktop"
@@ -142,8 +143,27 @@ current)
  current
  ;;
 compositor)
+ # picom, started again when it crashes (fdev31's fork now and then dies on a window it is drawing; the desktop then
+ # lost its rounded corners, shadows and animations until the next start), at most 10 times in a row within a
+ # minute each; it ends with the session (the X server gone) or on a clean exit. Its log: /tmp/coder-picom.log.
  if [ "$(current)" = serenade ] && [ -f "$HOME/.config/picom.conf" ] && command -v picom >/dev/null; then
-  exec picom --config "$HOME/.config/picom.conf"
+  crashes=0
+  while :; do
+   started=$(date +%s)
+   rc=0
+   picom --config "$HOME/.config/picom.conf" >>/tmp/coder-picom.log 2>&1 || rc=$?
+   case $rc in
+   134 | 135 | 136 | 139) ;; # SIGABRT, SIGBUS, SIGFPE, SIGSEGV: a crash
+   *) exit 0 ;;
+   esac
+   [ $(($(date +%s) - started)) -lt 60 ] && crashes=$((crashes + 1)) || crashes=1
+   if [ "$crashes" -gt 10 ]; then
+    echo "coder-desktop-theme: picom keeps crashing, not started again" >>/tmp/coder-picom.log
+    exit 1
+   fi
+   echo "coder-desktop-theme: picom crashed (exit $rc), starting it again" >>/tmp/coder-picom.log
+   sleep 1
+  done
  fi
  ;;
 *)

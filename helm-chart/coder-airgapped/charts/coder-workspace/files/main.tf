@@ -930,6 +930,12 @@ resource "kubernetes_persistent_volume_claim_v1" "home" {
   }
 }
 
+locals {
+  # The workspace's hostname: the owner's name and the workspace's (e.g. admin-xxx), not the pod's (coder-<id>-<hash>);
+  # a DNS label: lowercase letters, digits and hyphens, at most 63 characters.
+  hostname = trim(substr(replace(lower("${data.coder_workspace_owner.me.name}-${data.coder_workspace.me.name}"), "/[^a-z0-9-]/", "-"), 0, 63), "-")
+}
+
 resource "kubernetes_deployment_v1" "main" {
   count = data.coder_workspace.me.start_count
   depends_on = [
@@ -993,6 +999,7 @@ resource "kubernetes_deployment_v1" "main" {
         # platform:end cloud-drive
       }
       spec {
+        hostname = local.hostname
         security_context {
           run_as_user     = 1000
           fs_group        = 1000

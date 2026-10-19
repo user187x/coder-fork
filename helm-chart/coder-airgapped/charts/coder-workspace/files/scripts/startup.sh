@@ -30,6 +30,43 @@ APPS="/@$OWNER_NAME/$WORKSPACE_NAME.main/apps"
 log() { printf '%s\n' "$*"; }
 log "Starting workspace $WORKSPACE_NAME of $OWNER_NAME"
 
+# The Linux user is named after the owner - whoami, the prompt, file owners, the desktop - not "coder": uid 1000's
+# account is renamed at every start (a new pod has the image's accounts again; the account's processes keep running,
+# which usermod refuses, so its files are edited), its home still /home/coder. sudo allows the new name first (checked
+# with visudo), so it keeps working (Lock Down's rule still comes last). Left as it is where sudo is not allowed (Lock
+# Down's Sudo Command), or where the name is another account's or no Linux user name.
+LINUX_USER=$(printf '%s' "$OWNER_NAME" | tr '[:upper:]' '[:lower:]')
+CURRENT_USER=$(id -un)
+if [ "$CURRENT_USER" = "$LINUX_USER" ]; then
+ :
+elif [ "$(id -u)" != 1000 ] || ! sudo -n true 2>/dev/null; then
+ log "Linux user: $CURRENT_USER (sudo is not allowed, so not renamed $LINUX_USER)"
+elif ! printf '%s' "$LINUX_USER" | grep -Eqx '[a-z_][a-z0-9_-]{0,31}'; then
+ log "Linux user: $CURRENT_USER ($OWNER_NAME is no Linux user name)"
+elif getent passwd "$LINUX_USER" >/dev/null || getent group "$LINUX_USER" >/dev/null; then
+ log "Linux user: $CURRENT_USER ($LINUX_USER is another account's name)"
+else
+ rule=$(mktemp)
+ printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$LINUX_USER" >"$rule"
+ if sudo -n visudo -cqf "$rule" && sudo -n install -m 0440 -o root -g root "$rule" /etc/sudoers.d/coder-user; then
+  sudo -n sed -i "s/^$CURRENT_USER:/$LINUX_USER:/" /etc/passwd /etc/shadow
+  sudo -n sed -i -E "s/^$CURRENT_USER:/$LINUX_USER:/; s/([:,])$CURRENT_USER(,|\$)/\1$LINUX_USER\2/g" /etc/group /etc/gshadow
+  log "Linux user: $LINUX_USER (was $CURRENT_USER)"
+ else
+  log "Linux user: $CURRENT_USER (its sudo rule for $LINUX_USER was refused)"
+ fi
+ rm -f "$rule"
+fi
+# What starts from here, and every shell (/etc/profile.d, /etc/bash.bashrc), carries the account's name: the agent
+# set USER when it started, as coder.
+export USER="$(id -un)" LOGNAME="$(id -un)"
+if [ "$USER" != coder ] && [ ! -e /etc/profile.d/coder-user.sh ] && sudo -n true 2>/dev/null; then
+ printf '%s\n' '# The workspace renames its Linux user after the owner at every start (the template'"'"'s startup.sh).' \
+  'export USER="$(id -un)" LOGNAME="$(id -un)"' | sudo -n tee /etc/profile.d/coder-user.sh >/dev/null
+ grep -q coder-user.sh /etc/bash.bashrc ||
+  printf '. /etc/profile.d/coder-user.sh\n' | sudo -n tee -a /etc/bash.bashrc >/dev/null
+fi
+
 # The Start folder: made when it is missing under the home (the agent's sessions start there); a path that steps up
 # (..) or one that cannot be made is the home.
 case "/$START_DIR/" in
@@ -193,9 +230,10 @@ if [ "$IMAGE_DESKTOP" != none ] && ! pgrep -f "^Xtigervnc :1 " >/dev/null; then
  rm -f "$VNC_SOCK" /tmp/.X1-lock /tmp/.X11-unix/X1
  touch ~/.Xauthority && chmod 600 ~/.Xauthority
  xauth -f ~/.Xauthority add :1 MIT-MAGIC-COOKIE-1 "$(mcookie)"
- # -FrameRate 60: updates as often as noVNC can show them.
+ # -FrameRate 60: updates as often as noVNC can show them. -SendPrimary=0: only what is copied (the CLIPBOARD) goes to
+ # the computer's clipboard (the image's noVNC shares it both ways), not every text selected (the PRIMARY).
  Xtigervnc :1 -auth ~/.Xauthority -geometry 1280x800 -depth 24 -rfbport -1 -rfbunixpath "$VNC_SOCK" \
-  -SecurityTypes None -AlwaysShared -FrameRate 60 -desktop "$(hostname)" >/tmp/xvnc.log 2>&1 &
+  -SecurityTypes None -AlwaysShared -FrameRate 60 -SendPrimary=0 -desktop "$(hostname)" >/tmp/xvnc.log 2>&1 &
  for i in $(seq 1 50); do
   [ -S "$VNC_SOCK" ] && break
   sleep 0.2

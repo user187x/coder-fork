@@ -831,6 +831,39 @@ class GroupChatTest(unittest.TestCase):
         self.assertEqual([m["text"] for m in self.chat.since(self.ANN["id"], 0)],
                          ["All hands: maintenance at 5", "ok", "thanks"])
 
+    def test_forced_focus_and_force_response(self):
+        """An admin's Forced Focus: the message in front of everything for the user until they acknowledge it (kept
+        across a restart, waking the polls); Force Response forces the newest admin message again; in a group chat
+        every member but the admin."""
+        before = self.chat.focus_ver
+        m = self.chat.send(self.ADMIN, True, self.ANN, "Please save your work: reboot at 5")
+        self.chat.force(self.ADMIN, m["id"], [self.ANN["id"]])
+        self.assertGreater(self.chat.focus_ver, before)
+        focus = self.chat.focus_pending(self.ANN["id"])
+        self.assertEqual([(f["group"]["id"], f["message"]["id"], f.get("forced")) for f in focus],
+                         [(self.ADMIN["id"], m["id"], True)])
+        self.assertEqual(self.chat.focus_pending(self.BOB["id"]), [])
+        self.assertEqual(len(ui.ChatStore(self.path).focus_pending(self.ANN["id"])), 1)  # kept across a restart
+        self.assertFalse(self.chat.ack_forced(self.BOB["id"], m["id"]))  # not hers to acknowledge
+        self.assertTrue(self.chat.ack_forced(self.ANN["id"], m["id"]))
+        self.assertFalse(self.chat.ack_forced(self.ANN["id"], m["id"]))  # once
+        self.assertEqual(ui.ChatStore(self.path).focus_pending(self.ANN["id"]), [])
+        # Force Response: the newest message an admin wrote to her, forced again (her answer is not it)
+        self.chat.send(self.ANN, False, self.ADMIN, "which reboot?")
+        self.assertEqual(self.chat.newest_admin_message(self.ANN["id"])["id"], m["id"])
+        self.assertIsNone(self.chat.newest_admin_message(self.EVE["id"]))
+        self.chat.force(self.ADMIN, m["id"], [self.ANN["id"]])
+        self.assertEqual(len(self.chat.focus_pending(self.ANN["id"])), 1)
+        # a group chat: its members, the conversation being the group
+        peer = self.chat.create_group(self.ADMIN, [self.ANN, self.BOB], focus=False)
+        g = self.chat.send(self.ADMIN, True, peer, "all of you: answer")
+        self.chat.force(self.ADMIN, g["id"], [self.ANN["id"], self.BOB["id"]])
+        self.assertEqual([f["group"]["id"] for f in self.chat.focus_pending(self.BOB["id"])], [peer["id"]])
+        self.assertEqual(self.chat.newest_admin_message(peer["id"])["id"], g["id"])
+        # a deleted conversation asks nothing any more
+        self.chat.delete(self.ADMIN["id"], self.ANN["id"])
+        self.assertEqual([f["group"]["id"] for f in self.chat.focus_pending(self.ANN["id"])], [peer["id"]])
+
     def test_members_only(self):
         peer = self.chat.create_group(self.ADMIN, [self.ANN])
         self.chat.send(self.ADMIN, True, peer, "hello")
@@ -2777,6 +2810,62 @@ class CloudDrivePeersTest(unittest.TestCase):
         self.assertEqual(p.active(), {})
         p.save_settings(self.ADMIN, {"enabled": True})
         self.assertEqual(len(p.active()), 2)
+
+    def test_admins_asked_in_chat_to_approve(self):
+        """A share waiting for an admin asks every admin in a chat message carrying its card - not the admin who made
+        it wait - whether its owner accepted a request or shared it themselves; nobody when admins do not approve."""
+        p = self.peers
+        p.ADMINS = lambda: [{"id": self.ADMIN["id"], "username": "admin", "name": ""},
+                            {"id": self.EVE["id"], "username": "eve", "name": ""}]
+        p.ITEM = lambda owner, path: {"docs": "folder"}.get(path)
+        p.save_settings(self.ADMIN, {"enabled": True})
+        sid = p.request(self.ANN, {"owner": self.BOB["id"], "access": "read"})["share"]["id"]
+        self.assertFalse([c for c in self.chat if "Approve" in c[2]])  # asked: the owner answers first
+        p.answer(self.BOB, sid, {"accept": True})
+        asked = [c for c in self.chat if c[2].startswith("Approve Cloud Drive share")]
+        self.assertEqual(sorted(c[1] for c in asked), sorted([self.ADMIN["id"], self.EVE["id"]]))
+        self.assertEqual({(c[0], c[3]) for c in asked}, {("bob", sid)})
+        self.assertIn("bob's Cloud Drive with ann (read only)", asked[0][2])
+        self.chat.clear()
+        folder = p.share(self.EVE, {"to": self.ANN["id"], "path": "docs", "access": "write"})["share"]
+        asked = [c for c in self.chat if c[2].startswith("Approve")]
+        self.assertEqual([(c[1], c[3]) for c in asked], [(self.ADMIN["id"], folder["id"])])  # not eve herself
+        self.assertIn("eve's folder docs with ann (read and write)", asked[0][2])
+        self.chat.clear()
+        p.save_settings(self.ADMIN, {"adminApproval": False})
+        p.share(self.BOB, {"to": self.EVE["id"], "path": "", "access": "read"})
+        self.assertFalse([c for c in self.chat if c[2].startswith("Approve")])
+
+    def test_admins_read_any_drive_but_an_encrypted_one(self):
+        """Admins open any account's Cloud Drive read only (?drive=<owner id>: list, glance, download) - never write
+        there, never one its owner encrypted; anyone else only through a share."""
+        safe = self.safe
+        safe.ENABLED = True
+        safe.IS_ADMIN = lambda u: "owner" in (u.get("roles") or [])
+
+        def call(user, method, path, query):
+            sent, seen = [], []
+            h = mock.Mock()
+            h.headers = {"X-Requested-With": "coder-ui", "Origin": "https://c.example", "Host": "c.example"}
+            h.user = lambda: (user, None)
+            h.send_json = lambda status, body: sent.append((status, body))
+            with mock.patch.object(safe, "listing", lambda u, path: seen.append(u["id"]) or {"path": path}), \
+                    mock.patch.object(safe, "make_folder", lambda u, path: seen.append(u["id"]) or {"ok": True}), \
+                    mock.patch.object(safe, "read_json", lambda h: {"path": "x"}):
+                safe.handle(h, method, "/__coder-ui/api/safe/" + path, query)
+            return sent[0][0], seen, sent[0][1]
+
+        drive = "drive=" + self.BOB["id"]
+        with mock.patch.object(safe, "encryption_on", lambda uid: False):
+            status, seen, body = call(self.ADMIN, "GET", "list", "path=&" + drive)
+            self.assertEqual((status, seen, body["access"], body["adminView"]), (200, [self.BOB["id"]], "read", True))
+            self.assertEqual(call(self.ADMIN, "POST", "folder", drive)[:2], (403, []))  # read only
+            self.assertEqual(call(self.ANN, "GET", "list", drive)[:2], (403, []))  # not an admin, not shared
+            self.assertEqual(call(self.ADMIN, "GET", "list", "drive=..%2Fother")[:2], (400, []))
+        with mock.patch.object(safe, "encryption_on", lambda uid: uid == self.BOB["id"]):
+            status, seen, body = call(self.ADMIN, "GET", "list", drive)
+            self.assertEqual((status, seen), (403, []))
+            self.assertIn("encrypted", body["error"])
 
     def test_shared_drive_opens_at_once_through_the_file_routes(self):
         """A share is usable at once in the Cloud Drive window (?drive=<owner id>), before any workspace restart: read

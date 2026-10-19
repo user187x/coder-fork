@@ -1,7 +1,8 @@
 """Cloud Drives shared between users, whole or in part: one user asks another for their Cloud Drive in a chat message
 (a request card in their conversation); its owner accepts it - read only, or read and write - or declines. Or the owner
 shares it themselves: the entire drive, a folder or a file of it, with whom they choose, read only or read and write
-(a chat message tells them). While admins approve shares (the default), one of them approves it too. An active share
+(a chat message tells them). While admins approve shares (the default), one of them approves it too: every admin gets
+a chat message asking for it ("Approve Cloud Drive share"), whose card approves or denies it at once. An active share
 mounts the owner's Cloud Drive - or just the folder or file (the volume's subPath) - in the other user's workspaces, at
 ~/cloud-drive-shared/<owner's username> (a folder or file at ~/cloud-drive-shared/<owner>/<its name>), from their next
 start (safe.publish_state gives the templates each user's shares; read only is the mount's own readOnly) - the
@@ -49,14 +50,15 @@ CHAT_POST = None   # (from user, to user id, text, share id) -> None: a chat mes
 CHANGED = None     # () -> None: the templates told at once (safe.publish_now)
 PEOPLE = None      # () -> [{id, username, name}]: Coder's active users
 ITEM = None        # (owner id, path) -> "file" | "folder" | None: what a path of the owner's drive is (safe.item_kind)
+ADMINS = None      # () -> [{id, username, name}]: the admins, each asked in a chat message to approve a share
 KINDS = ("drive", "folder", "file")
 _lock = threading.Lock()
 
 
-def setup(log, is_admin, user_by_id, chat_post, changed, people=None, item=None):
-    global LOG, IS_ADMIN, USER_BY_ID, CHAT_POST, CHANGED, PEOPLE, ITEM
+def setup(log, is_admin, user_by_id, chat_post, changed, people=None, item=None, admins=None):
+    global LOG, IS_ADMIN, USER_BY_ID, CHAT_POST, CHANGED, PEOPLE, ITEM, ADMINS
     LOG, IS_ADMIN, USER_BY_ID, CHAT_POST, CHANGED = log, is_admin, user_by_id, chat_post, changed
-    PEOPLE, ITEM = people, item
+    PEOPLE, ITEM, ADMINS = people, item, admins
 
 
 def _load():
@@ -206,6 +208,22 @@ def _access_words(access):
     return "read only" if access == "read" else "read and write"
 
 
+def _ask_admins(user, share):
+    """A share waits for an admin: each admin (but the one who made it wait) gets a chat message asking to approve it,
+    with its card - Approve and Deny there, and the two people's names leading to the drive."""
+    try:
+        admins = ADMINS() if ADMINS else []
+    except Exception as e:  # noqa: BLE001 - the share waits on the Cloud Drive's Sharing and Accounts all the same
+        LOG(event="cloud-drive-peers-admins-failed", share=share["id"], error=str(e)[:200])
+        admins = []
+    what = "Cloud Drive" if (share.get("kind") or "drive") == "drive" else "%s %s" % (share["kind"], share["path"])
+    text = "Approve Cloud Drive share: %s's %s with %s (%s)." % (
+        share["ownerName"], what, share["fromName"], _access_words(share["access"]))
+    for a in admins:
+        if a.get("id") and a["id"] != user["id"]:
+            _post(user, a["id"], text, share["id"])
+
+
 def request(user, body):
     owner_id = str(body.get("owner") or "")
     access = body.get("access") or "read"
@@ -292,6 +310,8 @@ def share(user, body):
         ": an admin approves it first" if item["state"] == "approval" else ", from your workspaces' next start"), sid)
     if item["state"] == "active":
         _changed()
+    else:
+        _ask_admins(user, item)
     return {**view(user), "share": _public(item)}
 
 
@@ -342,6 +362,8 @@ def answer(user, sid, body):
             _access_words(share["access"]),
             ": an admin approves it first" if share["state"] == "approval" else
             ", from your workspaces' next start"), sid)
+        if share["state"] == "approval":
+            _ask_admins(user, share)
         _changed()
     else:
         _post(user, share["from"], "Declined to share my Cloud Drive.", sid)

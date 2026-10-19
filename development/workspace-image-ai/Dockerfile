@@ -15,7 +15,7 @@
 # Built by ../tools/build-ai-image.sh, which puts the AppImage and OpenCode's archive (pinned, checked against their
 # SHA-256) beside this file; the build downloads Unsloth Studio's Python packages, llama.cpp and Node (pinned by the
 # installer of that AppImage).
-ARG BASE=ghcr.io/user187x/coder-workspace:1.9.2
+ARG BASE=ghcr.io/user187x/coder-workspace:1.9.3
 FROM ${BASE}
 ARG OPENCODE_VERSION=1.18.34
 # PyTorch's wheel index and llama.cpp's backend: CUDA, whatever the build machine has (--build-arg ...=cpu for a

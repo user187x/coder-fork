@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # Builds the workspace image ghcr.io/user187x/coder-workspace:<TAG> (../workspace-image: enterprise-base + desktop
-# with its two themes (Classic, Serenade), Chromium, Terminator, Firefox, JetBrains Mono Nerd Font, tmux, command-line tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc,
-# code-server, FileBrowser Quantum) and saves it into the delivery bundle (helm-chart/images/custom/), replacing the
+# with its two themes (Classic, Serenade), noVNC's clipboard shared with the computer and one viewer at a time
+# resizing it, Chromium, Terminator,
+# Firefox, JetBrains Mono Nerd Font in every terminal (code-server's too) and Noto Color Emoji, tmux, command-line
+# tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc, code-server, FileBrowser Quantum) and saves it into the delivery bundle (helm-chart/images/custom/), replacing the
 # previous one (needs internet). FileBrowser Quantum is a binary for linux-amd64, kept untracked at the repository's
 # root as filebrowser-quantum (or FILEBROWSER_QUANTUM=<file>); the Dockerfile checks its SHA-256 and version. Since
 # 1.9.2 it is the workspace's own build of 2.1.2 (version 2.1.2-coder.1, a FileBrowser update for symlinked folders:
 # gtsteffaniak/filebrowser v2.1.2 with its patches, built as its release is - static, frontend embedded, not packed).
 # Then update its [custom] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.9.2
+#   ./build-workspace-image.sh [TAG]       default 1.9.3
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.9.2}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.9.3}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 quantum="${FILEBROWSER_QUANTUM:-${top}/filebrowser-quantum}"
 [ -f "$quantum" ] || { echo "FileBrowser Quantum's binary is missing: $quantum (see the top of this script)" >&2; exit 1; }
 # the binary alone as a build context of its own (not the repository)
@@ -24,6 +26,16 @@ docker run --rm --entrypoint sh "$img" -c '
 	test -x /usr/bin/vncserver && test -x /usr/bin/websockify && test -f /usr/share/novnc/index.html
 	! dpkg -s light-locker >/dev/null 2>&1
 	fc-match monospace | grep -q JetBrainsMono
+	# every terminal in the Nerd Font, emoji from Noto Color Emoji
+	fc-match "monospace:charset=1f4a5" | grep -q "Noto Color Emoji"
+	grep -q "^    font = JetBrainsMono Nerd Font" /etc/xdg/terminator/config
+	GSETTINGS_BACKEND=memory gsettings get org.gnome.desktop.interface monospace-font-name | grep -q "JetBrainsMono Nerd Font"
+	grep -q "^FontName=JetBrainsMono Nerd Font" /etc/xdg/xfce4/terminal/terminalrc
+	cs=/usr/lib/code-server; test -f $cs/src/browser/media/fonts/JetBrainsMonoNerdFont-Light.ttf
+	grep -q "fonts/nerd-font.css" $cs/lib/vscode/out/vs/code/browser/workbench/workbench.html
+	grep -q "JetBrainsMono Nerd Font" $cs/lib/vscode/extensions/coder-workspace-defaults/package.json
+	# noVNC: the clipboard shared with the computer, and only the viewer in use resizing the desktop
+	for m in coder-clipboard coder-resize; do test -f /usr/share/novnc/app/$m.js && grep -q "app/$m.js" /usr/share/novnc/vnc.html || { echo "missing: noVNC $m"; exit 1; }; done
 	/usr/local/bin/tmux -V && command -v tmux-mirror-setup >/dev/null
 	for t in btop bat batcat vim eza fzf grc jq yq k9s kubectl kubectl-oidc_login kubelogin k9s-copy-secret code-server filebrowser; do command -v $t >/dev/null || { echo "missing: $t"; exit 1; }; done
 	# Lock Down runs these from the image (lockdown.sh: Network, Freeze), as root in the pod
@@ -44,7 +56,7 @@ docker run --rm --entrypoint sh "$img" -c '
 	test -d /usr/share/themes/Lavanda-Dark-Compact-Tokyonight && test -f /usr/share/themes/cirkles/xfwm4/themerc
 	test -f /usr/share/icons/Zafiro/index.theme && test -f /usr/share/backgrounds/coder-desktop/serenade.jpg && fc-list | grep -qi overpass
 	test -f /etc/xdg/autostart/coder-compositor.desktop && test -f /etc/chromium/policies/managed/coder-workspace.json
-	HOME=$(mktemp -d) sh -c "coder-desktop-theme apply serenade >/dev/null && test \"\$(coder-desktop-theme current)\" = serenade && test -f \$HOME/.config/picom.conf && grep -q xrender \$HOME/.config/picom.conf"
+	HOME=$(mktemp -d) sh -c "coder-desktop-theme apply serenade >/dev/null && test \"\$(coder-desktop-theme current)\" = serenade && test -f \$HOME/.config/picom.conf && grep -q xrender \$HOME/.config/picom.conf && grep -q \"^animation-exclude\" \$HOME/.config/picom.conf"
 	python3 -c "import json; d = json.load(open(\"/usr/share/coder-workspace/addons.json\")); assert d[\"software\"] and d[\"packages\"][\"added\"]"
 	python3 -m venv "$(mktemp -d)/v"
 	echo "image checks passed"'
