@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.83` (fork `b5c7e8a82`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.84` (fork `399ab8d36`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
@@ -13,8 +13,11 @@ is a plug-in now (`dist/plugins/`, not in the bundle).
 * **Images: the ways into fixing an image** (the TASK design `images-list.reference.html`; fork and service): an
   image graded D or F that fixing would raise is tagged **Needs fixing**, its Security cell says "31 fixable → B", and
   its row has **Fix CVEs**; others with fixable high or critical findings have **View fix →**; the header's "N images
-  need fixing" narrows the list to them. The service's summary gives `fixableCounts`, `projectedGrade` and
-  `needsFixing` (scans record each finding's package class, type and path).
+  need fixing" narrows the list to them. "Fixable" counts what Fix image can fix - OS and Python packages - not the
+  packages inside programs the image ships (Go, npm, Java: a newer release of the program fixes those), so the list's
+  projected grade is the one the page reaches (platform.84; .83 counted every fixed version). The service's summary
+  gives `fixableCounts`, `fixableHere`, `projectedGrade` and `needsFixing` (scans record each finding's package
+  class, type and path).
 * **Fix image** (`/images/<id>/fix`, the TASK design `image-fix.reference.html`): the findings grouped by how they get
   fixed - upgrading a package (apt, or pip in the package's own environment), rebasing (OS packages the base brought),
   a newer add-on (Go, npm and other programs' packages), no fix yet - all fixable ones selected, the grade after the

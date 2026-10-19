@@ -1176,7 +1176,7 @@ class NotApplicableFindingsTest(unittest.TestCase):
     def test_projected_grade_and_needs_fixing(self):
         """The Images list's "31 fixable -> B" and Needs fixing: the grade with every fixable finding fixed."""
         def report(counts, fixable, **extra):
-            return dict({"grade": None, "checks": [], "vulnerabilities": {"counts": counts, "fixableCounts": fixable}},
+            return dict({"grade": None, "checks": [], "vulnerabilities": {"counts": counts, "fixableHereCounts": fixable}},
                         **extra)
         r = report({"CRITICAL": 3, "HIGH": 34, "MEDIUM": 5}, {"CRITICAL": 3, "HIGH": 33})
         r["grade"] = ib.grade(r)
@@ -1194,12 +1194,27 @@ class NotApplicableFindingsTest(unittest.TestCase):
         r["grade"] = ib.grade(r)
         self.assertEqual((r["grade"], ib.projected_grade(r), ib.needs_fixing(r)), ("F", "F", False))
         self.assertIsNone(ib.projected_grade({"error": "trivy failed"}))
-        # a report from before fixableCounts: counted from its top findings
+        # a report from before fixableHereCounts: counted from its top findings, only what Fix image can fix
         old = {"grade": "D", "checks": [], "vulnerabilities": {"counts": {"CRITICAL": 2}, "top": [
-            {"severity": "CRITICAL", "fixed": "1.2"}, {"severity": "CRITICAL", "fixed": ""}]}}
+            {"severity": "CRITICAL", "fixed": "1.2", "target": "img (ubuntu 26.04)"},
+            {"severity": "CRITICAL", "fixed": ""}]}}
         self.assertEqual(ib.fixable_counts(old)["CRITICAL"], 1)
         summary = ib.report_summary(old)
-        self.assertEqual((summary["projectedGrade"], summary["needsFixing"]), ("D", False))
+        self.assertEqual((summary["projectedGrade"], summary["needsFixing"], summary["fixableHere"]), ("D", False, 1))
+
+    def test_what_fix_image_can_fix(self):
+        """The same rules as the page's fixPlan.ts: OS and Python packages with a fixed version; not the packages
+        inside a program the image ships (they need a newer release of it), the targets as trivy writes them."""
+        here = ib.fix_here
+        self.assertTrue(here({"fixed": "1.2", "target": "registry:5000/x:1 (ubuntu 26.04)"}))
+        self.assertTrue(here({"fixed": "1.2", "class": "os-pkgs", "target": "x"}))
+        self.assertTrue(here({"fixed": "4.14.2", "target": "Python"}))
+        self.assertTrue(here({"fixed": "1", "class": "lang-pkgs", "type": "python-pkg", "target": "x"}))
+        self.assertTrue(here({"fixed": "1", "target": "opt/a/lib/python3.12/site-packages/x/METADATA"}))
+        self.assertFalse(here({"fixed": "0.60.0", "target": "usr/local/bin/filebrowser"}))   # a Go program's
+        self.assertFalse(here({"fixed": "6.2.1", "target": "Node.js"}))
+        self.assertFalse(here({"fixed": "1", "class": "lang-pkgs", "type": "jar", "target": "x"}))
+        self.assertFalse(here({"fixed": "", "target": "img (ubuntu 26.04)"}))
 
 
 class TrackedWorkspaceImageTest(unittest.TestCase):
