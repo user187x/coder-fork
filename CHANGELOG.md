@@ -2,10 +2,36 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.79` (fork `7aadca175`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
+Coder `2.0.0-platform.80` (fork `48b7ca115`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **New workspace in the settings pages' look** (fork, `CreateWorkspacePageView.tsx`): a template's Create workspace
+  page has the workspace settings page's header (Templates / the template, its version, View source), section list
+  with At a glance (template, owner, preset, CPU, memory, GPU, disk, theme), and cards - General (name and a
+  suggestion, owner, a pinned version, preset with Show preset parameters), External authentication, Resources and
+  Environment (the very cards of the workspace settings page: CPU and memory tiles, the GPU, the home disk's size,
+  theme cards, image, start folder; immutable parameters set here), Schedule - with Cancel and Create workspace in
+  its bar. A template with none of the platform's parameters gets a Parameters card.
+* **Fixed: a new workspace lost the start and stop times its user set** (Global Workspace Scheduler, user mode): the
+  request was rebuilt from the form without them whenever it named the template version (always, in practice).
+* **Fixed: the chat console's Delete ignored the conversations chosen** (fork, `ChatConsole.tsx`): with several
+  ticked, the trash asked about the open conversation only, in a box below the visible part of the card, and the
+  right-click Delete took one. Now choosing (Select, or Ctrl+click) takes any conversation, group chats too, and
+  every Delete - the bar's, the trash's, a chosen row's right-click - asks once for all of them in a dialog that
+  names them, deletes them a few at a time, and says which were not deleted (a group chat only its admin deletes).
+  Group chat with the chosen keeps to their people.
+* **Select all in the chat console:** a bar over the list while choosing - Select all (the list as its tab and
+  search show it; half-ticked when some are chosen; again: none) beside Delete N.
+* **Workspace Health takes one line when nothing needs triage** (fork, Health): the empty table (616 px) gave way to
+  a single "Nothing to triage" line (the card 216 px); its "Select a workspace" note only shows with workspaces in
+  the list; while the check fails, its error alone.
+* **Lock Down's menu reads Disable / Enable Privilege Escalation** (was Privilege Escalation Disable / Enable).
+* **Fixed: the workspace page's Terminal would not open** (the template): renaming the Linux user after the owner left
+  the agent without its shell - it keeps the name it started with (coder) and finds the shell of every terminal and
+  SSH session by it in /etc/passwd, so they exited at once (code 1) and the Terminal panel rolled back up. The old
+  name now stays as a second name of the same account, after the new one: whoami and the prompt still show the
+  owner's name, and coder still resolves (the agent; `sudo -u coder`, `chown coder`). A chart check keeps it.
 * **Template settings in the workspace settings page's look** (platform.79, `site/src/pages/TemplateSettingsPage/`):
   one page instead of five - a header (Templates / the template, its active version with a copy button), a section
   list with the template At a glance (version, status, autostop, port sharing, active users), and cards: General

@@ -193,7 +193,7 @@ The full feature list, with where each piece lives and how it is tested, is
 - **Lock Down:** admins jail any workspace, for instance one where an agent runs away. Its menu turns each lock on or
   off (red while on, green while off):
   - **Disconnect Network** / **Reconnect Network:** only Coder stays reachable;
-  - **Privilege Escalation Disable** / **Enable:** nobody in it can use sudo;
+  - **Disable** / **Enable Privilege Escalation:** nobody in it can use sudo;
   - **Lock Down** / **Unlock:** both;
   - **Freeze** / **Unfreeze:** locked down, and everything in it paused where it is (its agent too), with a snapshot of
     its disk.
@@ -269,7 +269,9 @@ The full feature list, with where each piece lives and how it is tested, is
   disk), Environment (desktop theme, workspace image, start folder), Schedule and Sharing, with a section list, the
   workspace at a glance, and one save bar that restarts the workspace only when its build parameters change.
   **Template settings** in the same look: one page of cards (General, Operations, Port sharing, Deprecate, Schedule,
-  Variables, Permissions, Parameters) with one save bar.
+  Variables, Permissions, Parameters) with one save bar. **New workspace** (a template's Create workspace) too: the
+  same Resources and Environment cards, General (name, owner, preset), External authentication and Schedule, with
+  Cancel and Create workspace in its bar.
 - **Three workspace templates:** UBUNTU (code-server), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow) and the AI
   workspace UBUNTU OPENCODE (the OpenCode agent on the workspace's own Unsloth Studio, its window on the desktop),
   with a shared **model library** (GGUF, each model scanned with garak before workspaces have it, once the scanner
@@ -287,8 +289,9 @@ The full feature list, with where each piece lives and how it is tested, is
   - a terminal-style full view (with an easter egg or two).
 - **Inbox:** a search box, Clear all (asks twice) beside Mark all as read.
 - **Chat** between users and admins (with screenshots and files of any kind, sent with a progress bar), and the admins'
-  chat console - the first card of Controls › Settings › Chat, popped out into a window of its own when wanted: group
-  chats with several people chosen, a right-click menu (Delete, Workspace, Cloud Drive, Force Response), and
+  chat console - the first card of Controls › Settings › Chat, popped out into a window of its own when wanted: several
+  conversations chosen (Select all takes the whole list) and deleted together, or a group chat with their people, a
+  right-click menu (Delete, Workspace, Cloud Drive, Force Response), and
   **Forced Focus** (a message in front of the user's dashboard until acknowledged); **peer-to-peer chat** between
   developers when admins turn it on (a People list of who is online or active today, grey after 30 seconds without
   input; anyone can be invisible but to admins); chats kept 30 days by default (admins set it, and can purge them);
@@ -359,7 +362,7 @@ The full feature list, with where each piece lives and how it is tested, is
 - **Disconnect Network:** firewall rules in the workspace pod's own network namespace refuse everything in or out except
   loopback, DNS and Coder; connections already open stop at once, and IPv6 is blocked entirely. The agent's
   connection to Coder is kept, so admins can still reach the workspace.
-- **Privilege Escalation Disable:** a last sudoers rule denies every command to everyone. A process that is root already stays root,
+- **Disable Privilege Escalation:** a last sudoers rule denies every command to everyone. A process that is root already stays root,
   and nothing else in the workspace can become root.
 - **It can't be undone from inside the workspace:**
   - the workspace container has no `NET_ADMIN`, so not even root there can change its firewall;

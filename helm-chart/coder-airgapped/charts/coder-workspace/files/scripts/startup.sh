@@ -57,6 +57,15 @@ else
  fi
  rm -f "$rule"
 fi
+# The agent started as coder and keeps that name (Go caches it): it finds the shell of every terminal and SSH session
+# by it in /etc/passwd, and without it those exit at once. So the old name stays, as a second name of the same
+# account after the new one: uid 1000 still resolves to the new name (whoami, the prompt), and coder still resolves,
+# for the agent and for anything that names it (sudo -u coder, chown coder).
+if [ "$(id -u)" = 1000 ] && [ "$(id -un)" != coder ] && ! getent passwd coder >/dev/null && sudo -n true 2>/dev/null; then
+ for f in /etc/passwd /etc/shadow /etc/group /etc/gshadow; do
+  sudo -n sh -c "grep '^$(id -un):' $f | sed 's/^$(id -un):/coder:/' >>$f"
+ done
+fi
 # What starts from here, and every shell (/etc/profile.d, /etc/bash.bashrc), carries the account's name: the agent
 # set USER when it started, as coder.
 export USER="$(id -un)" LOGNAME="$(id -un)"

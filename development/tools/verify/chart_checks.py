@@ -226,6 +226,12 @@ def ai_checks(B, chart, default_render):
           "visudo -cqf" in startup and "/etc/sudoers.d/coder-user" in startup and "/etc/passwd /etc/shadow" in startup
           and "/etc/group /etc/gshadow" in startup and 'export USER="$(id -un)"' in startup
           and startup.index("visudo -cqf") < startup.index("/etc/passwd /etc/shadow"), "")
+    # The agent keeps the name it started with (coder) and finds every terminal's and SSH session's shell by it in
+    # /etc/passwd: renamed away, they exited at once (the Terminal panel would not open)
+    check("startup.sh: the renamed account keeps coder as a second name (the agent's terminals and SSH find their shell)",
+          "! getent passwd coder" in startup and "/etc/passwd /etc/shadow /etc/group /etc/gshadow" in startup
+          and "s/^$(id -un):/coder:/" in startup
+          and startup.index("s/^$(id -un):/coder:/") > startup.index("/etc/passwd /etc/shadow\n"), "")
     check("main.tf: the pod's hostname is the owner's and the workspace's names (a DNS label)",
           "hostname = local.hostname" in tf and re.search(r'hostname = trim\(substr\(replace\(lower\(', tf) is not None, "")
     # A launcher of a terminal emulator with Terminal=true (XFCE's launcher editor writes it) opened Terminator inside
