@@ -243,6 +243,9 @@ if [ "$IMAGE_DESKTOP" != none ] && ! pgrep -f "^Xtigervnc :1 " >/dev/null; then
  # the Desktop theme, put in the home before XFCE reads it (a workspace image from before the themes has none)
  if [ "$IMAGE_DESKTOP" = xfce ] && [ -x /usr/local/bin/coder-desktop-theme ]; then
   log "$(/usr/local/bin/coder-desktop-theme apply "$DESKTOP_THEME" 2>&1 || true)"
+ elif [ "$IMAGE_DESKTOP" = xfce ] && [ "$DESKTOP_THEME" != classic ]; then
+  # said, not silent: the theme asked for cannot be applied (the desktop comes up Classic)
+  log "Desktop: this image has no coder-desktop-theme, so the $DESKTOP_THEME theme cannot be applied: Classic instead (themes need workspace image 1.9.1 or later)"
  fi
  rm -f "$VNC_SOCK" /tmp/.X1-lock /tmp/.X11-unix/X1
  touch ~/.Xauthority && chmod 600 ~/.Xauthority

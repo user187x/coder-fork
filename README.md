@@ -237,6 +237,11 @@ The full feature list, with where each piece lives and how it is tested, is
 
   Each build has a review step with its Dockerfile and shows its progress; built images can be downloaded and backed
   up to S3.
+- **Fixing an image's CVEs:** the list tags an image graded D or F that its fixes would raise (**Needs fixing**,
+  "31 fixable → B", **Fix CVEs**). **Fix image** groups its findings by how they get fixed, shows the grade the
+  selected fixes leave, and applies them as an installation step that is built and scanned again (on the image, or
+  on a fixed copy of an imported one). Agent runs, pull requests and accepted risks are proposed in
+  `docs/fix-image-api.md`.
 - **Every image is scanned offline**, built ones and the workspace image the template runs (listed first, read-only,
   "In use by workspaces"). See [Image security](#image-security).
 - **Every model scanned before it is used, with the LLM scanner plug-in:** once an admin hooks up the scanner (Model

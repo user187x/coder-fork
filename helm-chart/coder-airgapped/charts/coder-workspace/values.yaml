@@ -45,7 +45,7 @@ dataflowTemplate:
   displayName: "UBUNTU DATAFLOW"
   icon: "/icon/ubuntu.svg"
 # Its image: the workspace image + NiFi, a Java runtime and Airflow.
-dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.1.2"
+dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.1.3"
 # The AI template, on the AI image (development/workspace-image-ai: the workspace image + Unsloth Studio + OpenCode),
 # pushed by its own Job (<prefix>-push-template-opencode): ubuntu-opencode (the OpenCode agent, on the workspace's own
 # Unsloth server). It scans the model library's GGUF models (~/models) where the deployment has the Cloud Drive's

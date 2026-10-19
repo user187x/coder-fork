@@ -1173,6 +1173,34 @@ class NotApplicableFindingsTest(unittest.TestCase):
         self.assertEqual(ib.grade({"vulnerabilities": {"counts": {"HIGH": 0, "MEDIUM": 258}}, "checks": []}), "B")
         self.assertEqual(ib.grade({"vulnerabilities": {"counts": {"HIGH": 1, "MEDIUM": 0}}, "checks": []}), "C")
 
+    def test_projected_grade_and_needs_fixing(self):
+        """The Images list's "31 fixable -> B" and Needs fixing: the grade with every fixable finding fixed."""
+        def report(counts, fixable, **extra):
+            return dict({"grade": None, "checks": [], "vulnerabilities": {"counts": counts, "fixableCounts": fixable}},
+                        **extra)
+        r = report({"CRITICAL": 3, "HIGH": 34, "MEDIUM": 5}, {"CRITICAL": 3, "HIGH": 33})
+        r["grade"] = ib.grade(r)
+        self.assertEqual((r["grade"], ib.projected_grade(r), ib.needs_fixing(r)), ("D", "C", True))
+        # nothing fixable: the grade stays, so it does not need fixing (there is nothing to fix)
+        r = report({"CRITICAL": 3}, {"CRITICAL": 0})
+        r["grade"] = ib.grade(r)
+        self.assertEqual((r["grade"], ib.projected_grade(r), ib.needs_fixing(r)), ("D", "D", False))
+        # a C with one fixable high: better after, but not "needs fixing" (the list shows View fix)
+        r = report({"HIGH": 1}, {"HIGH": 1})
+        r["grade"] = ib.grade(r)
+        self.assertEqual((r["grade"], ib.projected_grade(r), ib.needs_fixing(r)), ("C", "A", False))
+        # a secret keeps it F whatever is fixed: no projected improvement
+        r = report({"CRITICAL": 1}, {"CRITICAL": 1}, secrets=[{"rule": "aws"}])
+        r["grade"] = ib.grade(r)
+        self.assertEqual((r["grade"], ib.projected_grade(r), ib.needs_fixing(r)), ("F", "F", False))
+        self.assertIsNone(ib.projected_grade({"error": "trivy failed"}))
+        # a report from before fixableCounts: counted from its top findings
+        old = {"grade": "D", "checks": [], "vulnerabilities": {"counts": {"CRITICAL": 2}, "top": [
+            {"severity": "CRITICAL", "fixed": "1.2"}, {"severity": "CRITICAL", "fixed": ""}]}}
+        self.assertEqual(ib.fixable_counts(old)["CRITICAL"], 1)
+        summary = ib.report_summary(old)
+        self.assertEqual((summary["projectedGrade"], summary["needsFixing"]), ("D", False))
+
 
 class TrackedWorkspaceImageTest(unittest.TestCase):
     """The workspace template's image as an entry of the Images view: made, kept to the deployed image, scanned when

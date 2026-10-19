@@ -61,7 +61,7 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 | Archive | Image | Size | Used by |
 |---|---|---:|---|
 | `ghcr.io_user187x_coder-workspace_1.9.3.tar.gz` | `ghcr.io/user187x/coder-workspace:1.9.3` | 1.6 GB | workspace pods (ubuntu-vnc-desktop): enterprise-base + desktop (no light-locker) with its Classic and Serenade themes, noVNC's clipboard shared with the computer, Chromium (default), Terminator, Firefox, JetBrains Mono Nerd Font in every terminal (code-server's too) and Noto Color Emoji, tmux, CLI tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc and desktop background (development/workspace-image) |
-| `ghcr.io_user187x_coder-workspace-dataflow_1.1.2.tar.gz` | `ghcr.io/user187x/coder-workspace-dataflow:1.1.2` | 3.2 GB | workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), Apache Airflow 3.3.2 (development/workspace-image-dataflow) |
+| `ghcr.io_user187x_coder-workspace-dataflow_1.1.3.tar.gz` | `ghcr.io/user187x/coder-workspace-dataflow:1.1.3` | 3.2 GB | workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), Apache Airflow 3.3.2 (development/workspace-image-dataflow) |
 | `ghcr.io_user187x_coder-workspace-ai_2.0.0.tar.gz` | `ghcr.io/user187x/coder-workspace-ai:2.0.0` | 7.2 GB | workspace pods (ubuntu-opencode): the workspace image + Unsloth Studio (its server: PyTorch for CUDA, llama.cpp; AGPL-3.0) and OpenCode 1.18.34 (development/workspace-image-ai) |
 
 ### `cloud-drive/`

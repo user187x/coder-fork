@@ -2034,11 +2034,45 @@ def grade(report):
     return "A"
 
 
+def fixable_counts(report):
+    """How many findings of each severity have a fixed version: recorded by the scan (all of them); a report from
+    before it, counted from its top findings (all of them when it has 200 or fewer)."""
+    v = report.get("vulnerabilities") or {}
+    if isinstance(v.get("fixableCounts"), dict):
+        return v["fixableCounts"]
+    out = {s_: 0 for s_ in SEVERITIES}
+    for item in v.get("top") or []:
+        if item.get("fixed") and item.get("severity") in out:
+            out[item["severity"]] += 1
+    return out
+
+
+GRADE_ORDER = "ABCDF"
+
+
+def projected_grade(report):
+    """The grade the image would have with every fixable finding fixed (its checks and secrets as they are)."""
+    if not report or report.get("error"):
+        return None
+    counts = (report.get("vulnerabilities") or {}).get("counts") or {}
+    fixable = fixable_counts(report)
+    left = {s_: max(0, counts.get(s_, 0) - fixable.get(s_, 0)) for s_ in SEVERITIES}
+    return grade(dict(report, vulnerabilities=dict(report.get("vulnerabilities") or {}, counts=left)))
+
+
+def needs_fixing(report):
+    """Graded D or F, and fixing what has a fix would raise the grade: the Images list's "Needs fixing"."""
+    g, p = (report or {}).get("grade"), projected_grade(report)
+    return bool(g in ("D", "F") and p and p in GRADE_ORDER and GRADE_ORDER.index(p) < GRADE_ORDER.index(g))
+
+
 def report_summary(report):
     if not report:
         return None
     v = report.get("vulnerabilities", {})
     return {"grade": report.get("grade"), "counts": v.get("counts", {}), "fixable": v.get("fixable", 0),
+            "fixableCounts": fixable_counts(report), "projectedGrade": projected_grade(report),
+            "needsFixing": needs_fixing(report),
             "secrets": len(report.get("secrets") or []), "fips": (report.get("fips") or {}).get("status"),
             "scannedAt": report.get("scannedAt"), "dbUpdatedAt": report.get("dbUpdatedAt"),
             "checks": {s: sum(1 for c in report.get("checks") or [] if c["status"] == s) for s in ("pass", "warn", "fail")},
@@ -2231,7 +2265,12 @@ def _report(ref, t, error, data, config, files, contents, source):
         for v in res.get("Vulnerabilities") or []:
             item = {"id": v.get("VulnerabilityID"), "pkg": v.get("PkgName"), "installed": v.get("InstalledVersion"),
                     "fixed": v.get("FixedVersion") or "", "severity": v.get("Severity", "UNKNOWN"),
-                    "title": (v.get("Title") or v.get("Description") or "")[:160], "target": res.get("Target")}
+                    "title": (v.get("Title") or v.get("Description") or "")[:160], "target": res.get("Target"),
+                    # how it was found: an OS package (os-pkgs, its type the distribution) or a language's
+                    # (lang-pkgs: python-pkg, node-pkg, gobinary, jar...): the fix page groups by it
+                    "class": res.get("Class") or "", "type": res.get("Type") or "",
+                    # where a language's package is (trivy groups them as "Python", "Node.js"): its environment
+                    "path": v.get("PkgPath") or ""}
             rule = not_applicable(v, res)
             if rule:
                 na.setdefault(rule, []).append(item)
@@ -2244,6 +2283,9 @@ def _report(ref, t, error, data, config, files, contents, source):
     order = {s_: i for i, s_ in enumerate(SEVERITIES)}
     vulns.sort(key=lambda v: (order.get(v["severity"], 9), v["fixed"] == "", v["pkg"] or ""))
     report["vulnerabilities"] = {"counts": counts, "total": len(vulns), "fixable": sum(1 for v in vulns if v["fixed"]),
+                                 # all of them, not only the top 200: the projected grade
+                                 "fixableCounts": {s_: sum(1 for v in vulns if v["severity"] == s_ and v["fixed"])
+                                                   for s_ in SEVERITIES},
                                  "top": vulns[:200], "scanned": not report.get("error"),
                                  "os": (t.get("Metadata") or {}).get("OS"),
                                  "javaScanned": data["java"],

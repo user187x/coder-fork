@@ -644,6 +644,17 @@ def main():
           and "DESKTOP_THEME='${desktop_theme}'" in startup
           and '/usr/local/bin/coder-desktop-theme apply "$DESKTOP_THEME"' in startup
           and startup.index("coder-desktop-theme apply") < startup.index("Xtigervnc :1 -auth"), "")
+    # An image without coder-desktop-theme (one derived from a workspace image before 1.9.1, the dataflow image until
+    # 1.1.3): the desktop comes up Classic whatever was chosen - said in the startup log, not silent.
+    # ./make --deploy rewrites .deploy/<domain>/values.yaml: a cluster's own settings (one template not pushed again,
+    # say) go in values-local.yaml beside it, passed after it.
+    make_sh = open(os.path.join(B, "make")).read()
+    check("make --deploy applies .deploy/<domain>/values-local.yaml after the values it writes",
+          '"${STATE}/values-local.yaml"' in make_sh
+          and '-f "$VALUES" "${extra[@]}"' in make_sh, "")
+    check("template: a theme the image cannot apply is said in the startup log",
+          "cannot be applied: Classic instead" in startup
+          and startup.index("cannot be applied: Classic instead") < startup.index("Xtigervnc :1 -auth"), "")
     check("template: the workspace image is substituted (not codercom/enterprise-base)",
           "codercom/enterprise-base" not in r, "")
     ws_img = re.search(r'workspaceImage: .*?"(ghcr\.io/user187x/coder-workspace:[^"]+)"', vals).group(1)

@@ -2,10 +2,27 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.82` (fork `ab28cfacb`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
+Coder `2.0.0-platform.83` (fork `b5c7e8a82`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **Fixed: a workspace set to Serenade started Classic** (template DEFAULT, the dataflow image): the dataflow image
+  1.1.2 was built on a workspace image from before the desktop themes, so it had no `coder-desktop-theme` and the
+  choice was skipped. Rebuilt as `coder-workspace-dataflow:1.1.3` on workspace image 1.9.3 (NiFi and Airflow offline
+  checks passed). A theme an image cannot apply is now said in the startup log (a chart check keeps it), not silent.
+* **Images: the ways into fixing an image** (the TASK design `images-list.reference.html`; fork and service): an
+  image graded D or F that fixing would raise is tagged **Needs fixing**, its Security cell says "31 fixable → B", and
+  its row has **Fix CVEs**; others with fixable high or critical findings have **View fix →**; the header's "N images
+  need fixing" narrows the list to them. The service's summary gives `fixableCounts`, `projectedGrade` and
+  `needsFixing` (scans record each finding's package class, type and path).
+* **Fix image** (`/images/<id>/fix`, the TASK design `image-fix.reference.html`): the findings grouped by how they get
+  fixed - upgrading a package (apt, or pip in the package's own environment), rebasing (OS packages the base brought),
+  a newer add-on (Go, npm and other programs' packages), no fix yet - all fixable ones selected, the grade after the
+  selection beside the grade now, the 5-step pipeline, the Dockerfile change, and **Apply N fixes, rebuild and
+  rescan**: an installation step added to an image built here (or to a fixed copy of an imported image or the
+  workspace image) and built, which scans it again. An image scanned in place is offered for import first. Activity
+  shows its scan, builds and arrival. Handing the fixes to an agent, opening a pull request and accepting a risk have
+  no backend yet: their controls are shown off, and their API is proposed for review in `docs/fix-image-api.md`.
 * **Fixed: a template's Parameters usage repeated itself** (fork, the template's Overview): the insights report
   counts a parameter once per definition, so every template version with other options or wording added another card
   (UBUNTU's Workspace image had 8, CPU and Memory 2 each). Now one card per parameter, named, described (in plain

@@ -40,6 +40,8 @@
 # Helpers in this directory: x509-support (certificates), minikube-support (Minikube), install.sh (secrets + chart),
 # mirror-images.sh (images, chart push), harbor-support (--push-images), argocd-support (--argocd).
 # Generated files (certificates, values, secrets, Applications) go to .deploy/.
+# Settings of your own for one cluster go in .deploy/<domain>/values-local.yaml: never rewritten, applied after the
+# generated values (Helm installs; e.g. coder-workspace.aiTemplates.enabled: false to stop pushing UBUNTU OPENCODE).
 set -eEuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -413,7 +415,10 @@ secret_args() {
 install_helm() {
 	step "Installing coder-airgapped (Helm; up to 20 minutes on a fresh cluster)"
 	[[ -z "$REGISTRY" ]] || export CNPG_IMAGE="${REGISTRY}/cloudnative-pg/cloudnative-pg:1.30.0"
-	"${here}/install.sh" -f "$VALUES" "${SECRET_ARGS[@]}" | sed 's/^/    /'
+	# This cluster's own settings, kept across deploys (values.yaml is rewritten each time): applied after it.
+	local extra=()
+	[[ -f "${STATE}/values-local.yaml" ]] && { extra=(-f "${STATE}/values-local.yaml"); say "local values: ${STATE}/values-local.yaml"; }
+	"${here}/install.sh" -f "$VALUES" "${extra[@]}" "${SECRET_ARGS[@]}" | sed 's/^/    /'
 }
 
 install_argocd() {
