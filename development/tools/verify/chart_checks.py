@@ -230,6 +230,25 @@ def ai_checks(B, chart, default_render):
           "hostname = local.hostname" in tf and re.search(r'hostname = trim\(substr\(replace\(lower\(', tf) is not None, "")
     check("startup.sh: only copies reach the computer's clipboard (Xtigervnc -SendPrimary=0)",
           "-SendPrimary=0" in startup, "")
+    # The Model Library's scanner (garak) is a plug-in: imported in the dashboard, never shipped with the platform
+    scanner = yaml.safe_load(vals).get("modelScanner") or {}
+    check("model scanner: a plug-in - no image pinned or bundled (Model library > Import scanner)",
+          scanner.get("image") == "" and scanner.get("enabled") is True
+          and "coder-garak" not in open(os.path.join(B, "images.txt")).read(), scanner.get("image"))
+    # Every template has the GPU parameter (the workspace settings' GPU switch), disabled by the template where its
+    # workspaces do not run on GPUs: only the AI template's value reaches the pod (local.gpus)
+    gpu_param = re.search(r'data "coder_parameter" "gpus" \{(.*?)\n\}', tf, re.S)
+    check("main.tf: the GPU parameter on every template, disabled (styling) but on the AI template",
+          gpu_param is not None and "count" not in gpu_param.group(1)
+          and "styling      = jsonencode({ disabled = !local.ai })" in gpu_param.group(1)
+          and "gpus           = local.ai ? tonumber(data.coder_parameter.gpus.value) : 0" in tf, "")
+    # The Images view's "Coder fork" tree reads what each image of ours holds from image-contents.json: it must be the
+    # images images.txt pins (rebuilt with development/tools/image-contents.py after pinning a new one)
+    contents = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                            "image-contents.py"), "--check"],
+                              capture_output=True, text=True)
+    check("image-contents.json: what our images hold, for the images images.txt pins", contents.returncode == 0,
+          (contents.stderr or contents.stdout).strip()[-300:])
     # Coder's form evaluates parameters in passes (the choice, then the version plan's data sources): try() settles
     # before they are known - a conditional field would never show, the dropdown never list the images kept
     check("main.tf: no try() on what Coder's form learns late (a conditional count, the images kept)",

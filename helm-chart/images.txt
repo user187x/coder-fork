@@ -6,8 +6,8 @@
 # mirror-images.sh pulls the public ones by that digest (save) and pushes every image under its tag (push).
 
 [ui]            images/ui/             push      the user interface: Coder (the fork - the dashboard and its server), the platform service (coder-ui-updates) and the announcement service (coder-banner), what they run on, and their databases
-ghcr.io/user187x/coder-platform:2.0.0-platform.76-airgap  sha256:49e48e796c77a7d4c384c48828adae47a3cb8053fba78d15686c0cf4aa80ccc8   coder (server); = the fork's platform.76 (86382f86c) + Terraform provider mirror
-ghcr.io/user187x/coder-ui-updates:code-80b8b2986889       sha256:382846b892b25d27b8038c59d54260e3ca74971a8bafd191e4d5b8f1c3c9e6fc   coder-ui-updates (the platform service) and the Images builder's scans: its code (helm-chart/coder-airgapped/files/ui-updates, development/tools/build-ui-image.sh) on coder-image-tools 1.0.0 - the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
+ghcr.io/user187x/coder-platform:2.0.0-platform.77-airgap  sha256:53a8c041ed022bfb33390bf015ef0a8faf2daba7e468af93013a172d0cf6b200   coder (server); = the fork's platform.77 (b679b7fda) + Terraform provider mirror
+ghcr.io/user187x/coder-ui-updates:code-64a18a504afc       sha256:40bf5f5898ba5da488796434c7b81bf002c59f2ae461a4b13e43d76dfe19e36b   coder-ui-updates (the platform service) and the Images builder's scans: its code (helm-chart/coder-airgapped/files/ui-updates, development/tools/build-ui-image.sh) on coder-image-tools 1.0.0 - the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools)
 docker.io/library/python:3.13-alpine                      sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a   coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor)
 ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie      sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185   database, uiUpdates.logsDb, uiUpdates.pgImage
 
@@ -21,10 +21,9 @@ ghcr.io/user187x/coder-minio:RELEASE.2026-09-22T19-25-18Z sha256:c93745c56fccdaf
 cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-s3-driver:0.43.7 sha256:8e4259545a065be3c21362ddeb5739f499d980a9c3d97f71dd8c1efd0d8629ea   the Cloud Drive's CSI driver (userStorage.csi; k8s-csi-s3 + GeeseFS, Apache-2.0)
 cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-node-driver-registrar:v2.16.0 sha256:080b91dd6672ad452697775546c86193c818c7ba6b4cd05dbd41a026b6213bff   the Cloud Drive's CSI driver: kubelet registration
 
-[image-builder] images/image-builder/  push      Templates > Images: the build Jobs (BuildKit), the registry built images are kept in, and the Model Library's security scanner (garak)
+[image-builder] images/image-builder/  push      Templates > Images: the build Jobs (BuildKit) and the registry built images are kept in (the Model Library's scanner, garak, is a plug-in: dist/plugins/)
 docker.io/moby/buildkit:v0.33.0-rootless                  sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef   Images view: the build Jobs (BuildKit rootless)
 ghcr.io/user187x/coder-registry:3.1.2-1                   sha256:18fa9d5d6a6fd299e6e421038eb41154833b4a86bcbfded96023db77eaa9b466   Images view: coder-image-registry, where built images are kept - distribution built from source with Go's and its modules' fixes, as a regular user (development/registry-image)
-ghcr.io/user187x/coder-garak:0.17.1-2                     sha256:f2cee0c7216a2847286f8696c8fba0983850f50c62d5d14e56550102843e4229   Images view: the Model Library's security scanner (modelScanner.image) - garak 0.17.1 (NVIDIA's LLM vulnerability scanner, Apache-2.0) with its detector models and probe data, CPU PyTorch, llama.cpp b11717's llama-server (development/garak-image)
 
 [cluster]       images/cluster/        push      what the chart adds to the cluster: metrics-server, where it has none
 registry.k8s.io/metrics-server/metrics-server:v0.8.1     sha256:b2d2efaf5ac3b366ed0f839d2412a2c4279d4fc2a2a733f12c52133faed36c41   metrics-server (live CPU / memory for the HUD, Health, quotas; metricsServer.enabled: auto)

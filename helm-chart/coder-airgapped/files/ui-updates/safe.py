@@ -148,7 +148,13 @@ LIBRARIES = {
 }
 # The model library's security gate (modelscan.py): told of each file added or deleted, and adds the scans to the
 # listing.
-LIBRARY_HOOKS = {"added": None, "deleted": None, "decorate": None}
+LIBRARY_HOOKS = {"added": None, "deleted": None, "decorate": None, "gate": None}
+
+
+def _held(lib):
+    """Whether a new file of the library waits in its hold: it has one, and its gate is on (the model scanner hooked
+    up: a plug-in, none by default)."""
+    return bool(lib.get("holdPrefix") and LIBRARY_HOOKS["gate"] and LIBRARY_HOOKS["gate"]())
 
 SETTINGS_FILE = os.environ.get("SAFE_SETTINGS_FILE", "/data/cloud-drive.json")
 # Every account's capacity as an admin set it (Cloud Drive > Settings), over the chart's (QUOTA_BYTES).
@@ -1946,9 +1952,9 @@ def library(kind, user):
 
 
 def library_key(kind, name):
-    """Where a new file of the library goes: its hold, where it has one."""
+    """Where a new file of the library goes: its hold, where it has one and its gate is on."""
     lib = LIBRARIES[kind]
-    return (lib.get("holdPrefix") or lib["prefix"]) + name
+    return (lib["holdPrefix"] if _held(lib) else lib["prefix"]) + name
 
 
 def library_added(kind, name, user, size):
@@ -1968,7 +1974,7 @@ def library_upload(kind, h, user, name):
     client().put_large(bucket(), library_key(kind, name), h.rfile, length)
     LOG(event="library-upload", library=kind, user=user["username"], name=name, bytes=length)
     library_added(kind, name, user["username"], length)
-    return h.send_json(200, {"ok": True, "name": name, "size": length, "held": bool(lib.get("holdPrefix"))})
+    return h.send_json(200, {"ok": True, "name": name, "size": length, "held": _held(lib)})
 
 
 def _download(kind, state, url):

@@ -69,6 +69,8 @@
   GET  /__coder-ui/api/chat/poll also takes tab=<tab id>&pv=<presence version>: who is online, idle or gone, pushed
   POST /__coder-ui/api/chat/activity {"tab", "idle"}   a tab's user went idle (no input for CHAT_IDLE_SECONDS) or back
   POST /__coder-ui/api/chat/leave {"tab"}   a tab closed (its user leaves the People lists with their last tab)
+  GET  /__coder-ui/api/chat/pairs[?offset=&limit=]   admins: who talks to whom between developers, newest first, 25
+                                            at a time (limit at most 100): {pairs, total, offset, limit}
   GET  /__coder-ui/api/presence             admins: everyone online now (active / idle, tabs, since) with their
                                             running workspaces, and who Coder saw in the last 15 minutes
   User quota (Health > User Quota; admins, and Coder's own check before it creates a workspace)
@@ -5779,17 +5781,22 @@ class ChatStore:
             "fileBytes": size,
         }
 
-    def pairs(self, limit=200):
+    PAIRS_PAGE = 25
+
+    def pairs(self, limit=PAIRS_PAGE, offset=0):
         """Who talks to whom between developers (neither an admin): each pair once, how many messages, the first and
-        the last; newest first. Never what they wrote."""
+        the last; newest first, a page of them (limit from offset) and how many pairs there are in all. Never what
+        they wrote."""
+        grouped = """SELECT CASE WHEN from_id < to_id THEN from_id ELSE to_id END AS a,
+                            CASE WHEN from_id < to_id THEN to_id ELSE from_id END AS b,
+                            count(*) AS n, min(sent_at) AS first, max(sent_at) AS last, max(id) AS newest
+                     FROM chat_messages WHERE from_admin = 0 AND to_admin = 0
+                     GROUP BY a, b"""
         with self.connect() as db:
+            total = db.execute(f"SELECT count(*) FROM ({grouped})").fetchone()[0]
             rows = db.execute(
-                """SELECT CASE WHEN from_id < to_id THEN from_id ELSE to_id END AS a,
-                          CASE WHEN from_id < to_id THEN to_id ELSE from_id END AS b,
-                          count(*) AS n, min(sent_at) AS first, max(sent_at) AS last, max(id) AS newest
-                   FROM chat_messages WHERE from_admin = 0 AND to_admin = 0
-                   GROUP BY a, b ORDER BY newest DESC LIMIT ?""",
-                (limit,),
+                f"{grouped} ORDER BY newest DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
             out = []
             for r in rows:
@@ -5815,7 +5822,7 @@ class ChatStore:
                         "last": r["last"],
                     }
                 )
-        return out
+        return {"pairs": out, "total": total}
 
     def set_invisible(self, user_id, invisible):
         with self.lock, self.connect() as db:
@@ -8548,12 +8555,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(
                     403, {"error": "Only admins can see the chat's settings."}
                 )
-            if what == "pairs":
-                pairs = CHAT.pairs()
-                for pair in pairs:
+            if what == "pairs":  # a page: ?offset= (from the newest), ?limit= (25, at most 100)
+                try:
+                    offset = max(0, int((q.get("offset") or ["0"])[0]))
+                    limit = min(100, max(1, int((q.get("limit") or [str(CHAT.PAIRS_PAGE)])[0])))
+                except ValueError:
+                    return self.send_json(400, {"error": "offset and limit are numbers."})
+                page = CHAT.pairs(limit, offset)
+                for pair in page["pairs"]:
                     for side in ("a", "b"):
                         pair[side]["online"] = CHAT.is_online(pair[side]["id"])
-                return self.send_json(200, {"pairs": pairs})
+                return self.send_json(200, {**page, "offset": offset, "limit": limit})
             return self.send_json(
                 200,
                 {
@@ -9553,7 +9565,8 @@ def main():
                      item=lambda owner, path: safe.item_kind(owner, path, fresh=True), admins=chat_admins)
     safe.start()
     modelscan.setup(log, KUBE, lambda user: bool(set(user.get("roles") or []) & ADMIN_ROLES))
-    safe.LIBRARY_HOOKS.update(added=modelscan.added, deleted=modelscan.deleted, decorate=modelscan.decorate)
+    safe.LIBRARY_HOOKS.update(added=modelscan.added, deleted=modelscan.deleted, decorate=modelscan.decorate,
+                              gate=modelscan.enabled)
     modelscan.start()
     if imagebuilder.ENABLED:
         # the apt indices for the package check, ready before anyone opens the builder

@@ -371,12 +371,12 @@ data "coder_parameter" "desktop_theme" {
   option {
     name        = "Serenade"
     value       = "serenade"
-    description = "Tokyo Night colours, a floating dock, rounded windows and animations"
+    description = "Dark theme with a floating dock and animations."
   }
   option {
     name        = "Classic"
     value       = "classic"
-    description = "Plain XFCE without effects: the least to draw over a slow connection"
+    description = "Plain XFCE, lighter on a slow connection."
   }
 }
 
@@ -408,17 +408,19 @@ data "coder_parameter" "context_length" {
   }
 }
 
-# The AI template (ubuntu-opencode): NVIDIA GPUs for the workspace (nvidia.com/gpu, from the cluster's NVIDIA device plugin; Unsloth
-# fine-tunes on them, and runs its models on them with llama.cpp's CUDA build). The workspace waits for a node that has
-# them free; none: the CPU (chat only; fine-tuning needs a GPU).
+# NVIDIA GPUs for the workspace (nvidia.com/gpu, from the cluster's NVIDIA device plugin). Only the AI template
+# (ubuntu-opencode) runs on them: Unsloth fine-tunes on them, and runs its models on them with llama.cpp's CUDA build;
+# the workspace waits for a node that has them free; none: the CPU (chat only; fine-tuning needs a GPU). Every other
+# template has the parameter too, disabled (styling), so the workspace's settings show the GPU switch greyed out: its
+# value is never used there (local.gpus).
 data "coder_parameter" "gpus" {
-  count        = local.ai ? 1 : 0
   name         = "gpus"
   display_name = "GPUs"
-  description  = "NVIDIA GPUs for Unsloth: fine-tuning, and faster models (nodes with the NVIDIA device plugin). The workspace waits until a node has them free; 0: the CPU only (chat, no fine-tuning)."
+  description  = local.ai ? "NVIDIA GPUs for Unsloth: fine-tuning, and faster models (nodes with the NVIDIA device plugin). The workspace waits until a node has them free; 0: the CPU only (chat, no fine-tuning)." : "NVIDIA GPUs: not offered by this template (UBUNTU OPENCODE's workspaces run on them)."
   default      = "0"
   icon         = "/icon/memory.svg"
   mutable      = true
+  styling      = jsonencode({ disabled = !local.ai })
   option {
     name  = "None (CPU)"
     value = "0"
@@ -439,7 +441,7 @@ data "coder_parameter" "gpus" {
 
 locals {
   context_length = local.ai ? data.coder_parameter.context_length[0].value : ""
-  gpus           = local.ai ? tonumber(data.coder_parameter.gpus[0].value) : 0
+  gpus           = local.ai ? tonumber(data.coder_parameter.gpus.value) : 0
 }
 
 provider "kubernetes" {

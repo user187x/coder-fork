@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Builds ghcr.io/user187x/coder-garak:<TAG> (../garak-image): the Model Library's security scanner - garak with the
 # Python packages of requirements.lock, its detector models and probe data, and llama.cpp's llama-server - checks it
-# with no network (every probe and detector loads; a real scan of a small model), and saves it into the delivery
-# bundle (mirror-images.sh store). Needs internet (PyPI, the PyTorch CPU index, Hugging Face, GitHub).
+# with no network (every probe and detector loads; a real scan of a small model), and saves it as a plug-in archive:
+# dist/plugins/ghcr.io_user187x_coder-garak_<TAG>.tar.gz (a docker save, gzipped), outside the delivery bundle - the
+# platform ships no scanner. Needs internet (PyPI, the PyTorch CPU index, Hugging Face, GitHub).
 #   ./build-garak-image.sh TAG                 e.g. 0.17.1-1: garak 0.17.1, the image's first build
 #   ./build-garak-image.sh TAG --relock        resolve garak <TAG's version> and its dependencies afresh
 #                                              (a newer garak): rewrites requirements.lock
-# Then pin it: images.txt ([image-builder]) and modelScanner.image in values.yaml - or, on a running deployment,
-# import it in Templates > Images and choose it in the Model Library's scanner settings (an update without a release).
+# Then hook it up: Templates > Images > Model library > Import scanner (the archive) - or pin it for a deployment of
+# your own: modelScanner.image in values.yaml, the image in your registry.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
 tag="${1:?usage: build-garak-image.sh TAG [--relock]}"; relock="${2:-}"
@@ -66,5 +67,9 @@ print("scan check passed: garak %s, %d probe/detector results, TBSA %s, checks %
     r["garak"], len(r["evals"]), (r["tbsa"] or {}).get("score"), [(c["id"], c["status"]) for c in r["checks"]]))
 PY
 rm -rf "$out"
-"${top}/helm-chart/mirror-images.sh" store "$img"
+plugins="${top}/dist/plugins"; mkdir -p "$plugins"
+archive="${plugins}/$(echo "$img" | tr '/:' '__').tar.gz"
+docker save "$img" | gzip -1 >"${archive}.part" && mv "${archive}.part" "$archive"
+(cd "$plugins" && sha256sum "$(basename "$archive")" >"$(basename "$archive").sha256")
 echo "built $img; image ID $(docker image inspect --format '{{.Id}}' "$img")"
+echo "the plug-in archive: ${archive#"${top}/"} (Model library > Import scanner)"

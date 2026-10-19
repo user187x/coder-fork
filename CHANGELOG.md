@@ -2,9 +2,56 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.76` (fork `86382f86c`), workspace image `coder-workspace:1.9.3`, dataflow image
-`coder-workspace-dataflow:1.1.2`, AI image `coder-workspace-ai:2.0.0`, model scanner `coder-garak:0.17.1-2`, image
-registry `coder-registry:3.1.2-1`.
+Coder `2.0.0-platform.77` (fork `b679b7fda`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
+AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
+is a plug-in now (`dist/plugins/`, not in the bundle).
+
+* **The model scanner is a plug-in** (platform.77, `modelscan.py`, `safe.py`): garak is no longer pinned, bundled or
+  pushed (`modelScanner.image: ""`; its line left `images.txt` and the image-builder part). `build-garak-image.sh`
+  writes the archive to `dist/plugins/` (with its `.sha256`), and Model library > **Import scanner** hooks it up:
+  the archive uploaded (or an image reference chosen), imported, and named the scanner, after which new models wait
+  in the hold for their scan as before. Without it Coder runs as usual: models go straight into the library, marked
+  "Unscanned: no LLM scanner is hooked up", and the scanner panel's **Shown** switch hides the LLM scanning section
+  until an admin brings it back (**Show LLM scanning**). `chart_checks.py` keeps it so (no scanner pinned or
+  bundled).
+* **Delete any image** (platform.77, `imagebuilder.py`): Images' rows carry a delete button beside Download, confirmed
+  first, for every entry. The confirmation says what goes: a built or imported image with its registry versions; a
+  scan, the image itself untouched; the workspace template's own image, only its entry and report (the template, its
+  workspaces and the registry's copy stay), back when the platform deploys another workspace image
+  (`/builder/images/.tracked-dismissed`). Its page has the button too.
+* **What our images hold** (platform.77, `development/tools/image-contents.py`, GET `/api/images/contents`): the
+  images the fork builds (`images.txt`'s `ghcr.io/user187x/`) carry a **Coder fork** tag wherever they show - the
+  Images table, In use, On the nodes, an image's page - and open a tree of what each holds, read from the image as
+  built: its reference, pin, size, layers and where it is made; how it runs (user, entrypoint, environment, labels);
+  the programs we put in it with the version each reports; the workspace images' add-ons; every OS package (dpkg or
+  apk) and every Python environment's packages; every build step with what it added. A filter finds a package, a
+  variable or a step anywhere in it. **Coder fork images**, under the Images table, lists them all. The catalog
+  (`image-contents.json`, 8 images) ships with the platform service; run the tool after pinning a new image of ours,
+  and `chart_checks.py` checks it describes the images `images.txt` pins.
+* **Workspace settings, rebuilt** (platform.77, `site/src/pages/WorkspaceSettingsPage/`): one page in the look of the
+  design supplied for it (`workspace-settings.reference.html`) - a header (Workspaces / the workspace, the template version
+  with a copy button), a section list with the workspace At a glance (CPU, memory, GPU, disk, theme, as changed), and
+  five cards: General (the name, locked where the template disables renaming; the icon - Upload, Emoji or icon, its
+  uploaded icons in the picker; automatic updates), Resources (CPU and memory as tiles of the template's options, the
+  GPU switch, the home disk with Expand disk), Environment (the desktop theme as preview cards, the workspace image -
+  "Another image…" with its field - the start folder, and any other parameter of the template), Schedule (autostart
+  with its time, timezone, days and Weekdays / Every day / Clear; autostop) and Sharing (search, role, add; changes
+  apply at once, as before). One save bar, shown only while something is changed: General and the schedule save
+  through their own endpoints; changed build parameters take a new build ("Update and restart", asked first, or
+  "Update and start"). The validation, the template's rules (renaming, immutable and disabled parameters, the
+  allowed autostart days, the required active version) and the dynamic parameters' evaluation are kept. Its colours,
+  sizes and radii are tokens (`workspaceSettings.css`: the design's in the dark theme, the dashboard's palette in the
+  light one); buttons say pressed (`aria-pressed`), every control has its label and a focus ring, and smaller ones a
+  44px touch area. Narrow, the section list stacks above the cards and the tiles wrap.
+* **Who talks to whom, a page at a time** (platform.77, `ui-service.py`): Controls › Settings › Chat shows the latest
+  25 pairs, newest first, then pages (Showing 1 to 25 of N, page buttons); `GET /api/chat/pairs?offset=&limit=` gives
+  a page and the total (it gave the newest 200, and no more).
+* **A GPU parameter on every template** (the template): `gpus` is on UBUNTU and UBUNTU DATAFLOW too, disabled
+  (`styling`), so their settings show the GPU switch greyed; only UBUNTU OPENCODE's value reaches the pod
+  (`local.gpus`). The desktop theme's options read as the settings page shows them. A chart check keeps it so.
+* **Construction tape while a workspace starts** (platform.77): the progress bar is black and yellow stripes, moving.
+* **The animation switches stop an animated GIF background** (platform.77): with Moving background or Animated GIFs
+  off, a GIF background shows its first frame, still, like every other GIF on the dashboard.
 
 * **Cloud Drive share approvals reach the admins** (platform.76, `drivepeers.py`): a share waiting for an admin told
   nobody - admins found it only in Cloud Drive > Sharing. Every admin now gets an "Approve Cloud Drive share" chat

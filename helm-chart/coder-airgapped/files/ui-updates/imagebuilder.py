@@ -34,6 +34,8 @@ before building on it, or using it in an enclave.
     POST /__coder-ui/api/images/import {name, description, ref, username?, password?}   an image copied from a registry
     PUT  /__coder-ui/api/images/import-upload?name=&description=&file=   an image from a `docker save` / OCI archive
     GET  /__coder-ui/api/images/in-use                  the images workspaces run now, and the templates' own
+    GET  /__coder-ui/api/images/contents                what each image of ours holds (image-contents.json, written by
+                                                        development/tools/image-contents.py): the Coder fork's tree
     GET  /__coder-ui/api/images/on-nodes                every image the cluster's nodes hold (preloaded or pulled)
     POST /__coder-ui/api/images/scan {image}            scan any image: in the cluster's registry, or on a node that
                                                         holds it (no registry needed: air-gapped clusters, preloaded
@@ -2565,6 +2567,8 @@ def route(h, method, rest, query, user, editor, admin):
             return import_upload(h, q_, user) or True
         if rest == "/in-use" and method == "GET":
             return h.send_json(200, {"images": images_in_use()}) or True
+        if rest == "/contents" and method == "GET":
+            return h.send_json(200, image_contents()) or True
         if rest == "/on-nodes" and method == "GET":
             return h.send_json(200, {"images": images_on_nodes()}) or True
         if rest == "/scan" and method == "POST":
@@ -2579,7 +2583,7 @@ def route(h, method, rest, query, user, editor, admin):
         if not img:
             return h.send_json(404, {"error": "No image called '%s'." % image_id}) or True
         if img.get("tracked") and (
-                (sub == "" and method == "POST") or sub in ("/delete", "/build", "/s3", "/s3/backup", "/files/delete")
+                (sub == "" and method == "POST") or sub in ("/build", "/s3", "/s3/backup", "/files/delete")
                 or sub.startswith("/files/")):
             raise ValueError(TRACKED_NOTE % img["tracked"].get("image"))
         if img.get("imported") and (sub in ("/build", "/files/delete") or sub.startswith("/files/")):
@@ -2605,6 +2609,17 @@ def route(h, method, rest, query, user, editor, admin):
             desc = text(body.get("description"), 2000, "The description") if "description" in body else None
             STORE.save(image_id, user["username"], spec, desc)
             return h.send_json(200, detail(STORE.image(image_id))) or True
+        if sub == "/delete" and method == "POST" and img.get("tracked"):
+            # The workspace template's image: its entry and report go (the registry's copy stays, the base new images
+            # build on); it is not listed again until the platform deploys another workspace image.
+            need(editor)
+            if STORE.active_build(image_id):
+                raise ValueError("Wait for its scan to finish first.")
+            dismiss_tracked(img["tracked"].get("image"))
+            shutil.rmtree(image_dir(image_id), ignore_errors=True)
+            STORE.delete(image_id)
+            LOG(event="image-deleted", image=image_id, by=user["username"], tracked=img["tracked"].get("image"))
+            return h.send_json(200, {"ok": True}) or True
         if sub == "/delete" and method == "POST":
             need(editor)
             if STORE.active_build(image_id):
@@ -2700,7 +2715,7 @@ def _quiet(fn, *args):
 SCANNED_NOTE = ("This entry is a scan of %s as it is, not an image built or kept here: it only holds its report. "
                 "Import the image to build on it.")
 RESERVED_NAMES = {"security-data", "rescan-all", "settings", "apt-check", "apt-search", "apt-refresh", "lint", "format",
-                  "dockerfile", "import", "import-upload", "in-use", "on-nodes", "scan", TRACKED_ID}
+                  "dockerfile", "import", "import-upload", "in-use", "on-nodes", "scan", "contents", TRACKED_ID}
 
 IMPORTED_NOTE = ("This image was imported (%s), not built here: import a new version of it instead of building, or "
                  "build on it with New Image.")
@@ -2708,6 +2723,40 @@ IMPORTED_NOTE = ("This image was imported (%s), not built here: import a new ver
 TRACKED_NOTE = ("This is the image the workspace template runs (%s), listed so everyone can see its security and its "
                 "add-ons. It comes with the platform (development/workspace-image) and is not changed here: build on "
                 "it with New Image (the workspace image is the default base).")
+
+
+def _dismissed_file():
+    return os.path.join(FILES, "images", ".tracked-dismissed")
+
+
+def dismiss_tracked(image):
+    """An admin deleted the tracked entry of this workspace image: kept away until another one is deployed."""
+    os.makedirs(os.path.dirname(_dismissed_file()), exist_ok=True)
+    with open(_dismissed_file(), "w") as f:
+        f.write(image or "")
+
+
+def tracked_dismissed(image):
+    try:
+        with open(_dismissed_file()) as f:
+            return f.read().strip() == (image or "")
+    except OSError:
+        return False
+
+
+_contents = {}
+
+
+def image_contents():
+    """What each image of ours holds (image-contents.json beside this file, from development/tools/image-contents.py),
+    read once; {"images": {}} where it is missing."""
+    if "data" not in _contents:
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "image-contents.json")) as f:
+                _contents["data"] = json.load(f)
+        except (OSError, ValueError):
+            _contents["data"] = {"images": {}}
+    return _contents["data"]
 
 
 def sync_tracked():
@@ -2725,6 +2774,8 @@ def sync_tracked():
     description = ("The image the workspace template%s runs, as the platform deploys it: its security report and "
                    "its add-ons. Read-only here; new images build on it." % (
                        " " + WORKSPACE_TEMPLATE if WORKSPACE_TEMPLATE else ""))
+    if not img and tracked_dismissed(WORKSPACE_IMAGE):
+        return  # an admin deleted its entry: back with the next workspace image
     if not img:
         STORE.create(TRACKED_ID, description, dict(empty_spec(), tracked=tracked), "platform")
     elif img["spec"].get("tracked") != tracked or img["description"] != description:

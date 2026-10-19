@@ -6,7 +6,7 @@
 #   images/ui/             the user interface: Coder (the fork), the platform and announcement services, their databases
 #   images/workspaces/     the workspace templates' images
 #   images/cloud-drive/    the Cloud Drive's storage and CSI driver
-#   images/image-builder/  Templates > Images: BuildKit, the registry, the Model Library's scanner (garak)
+#   images/image-builder/  Templates > Images: BuildKit, the registry (garak, the Model Library's scanner, is a plug-in)
 #   images/cluster/        metrics-server
 #   images/prereqs/        CloudNativePG operator, Traefik (for prereqs/)
 #   images/rollback/       plain upstream Coder

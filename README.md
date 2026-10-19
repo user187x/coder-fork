@@ -239,12 +239,18 @@ The full feature list, with where each piece lives and how it is tested, is
   up to S3.
 - **Every image is scanned offline**, built ones and the workspace image the template runs (listed first, read-only,
   "In use by workspaces"). See [Image security](#image-security).
-- **Every model is scanned before it is used:** a model added to the model library waits in a hold (mounted nowhere)
-  until [garak](https://github.com/NVIDIA/garak) has probed it in a Job, offline (its detector models and probe data
-  in its image; llama.cpp serves the model), and its file is checked (no code in its chat template, nothing
-  appended); its grade (A-F, from garak's DEFCON levels) releases it, or an admin does. The report: every probe's
-  severity and OWASP LLM category, failing prompts and answers, garak's own files. A newer garak is a newer scanner
-  image, imported and chosen in the library.
+- **Every model scanned before it is used, with the LLM scanner plug-in:** once an admin hooks up the scanner (Model
+  library > Import scanner: the archive `build-garak-image.sh` writes to `dist/plugins/`, not part of the bundle), a
+  model added to the model library waits in a hold (mounted nowhere) until [garak](https://github.com/NVIDIA/garak)
+  has probed it in a Job, offline (its detector models and probe data in its image; llama.cpp serves the model), and
+  its file is checked (no code in its chat template, nothing appended); its grade (A-F, from garak's DEFCON levels)
+  releases it, or an admin does. The report: every probe's severity and OWASP LLM category, failing prompts and
+  answers, garak's own files. A newer garak is a newer scanner image, imported and chosen in the library. Without the
+  plug-in, models go straight in, marked unscanned, and the LLM scanning section can be hidden.
+- **Delete any image** in Images (confirmed first; the workspace template's own entry comes back with the next
+  workspace image), and see **what each of the Coder fork's images holds:** a "Coder fork" tag on them opens a tree
+  of their programs and versions, OS and Python packages, configuration and build steps, read from the images as
+  built (`image-contents.py`), with a filter over all of it.
 - **The base template is a prototype, its platform parts a decorator:** Create new template starts every template
   from UBUNTU (Desktop, File Browser and Terminal each in or out) with the template's own logic only; Coder injects
   the platform's sections (the certificate, Lock Down, the Cloud Drive, the metrics, code-server HA) into every
@@ -259,11 +265,13 @@ The full feature list, with where each piece lives and how it is tested, is
 - **HUD:** a live, sortable platform overview with graphs (users, workspaces, CPU, memory, GPU, top users,
   failures) and the Coder server's **System Uptime**; its totals on one line. The Controls menu shows the cluster's
   CPU, memory and network traffic (last 15 minutes) at a glance.
-- **Workspace settings** on one page of cards (General, Parameters, Schedule, Sharing).
+- **Workspace settings** on one page: General, Resources (CPU and memory tiles, the GPU, the home disk and Expand
+  disk), Environment (desktop theme, workspace image, start folder), Schedule and Sharing, with a section list, the
+  workspace at a glance, and one save bar that restarts the workspace only when its build parameters change.
 - **Three workspace templates:** UBUNTU (code-server), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow) and the AI
   workspace UBUNTU OPENCODE (the OpenCode agent on the workspace's own Unsloth Studio, its window on the desktop),
-  with a shared **model library** (GGUF, each model scanned with garak before workspaces have it) in Templates >
-  Images; the same workspace otherwise; everything offline.
+  with a shared **model library** (GGUF, each model scanned with garak before workspaces have it, once the scanner
+  plug-in is imported) in Templates > Images; the same workspace otherwise; everything offline.
 - **Health, monitoring and security posture** views; network and persistence maps.
 - **Banners:** classification banners (e.g. UNCLASSIFIED), and an announcement banner with:
   - its message on an LCD screen set into the banner, over a background image (uploaded or a preset; animated GIFs

@@ -535,9 +535,17 @@ deployment that has them they stay in Coder as they are until an admin deletes t
 
 ## The model library's security scan (garak)
 
-Every model added to the model library (Templates › Images › Model library: uploaded, or fetched from an address) is
-scanned with [garak](https://github.com/NVIDIA/garak), NVIDIA's LLM vulnerability scanner, **before any workspace can
-use it**. Until then it waits in a hold that is mounted nowhere (`library/quarantine/models/` of the Cloud Drive's
+**A plug-in:** the platform ships no scanner (`modelScanner.image: ""`; the 8 GB image is no part of the bundle), and
+nothing depends on one. Without it, models go straight into the library, unscanned, and Templates › Images › Model
+library says so - admins may hide that section. To hook it up, an admin chooses **Import scanner** there: the
+`docker save` archive `development/tools/build-garak-image.sh` writes to `dist/plugins/` (or an image already imported
+in the Images view, or a registry's). The platform checks it (an info Job reads its garak version, probes and
+profiles) and uses it from then on; **Back to none** unhooks it. A deployment of your own may pin it instead
+(`modelScanner.image`, the image in your registry).
+
+With a scanner hooked up, every model added to the model library (uploaded, or fetched from an address) is scanned
+with [garak](https://github.com/NVIDIA/garak), NVIDIA's LLM vulnerability scanner, **before any workspace can use
+it**. Until then it waits in a hold that is mounted nowhere (`library/quarantine/models/` of the Cloud Drive's
 bucket). A scan Job (`modelScanner.image`, `ghcr.io/user187x/coder-garak`: garak, its detector models and probe data,
 CPU PyTorch and llama.cpp's `llama-server`, all in the image - it needs no network) fetches the model from the
 platform service, checks the file (a well-formed GGUF; no code in its chat template - the Jinja escape of

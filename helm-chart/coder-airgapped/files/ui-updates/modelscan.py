@@ -12,13 +12,16 @@ moves into the library (library/models/: ~/models in the AI workspaces); others 
 anyway (recorded), rescans it or deletes it. Models already in the library are scanned too, where they are; an admin
 can hold a released model again.
 
-The scanner is the chart's image, or one an admin chooses: a newer build imported in Templates > Images (an update
-without a release of the platform); an info Job reads its versions and probes before it is used. garak's definitions -
+The scanner is a plug-in: the chart ships none (modelScanner.image ""), and until one is hooked up - an image an
+admin imports in the Model library (a docker save archive of development/tools/build-garak-image.sh, or one imported
+in Templates > Images), or the chart's when it names one - the gate is off: models go straight into the library,
+unscanned, and nothing else changes. An info Job reads a scanner's versions and probes before it is used; admins may
+hide the section while none is hooked up (settings "hidden"). garak's definitions -
 its probes, payloads, detectors and calibration - ship inside garak: a newer scanner image updates them. Where this
 service reaches PyPI (or the mirror in PYPI_URL), the newest garak release is shown.
 
   GET  /__coder-ui/api/models/scanner                       the scanner, its settings, the queue (anyone signed in)
-  POST /__coder-ui/api/models/scanner {profile?, releaseGrade?, image?}   admins (image "": the chart's)
+  POST /__coder-ui/api/models/scanner {profile?, releaseGrade?, image?, hidden?}   admins (image "": the chart's)
   POST /__coder-ui/api/models/scanner/rescan-all            admins: every model, with the scanner in use
   POST /__coder-ui/api/models/scan {name, profile?}         admins and template admins: (re)scan one
   POST /__coder-ui/api/models/cancel {name}
@@ -377,8 +380,8 @@ def sync(force=False):
 
 def added(kind, name, user, size):
     """safe.py's hook: a model is in the hold (uploaded or fetched). A released one of the name stays in the library,
-    with its report, until the new one is released."""
-    if kind != "models":
+    with its report, until the new one is released. No scanner hooked up: it went straight into the library."""
+    if kind != "models" or not enabled():
         return
     with _lock:
         _cancel_running(name, "replaced by a new upload")
@@ -405,8 +408,17 @@ def deleted(kind, name, held):
 
 
 def decorate(lib):
-    """The model library's listing with its scans: each released file's, and the held files."""
+    """The model library's listing with its scans: each released file's, and the held files. No scanner hooked up:
+    what waits in the hold from before (to release or delete), and that the gate is off."""
     if not enabled():
+        try:
+            held = _objects(HOLD_PREFIX)
+        except (OSError, RuntimeError, s3client.S3Error):
+            held = {}
+        names = {f["name"] for f in lib["files"]}
+        lib["held"] = sorted(({"name": n, "size": o["size"], "modified": o["modified"], "scan": None,
+                               "alsoReleased": n in names} for n, o in held.items()), key=lambda x: x["name"].lower())
+        lib["scanner"] = {"enabled": False, "hidden": bool(settings().get("hidden"))}
         return lib
     try:
         held = _objects(HOLD_PREFIX)
@@ -706,6 +718,8 @@ def _loop():
                 _watch()
                 _start_next()
                 _check_pypi()
+            elif safe.ENABLED and settings().get("candidate"):
+                _check_scanner()  # a scanner being hooked up (imported): its info Job
         except Exception as e:  # noqa: BLE001 - the gate keeps running; the next round tries again
             LOG(event="model-scan-loop-failed", error=str(e)[:300])
         time.sleep(LOOP_SECONDS)
@@ -812,7 +826,7 @@ def scanner_view(user):
                    for n, r in state()["models"].items()
                    if (r.get("scan") or {}).get("status") in ("starting", "fetching", "running")]
         return {
-            "enabled": enabled(), "canEdit": bool(IS_ADMIN and IS_ADMIN(user)),
+            "enabled": enabled(), "canEdit": bool(IS_ADMIN and IS_ADMIN(user)), "hidden": bool(s.get("hidden")),
             "image": img, "defaultImage": DEFAULT_IMAGE, "custom": bool(s.get("image")),
             "candidate": s.get("candidate"), "candidateError": s.get("candidateError"),
             "checking": bool(rec.get("job") and not info), "error": rec.get("error") if not info else None,
@@ -930,6 +944,10 @@ def _save_settings(body, user):
             if body["releaseGrade"] not in tuple(GRADES):
                 raise ValueError("A grade from A to F.")
             s["releaseGrade"] = body["releaseGrade"]
+        if "hidden" in body:
+            if not isinstance(body["hidden"], bool):
+                raise ValueError("hidden: true or false.")
+            s["hidden"] = body["hidden"]
         if "image" in body:
             img = str(body["image"] or "").strip()
             if not img or img == DEFAULT_IMAGE:
@@ -944,7 +962,7 @@ def _save_settings(body, user):
                     s.update(candidate=img, candidateError=None)
         save()
     LOG(event="model-scanner-settings", user=user["username"], **{k: body[k] for k in body
-                                                                   if k in ("profile", "releaseGrade", "image")})
+                                                                   if k in ("profile", "releaseGrade", "image", "hidden")})
 
 
 def _send_report(h, name):

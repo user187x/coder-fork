@@ -770,13 +770,27 @@ class PeerChatTest(unittest.TestCase):
         self.assertEqual(seen_by_ann, [])  # Bob is invisible; the admin was never seen
         self.assertEqual(seen_by_admin, {"ann": False, "bob": True})
 
+    def test_pairs_a_page_at_a_time_newest_first(self):
+        self.chat.put_settings({"peers": True}, "boss")
+        devs = [{"id": "dev-%02d" % i, "username": "dev%02d" % i, "name": ""} for i in range(30)]
+        for dev in devs:  # each writes to Bob once: 30 pairs, dev29's the newest
+            self.chat.send(dev, False, self.BOB, "hi")
+        first = self.chat.pairs()
+        self.assertEqual((len(first["pairs"]), first["total"]), (25, 30))
+        self.assertEqual({first["pairs"][0][s]["username"] for s in ("a", "b")}, {"bob", "dev29"})
+        rest = self.chat.pairs(25, 25)
+        self.assertEqual((len(rest["pairs"]), rest["total"]), (5, 30))
+        names = {p[s]["username"] for p in rest["pairs"] for s in ("a", "b")} - {"bob"}
+        self.assertEqual(names, {"dev00", "dev01", "dev02", "dev03", "dev04"})  # the oldest last
+
     def test_retention_purge_and_pairs(self):
         self.chat.put_settings({"peers": True}, "boss")
         self.chat.send(self.ANN, False, self.BOB, "a")
         self.chat.send(self.BOB, False, self.ANN, "b")
         self.chat.send(self.ADMIN, True, self.ANN, "c")
-        pairs = self.chat.pairs()
-        self.assertEqual(len(pairs), 1)  # developers only: the admin's conversation is not a pair
+        page = self.chat.pairs()
+        pairs = page["pairs"]
+        self.assertEqual((len(pairs), page["total"]), (1, 1))  # developers only: the admin's conversation is not a pair
         self.assertEqual({pairs[0]["a"]["username"], pairs[0]["b"]["username"]}, {"ann", "bob"})
         self.assertEqual(pairs[0]["messages"], 2)
         self.assertNotIn("text", str(pairs))
@@ -1177,6 +1191,7 @@ class TrackedWorkspaceImageTest(unittest.TestCase):
             mock.patch.object(ib, "start_rescan", side_effect=lambda image_id, user: self.rescans.append(image_id)),
             mock.patch.object(ib, "manifest", side_effect=lambda repo, ref: ({}, self.digest)),
             mock.patch.object(ib, "image_size", return_value=1234),
+            mock.patch.object(ib, "FILES", self.tmp),
         ]
         for p in patches:
             p.start()
@@ -1222,14 +1237,42 @@ class TrackedWorkspaceImageTest(unittest.TestCase):
         ib.sync_tracked()
         h = mock.MagicMock()
         user = {"username": "admin"}
-        for method, sub in (("POST", ""), ("POST", "/build"), ("POST", "/delete"), ("POST", "/s3"),
-                            ("PUT", "/files/deb/x.deb")):
+        for method, sub in (("POST", ""), ("POST", "/build"), ("POST", "/s3"), ("PUT", "/files/deb/x.deb")):
             with self.assertRaisesRegex(ValueError, "image the workspace template runs"):
                 ib.route(h, method, "/" + ib.TRACKED_ID + sub, "", user, True, True)
         self.assertIn(ib.TRACKED_ID, ib.RESERVED_NAMES)
         # as a base it is the workspace image itself
         self.assertEqual(ib.clean_spec({"base": {"kind": "image", "id": ib.TRACKED_ID}}, "mine")["base"],
                          {"kind": "workspace"})
+
+    def test_deleted_it_stays_away_until_another_workspace_image_is_deployed(self):
+        ib.sync_tracked()
+        h = mock.MagicMock()
+        with mock.patch.object(ib, "LOG", lambda **kw: None):
+            ib.route(h, "POST", "/" + ib.TRACKED_ID + "/delete", "", {"username": "dev"}, False, False)
+            self.assertEqual(h.send_json.call_args[0][0], 403)  # editors only
+            self.assertIsNotNone(ib.STORE.image(ib.TRACKED_ID))
+            ib.route(h, "POST", "/" + ib.TRACKED_ID + "/delete", "", {"username": "admin"}, True, True)
+        self.assertIsNone(ib.STORE.image(ib.TRACKED_ID))
+        ib.sync_tracked()
+        self.assertIsNone(ib.STORE.image(ib.TRACKED_ID))  # the same image: not listed again
+        self.deploy("1.8.3")
+        ib.sync_tracked()
+        self.assertEqual(ib.STORE.image(ib.TRACKED_ID)["pullRef"], "ghcr.io/user187x/coder-workspace:1.8.3")
+
+    def test_contents_of_our_images(self):
+        h = mock.MagicMock()
+        catalog = {"images": {"ghcr.io/user187x/coder-workspace:1.8.2": {"repository": "coder-workspace"}}}
+        with mock.patch.dict(ib._contents, {"data": catalog}):
+            ib.route(h, "GET", "/contents", "", {"username": "dev"}, False, False)
+        h.send_json.assert_called_with(200, catalog)
+        self.assertIn("contents", ib.RESERVED_NAMES)
+        # the file shipped with the service: our images, each with its packages and build steps
+        ib._contents.clear()
+        shipped = ib.image_contents()["images"]
+        self.assertTrue(shipped and all(ref.startswith("ghcr.io/user187x/") for ref in shipped))
+        for i in shipped.values():
+            self.assertTrue(i["steps"] and i["digest"].startswith("sha256:"), i["ref"])
 
     def test_addons_read_from_the_image(self):
         import json
@@ -2189,7 +2232,8 @@ class ModelScanTest(unittest.TestCase):
         self.jobs = {}
         self.ms.KUBE = mock.Mock(call=self.kube)
         self.ms.IS_ADMIN = lambda user: "owner" in user["roles"]
-        self.safe.LIBRARY_HOOKS.update(added=self.ms.added, deleted=self.ms.deleted, decorate=self.ms.decorate)
+        self.safe.LIBRARY_HOOKS.update(added=self.ms.added, deleted=self.ms.deleted, decorate=self.ms.decorate,
+                                       gate=self.ms.enabled)
 
     def kube(self, method, path, body=None):
         if method == "POST" and path.endswith("/jobs"):
@@ -2281,6 +2325,36 @@ class ModelScanTest(unittest.TestCase):
         h.send_json = lambda status, body: sent.append((status, body))
         self.safe.library_upload("models", h, {"username": "admin"}, name)
         return sent[0]
+
+    def test_no_scanner_hooked_up_models_go_straight_in_and_one_imported_hooks_it_up(self):
+        """The scanner is a plug-in: with none (the chart's image "" and none chosen) a model goes straight into the
+        library, unscanned, and nothing is queued; admins may hide the section; an imported scanner is checked by its
+        info Job, then the gate is on again and new models wait in the hold."""
+        self.ms.DEFAULT_IMAGE = ""
+        status, body = self.upload("free.gguf")
+        self.assertEqual((status, body["held"]), (200, False))
+        self.assertIn("library/models/free.gguf", self.s3.objects)
+        self.assertNotIn("free.gguf", self.ms.state()["models"])
+        lib = self.safe.library("models", {"id": "u", "username": "admin", "roles": ["owner"]})
+        self.assertEqual(lib["scanner"], {"enabled": False, "hidden": False})
+        self.assertEqual([f["name"] for f in lib["files"]], ["free.gguf"])
+        self.assertEqual(self.api("POST", "/__coder-ui/api/models/scanner", {"hidden": True})["status"], 200)
+        view = self.api("GET", "/__coder-ui/api/models/scanner")["body"]
+        self.assertEqual((view["enabled"], view["hidden"]), (False, True))
+        # an imported scanner: checked first (its info Job runs although none is hooked up), then hooked up
+        self.api("POST", "/__coder-ui/api/models/scanner", {"image": "registry.local/images/coder-garak:0.17.1-2"})
+        with mock.patch.object(self.ms.time, "sleep", side_effect=StopIteration):
+            with self.assertRaises(StopIteration):
+                self.ms._loop()
+        r = self.internal("POST", "/__coder-ui/internal/model-scans/%s/info" % self.token_of("info"),
+                          {"garak": "0.17.1", "llamaCpp": {"build": "11717"},
+                           "profiles": {"quick": {"title": "Quick", "spec": "tier:1", "cap": 10, "hours": 4}},
+                           "probes": []})
+        self.assertEqual(r["status"], 200)
+        self.assertTrue(self.ms.enabled())
+        status, body = self.upload("held.gguf")
+        self.assertEqual((status, body["held"]), (200, True))
+        self.assertIn("library/quarantine/models/held.gguf", self.s3.objects)
 
     def test_a_model_uploaded_waits_in_the_hold_until_its_scan_releases_it(self):
         status, body = self.upload("tiny.gguf")
