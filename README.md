@@ -268,6 +268,8 @@ The full feature list, with where each piece lives and how it is tested, is
 - **Workspace settings** on one page: General, Resources (CPU and memory tiles, the GPU, the home disk and Expand
   disk), Environment (desktop theme, workspace image, start folder), Schedule and Sharing, with a section list, the
   workspace at a glance, and one save bar that restarts the workspace only when its build parameters change.
+  **Template settings** in the same look: one page of cards (General, Operations, Port sharing, Deprecate, Schedule,
+  Variables, Permissions, Parameters) with one save bar.
 - **Three workspace templates:** UBUNTU (code-server), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow) and the AI
   workspace UBUNTU OPENCODE (the OpenCode agent on the workspace's own Unsloth Studio, its window on the desktop),
   with a shared **model library** (GGUF, each model scanned with garak before workspaces have it, once the scanner

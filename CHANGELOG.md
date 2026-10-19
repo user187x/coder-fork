@@ -2,10 +2,21 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.78` (fork `ffd388ce4`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
+Coder `2.0.0-platform.79` (fork `7aadca175`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.2`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **Template settings in the workspace settings page's look** (platform.79, `site/src/pages/TemplateSettingsPage/`):
+  one page instead of five - a header (Templates / the template, its active version with a copy button), a section
+  list with the template At a glance (version, status, autostop, port sharing, active users), and cards: General
+  (name, display name, description, icon), Operations (the four switches), Port sharing (the maximum level, CORS),
+  Deprecate, Schedule (autostop, autostart with its days, dormancy), Variables, Permissions and Parameters. One save
+  bar, shown while something is changed: the template's own settings in one update, then the schedule (still asking
+  first when a dormancy or deletion threshold affects workspaces within a week), then changed variables as a new
+  version made the active one ("Save and publish"). Permissions and Parameters act at once, as before. The validation,
+  the unit conversions and the entitlement rules are the former pages'; their addresses (`settings/schedule`, ...)
+  open the page at their card. Both settings pages share their tokens, controls, header, section list and save bar
+  (`modules/platform/settingsPage/`). A variable field no longer takes the focus (the page scrolled to the last one).
 * **Fixed: Materialized in a template's Source Code view** (platform.78, `coderd/templatedecorator`): it said "The
   template decorator's sections cannot be read" since platform.74 - the decorator took a for expression's own name
   (`[for p in ... : p.claim]`, the shared Cloud Drives' volumes) for a resource outside the platform's sections, and
