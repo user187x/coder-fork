@@ -500,7 +500,29 @@ Both are small, write-light and indexed by `replica_id`. Nothing in `public` cha
    restarted in place, could win the lapsed lease back as a fresh standby: since platform.102 the longest-running
    ready standby takes it first (anyone after one more lease), so a crash-looping pod cannot keep retaking it
    (measured: the senior standby took over, back after 13.9 s).
-5. [ ] Phase 3:
+5. [ ] Phase 3. **Amended 2026-10-20 (the owner's choice): the platform runs Coder's open-source (AGPL) build**
+   (`CODER_BUILD_AGPL=1`, platform.103), so several Coder replicas run with no licence gate. The unlicensed Enterprise
+   binary would show admins a permanent error ("multiple replicas but high availability is an Enterprise feature. You
+   will be unable to connect to workspaces"), which we may not hide. The build loses little:
+   - the Share dialog's workspace-sharing settings call and the per-template notification method (both Enterprise
+     routes; the dashboard falls back to the organization's setting and shows the method read-only);
+   - audit and connection-log rows (nothing reads them);
+   - 90-day dormancy;
+   - adding a licence ever.
+
+   With no Enterprise code in the image, "Precedence" below simplifies: coderd's `Options.TailnetCoordinator` takes
+   the Mesh Coordinator directly in `activeActive`, with no factory needed. The mesh is built by **wrapping** the
+   Community coordinator through its public API. Coder's tailnet code is not modified.
+   - The replica that owns a tunnel's **destination** runs it. For a remote source it keeps a *proxy* session: an
+     ordinary `Coordinate` call under the source's id, trusted, fed by the source's replica.
+   - The source's replica forwards the source's requests for remote destinations to the owner (`UpdateSelf`,
+     `AddTunnel`, `RemoveTunnel`, `ReadyForHandshake`, `Disconnect`). It merges the proxy's responses into the
+     source's stream.
+   - Moves, deaths and lost streams turn into `LOST` peer updates, which Coder's clients already retry on.
+   - Replica streams are WebSockets on the health port, which no Service exposes. They are authenticated by an HMAC
+     of the mesh key (in `platform_ha`, created once). The key itself never travels; node data is public keys and
+     endpoints, and the data plane is WireGuard. The DERP servers take the same mesh key.
+   - `Node(id)` (only the agent's DERP latency in the API) answers for local peers only.
    - `meshcoord`, the `NewCoordinator` factory, `derpcell`, and the `DERPMap()` composition;
    - drain;
    - the conformance, chaos and scale tests.

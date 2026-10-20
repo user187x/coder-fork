@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.44.0 – 2026-10-20
+
+Coder `2.0.0-platform.103` (fork `365fa0db2`): **the open-source (AGPL) build of Coder** (Platform HA phase 3, step 1;
+the owner's choice). The workspace images are 1.43.1's.
+
+* **No Enterprise code in the image**, so no licence gate. The platform's own active/active high availability (next)
+  can run several Coder replicas without the unlicensed Enterprise binary's permanent error ("multiple replicas but
+  high availability is an Enterprise feature"), which may not be hidden. `coder version` says `Coder (AGPL)`.
+* **What changes in the dashboard** (where the Enterprise binary answered unlicensed and the open-source one has no
+  route):
+  * Workspace sharing follows the organization's own setting (everyone by default), and the Share dialog and Sharing
+    card work through the open-source ACL routes.
+  * A notification template's delivery method shows read-only (its default).
+* **Also gone:** audit and connection-log rows (nothing read them), 90-day dormancy, and adding a licence.
+* **Live:** the open-source checks 11/11 (sharing a workspace with a member, the Sharing page, the notification events,
+  no licence error); HA 15/15 (a crash back after 9.4 s, a rolling restart 1.9 s), Keycloak, the banner, the logo.
+
 ## 1.43.1 – 2026-10-20
 
 Coder `2.0.0-platform.102` and every image as 1.43.0's: a chart and documentation release (found installing plain Helm
