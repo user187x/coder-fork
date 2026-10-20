@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the workspace image of the ubuntu-dataflow template, ghcr.io/user187x/coder-workspace-dataflow:<TAG>
-# (../workspace-image-dataflow: the ubuntu-vnc-desktop image + Apache NiFi + Apache Airflow), and checks that NiFi
+# (../workspace-image-dataflow: the DEFAULT template's image + Apache NiFi + Apache Airflow), and checks that NiFi
 # and Airflow start and answer with no network at all. NiFi's archive is downloaded once (kept in
 # ../workspace-image-dataflow/nifi-<version>-bin.zip, not in git) and checked against Apache's SHA-512; Airflow is
 # pinned with Airflow's own constraints for the image's Python.

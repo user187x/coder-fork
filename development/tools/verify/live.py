@@ -2,7 +2,7 @@
 only, so it also runs in a pod inside an air-gapped cluster).
 
   python3 live.py --url https://coder.example --ca ca.crt [--admin-email E --admin-password P]
-                  [--template ubuntu-vnc-desktop] [--keep] [--jsonl out.jsonl]
+                  [--template default] [--keep] [--jsonl out.jsonl]
 
 Creates a throwaway user (verify-user-<n>) and workspace (verify-<n>), checks them end to end, and deletes them
 (--keep leaves them). Each check is one JSON line in --jsonl ({suite, name, ok, detail, seconds}); report.py turns
@@ -139,7 +139,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True); ap.add_argument("--ca")
     ap.add_argument("--admin-email", default="admin@admin.com"); ap.add_argument("--admin-password", default="admin")
-    ap.add_argument("--template", default="ubuntu-vnc-desktop"); ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--template", default="default"); ap.add_argument("--keep", action="store_true")
     ap.add_argument("--jsonl"); ap.add_argument("--build-timeout", type=int, default=900)
     a = ap.parse_args()
     OUT = open(a.jsonl, "a") if a.jsonl else None

@@ -56,7 +56,7 @@ variable "cluster_admin_roles" {
   default     = "owner"
 }
 
-# Which apps the workspace has: "developer" (ubuntu-vnc-desktop: code-server), "dataflow" (ubuntu-dataflow:
+# Which apps the workspace has: "developer" (default, DEFAULT: code-server), "dataflow" (ubuntu-dataflow:
 # Apache NiFi, Apache Airflow), or "opencode" (ubuntu-opencode, on the AI workspace image: the OpenCode agent,
 # code-server; the image's Unsloth serving its models). Everything else is the same. The chart pushes this template
 # once per set (templates/job.yaml).

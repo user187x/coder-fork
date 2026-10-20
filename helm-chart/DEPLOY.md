@@ -99,7 +99,7 @@ Coder that it can be taken off again:
 | | Chart (`charts/`) | What it installs |
 |---|---|---|
 | 1 | `coder-airgapped-base-<version>.tgz` | The Coder installation: the upstream Coder chart running **upstream Coder** (at the fork's base, with a Terraform provider mirror), its CloudNativePG database and its first owner |
-| 2 | `coder-airgapped-layer-<version>.tgz` | The customization layer: the platform service, the announcement banner, the ubuntu-vnc-desktop template and its icons, the image builder, metrics-server, admins' kubectl |
+| 2 | `coder-airgapped-layer-<version>.tgz` | The customization layer: the platform service, the announcement banner, the DEFAULT template and its icons, the image builder, metrics-server, admins' kubectl |
 | 3 | `argocd/coder-decorated-application.yaml` | The Application with both (`argocd/coder-plain-application.yaml`: the base alone) |
 | 4 | `./make --argocd` | Pushes everything to Harbor and deploys it with Argo CD (below) |
 
@@ -701,7 +701,7 @@ the last 50 runs. A database outside the cluster (no CloudNativePG primary) is l
 
 ## Templates: the base template and the decorator
 
-The UBUNTU template (`charts/coder-workspace/files/main.tf`, one file: the certificate's install, Lock Down's start
+The DEFAULT template (`charts/coder-workspace/files/main.tf`, one file: the certificate's install, Lock Down's start
 mode in `lockdown.sh`) is the platform's base template, the prototype of every new one. Its platform parts are marked
 sections - `# platform:begin certificates`, `lockdown`, `cloud-drive`, `metrics`, `code-server-ha` ... `# platform:end` -
 and Coder's **template decorator** (the fork's `coderd/templatedecorator`) injects each into every template that lacks

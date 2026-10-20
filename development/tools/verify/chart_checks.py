@@ -477,7 +477,7 @@ def main():
     scripts = sorted(glob.glob(os.path.join(tf_dir, "scripts", "*.sh")))
     tf = {n: open(os.path.join(tf_dir, n)).read() for n in ("main.tf", "agent-audit.tf")}
     refs = sorted({m for m in re.findall(r'file\("\$\{path\.module\}/scripts/([^"]+)"', tf["main.tf"])})
-    # the base template (the UBUNTU prototype): one main.tf, its platform sections marked for the template decorator
+    # the base template (the DEFAULT prototype): one main.tf, its platform sections marked for the template decorator
     check("template: consolidated - no certificates.tf, no lockdown-start.sh (lockdown.sh's start mode)",
           not os.path.exists(os.path.join(tf_dir, "certificates.tf"))
           and not os.path.exists(os.path.join(tf_dir, "scripts", "lockdown-start.sh"))

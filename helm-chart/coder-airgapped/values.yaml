@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.86 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.87 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.86-airgap
+      tag: 2.0.0-platform.87-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -145,7 +145,7 @@ coder:
     # template.name), so each keeps what the platform builds into it: the Cloud Drive, Lock Down, the certificate, the
     # metrics. The fork's own setting, as the two above.
     - name: CODER_TEMPLATE_BUILDER_BASE_TEMPLATE
-      value: '{{ if include "platform.decorated" . }}{{ (index .Values "coder-workspace").template.name | default "ubuntu-vnc-desktop" }}{{ end }}'
+      value: '{{ if include "platform.decorated" . }}{{ (index .Values "coder-workspace").template.name | default "default" }}{{ end }}'
     - name: CODER_BOOTSTRAP_INITIAL_USER_PASSWORD
       valueFrom:
         secretKeyRef:
@@ -454,7 +454,7 @@ uiUpdates:
   # (+ its database) and regctl (development/image-tools), which the Images view lints, formats and scans with -
   # tagged with the code's hash (development/tools/build-ui-image.sh builds and pins it). The chart carries no code:
   # Helm keeps each release in a Secret of at most 1 MiB.
-  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-42d582b41750") }}'
+  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-dfa41b5e8314") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'
@@ -529,7 +529,7 @@ coder-banner:
     message: ""
 
 # ---------------------------------------------------------------------------------------------------------------
-# Workspace template ubuntu-vnc-desktop + /__icons/ server (Helm release coder/coder-workspace).
+# Workspace template DEFAULT (default) + /__icons/ server (Helm release coder/coder-workspace).
 # ---------------------------------------------------------------------------------------------------------------
 coder-workspace:
   enabled: true
@@ -559,14 +559,14 @@ coder-workspace:
     tlsCa: '{{ .Values.global.secretNames.tlsCa }}'
     initAuth: '{{ .Values.global.secretNames.initAuth }}'
   template:
-    name: ubuntu-vnc-desktop
-    displayName: UBUNTU      # where the template has none (one set in the dashboard is kept)
+    name: default
+    displayName: DEFAULT     # where the template has none (one set in the dashboard is kept)
     icon: /icon/ubuntu.svg
   # The same workspace with Apache NiFi and Apache Airflow in place of code-server, on its own image.
   dataflowTemplate:
     enabled: true
     name: ubuntu-dataflow
-    displayName: UBUNTU DATAFLOW
+    displayName: DATAFLOW
     icon: /icon/ubuntu.svg
   dataflowImage: '{{ include "platform.image" (list . "ghcr.io/user187x/coder-workspace-dataflow:1.1.3") }}'
   # The AI template: OpenCode on the workspace's Unsloth server, on the AI workspace image.

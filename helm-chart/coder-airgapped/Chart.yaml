@@ -4,11 +4,11 @@ description: >-
   The forked Coder platform exactly as it runs on the reference cluster (minikube, namespace coder, captured
   2026-10-09): Coder 2.37.3 chart with the ghcr.io/user187x/coder-platform image, its CloudNativePG database,
   the coder-banner announcement service, the coder-ui-updates platform service (+ its log buffer database),
-  the ubuntu-vnc-desktop workspace template and its icon server. Every dependency is vendored in charts/,
+  the DEFAULT workspace template and its icon server. Every dependency is vendored in charts/,
   so the chart installs with no network access.
 type: application
 version: 1.39.1
-appVersion: "2.0.0-platform.86"
+appVersion: "2.0.0-platform.87"
 kubeVersion: ">=1.27.0-0"
 keywords:
   - coder

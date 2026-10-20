@@ -171,7 +171,7 @@ desc = {
             "global.decorator.layer: true here, and Coder runs the fork's image).",
     "layer": "The coder-airgapped customization layer, decorating coder-airgapped-base in the same Argo CD "
              "Application: the coder-ui-updates platform service, the coder-banner announcement service, the "
-             "ubuntu-vnc-desktop workspace template and its icons, the image builder, metrics-server and admins' "
+             "DEFAULT workspace template and its icons, the image builder, metrics-server and admins' "
              "cluster access. Remove it (and set the base's global.decorator.layer to false) to go back to plain Coder.",
 }[part]
 s = open(path).read()

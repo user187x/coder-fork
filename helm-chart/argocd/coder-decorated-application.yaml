@@ -4,7 +4,7 @@
 #   source 1  coder-airgapped-base   the Coder installation: plain Coder (upstream, at the fork's base), its
 #                                    CloudNativePG database and its first owner
 #   source 2  coder-airgapped-layer  the customization layer: the platform service (HUD, Health, quotas, Lock Down,
-#                                    Images, ...), the announcement banner, the ubuntu-vnc-desktop workspace template
+#                                    Images, ...), the announcement banner, the DEFAULT workspace template
 #                                    and its icons, the image builder, metrics-server, admins' kubectl
 #
 # A decorator: the layer adds to Coder without changing its installation. Its one hook into the base is
@@ -160,7 +160,7 @@ spec:
         coder-workspace:
           storageClass: gp3                         # CHANGE-ME: workspaces' home volumes (new ones)
           template:
-            name: ubuntu-vnc-desktop
+            name: default                           # DEFAULT (it took over ubuntu-vnc-desktop)
 
   destination:
     server: https://kubernetes.default.svc

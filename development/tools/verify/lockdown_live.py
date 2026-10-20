@@ -4,7 +4,7 @@ own user trying to undo it); every mode comes back after a restart; Freeze pause
 snapshot holds the disk as it was, and lifting it resumes what was paused. Needs kubectl on the deployment's cluster.
 
   python3 lockdown_live.py --url https://coder.example.com [--ca ca.crt] [--admin-email ... --admin-password ...]
-      [--template ubuntu-vnc-desktop] [--registry-url http://coder-image-registry.coder.svc:5000/v2/]
+      [--template default] [--registry-url http://coder-image-registry.coder.svc:5000/v2/]
 
 The network probe is a service inside the cluster (the image builder's registry): Lock Down must cut that too.
 Exit status 1 when a check fails."""
@@ -15,7 +15,7 @@ from live import pty_echo  # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("--url", required=True); ap.add_argument("--ca")
 ap.add_argument("--admin-email", default="admin@admin.com"); ap.add_argument("--admin-password", default="admin")
-ap.add_argument("--template", default="ubuntu-vnc-desktop"); ap.add_argument("--name", default="verify-lockdown")
+ap.add_argument("--template", default="default"); ap.add_argument("--name", default="verify-lockdown")
 ap.add_argument("--registry-url", default="http://coder-image-registry.coder.svc:5000/v2/")
 ARGS = ap.parse_args()
 U = ARGS.url.rstrip("/")

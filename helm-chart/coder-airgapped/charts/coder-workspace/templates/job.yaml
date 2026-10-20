@@ -1,11 +1,14 @@
 {{- include "coder-workspace.platform.values" . -}}
 {{- $url := .Values.coder.internalUrl | default (required "CODER_URL must be provided!" .Values.coder.url) }}
-{{- /* The templates this chart pushes, each by its own Job: ubuntu-vnc-desktop, (dataflowTemplate) the same with
+{{- /* The templates this chart pushes, each by its own Job: default (DEFAULT), (dataflowTemplate) the same with
 Apache NiFi and Apache Airflow in place of code-server, on its own image, and (aiTemplates) ubuntu-opencode on the AI
 workspace image. Each push's message is its own: the login step finds a template renamed in the dashboard by it. A
-template a set replaces (a job's "replaces": none now) is taken over: renamed, with its workspaces and history. */}}
+template a job replaces (its "replaces") is taken over: renamed, with its workspaces and history - default takes over
+ubuntu-vnc-desktop (UBUNTU), its name before. */}}
 {{- $jobs := list (dict "suffix" "" "template" .Values.template "appSet" "developer" "image" ""
-    "message" (printf "Deployed via Helm release %s" .Release.Name)) }}
+    "message" (printf "Deployed via Helm release %s" .Release.Name)
+    "replaces" (dict "name" "ubuntu-vnc-desktop" "message" (printf "Deployed via Helm release %s" .Release.Name)
+                     "displayName" "UBUNTU" "icon" "/icon/ubuntu.svg")) }}
 {{- if .Values.dataflowTemplate.enabled }}
 {{- $jobs = append $jobs (dict "suffix" "-dataflow" "template" .Values.dataflowTemplate "appSet" "dataflow"
     "image" .Values.dataflowImage "message" (printf "Deployed via Helm release %s (dataflow)" .Release.Name)) }}

@@ -1,4 +1,4 @@
-# The workspace image of the ubuntu-dataflow template: the ubuntu-vnc-desktop image (../workspace-image) and
+# The workspace image of the ubuntu-dataflow template: the DEFAULT template's image (../workspace-image) and
 #   - Apache NiFi (/opt/nifi, its NARs unpacked here, read-only: each workspace keeps only its own conf, flows,
 #     repositories and logs in ~/.nifi) with a Java 21 runtime; NiFi learns the app's path from the proxy headers
 #     the cluster's Gateway adds (the template's HTTPRoute);

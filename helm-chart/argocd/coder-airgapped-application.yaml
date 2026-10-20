@@ -117,7 +117,7 @@ spec:
         coder-workspace:
           storageClass: gp3                         # CHANGE-ME: workspaces' home volumes (new ones)
           template:
-            name: ubuntu-vnc-desktop
+            name: default                           # DEFAULT (it took over ubuntu-vnc-desktop)
 
         uiUpdates:
           adminRoles: owner

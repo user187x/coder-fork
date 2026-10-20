@@ -63,7 +63,7 @@ for (const p of paths) {
 }
 check("every dashboard page loads", failed.length === 0, failed.join("; ") || `${paths.length} pages`);
 
-const tpl = args.template ?? "ubuntu-vnc-desktop";
+const tpl = args.template ?? "default";
 await page.goto(`${URL_}/templates/${tpl}/overview`);
 await page.locator("#readme").waitFor({ timeout: 30000 }).catch(() => {});
 const order = await page.evaluate(() => {

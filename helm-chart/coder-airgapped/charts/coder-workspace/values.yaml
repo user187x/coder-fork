@@ -30,10 +30,10 @@ secrets:
   initAuth: coder-init-auth  # keys email, password: the push Job's sign-in when there is no token Secret
 
 template:
-  name: "ubuntu-vnc-desktop"      # the template's name (its URL: /templates/<name>); a rename in the dashboard is followed
+  name: "default"                 # the template's name (its URL: /templates/<name>); a rename in the dashboard is followed
   # Shown in the dashboard instead of the name, and its icon (one of Coder's, /icon/*.svg). Set when the template has
   # none: on a new install, or on a template that never had one. A display name or icon set in the dashboard is kept.
-  displayName: "UBUNTU"
+  displayName: "DEFAULT"
   icon: "/icon/ubuntu.svg"
 
 # A second template: the same workspace with Apache NiFi and Apache Airflow in place of code-server
@@ -42,7 +42,7 @@ template:
 dataflowTemplate:
   enabled: false
   name: "ubuntu-dataflow"
-  displayName: "UBUNTU DATAFLOW"
+  displayName: "DATAFLOW"
   icon: "/icon/ubuntu.svg"
 # Its image: the workspace image + NiFi, a Java runtime and Airflow.
 dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.1.3"

@@ -83,7 +83,7 @@ the fork's Coder image and the two charts: everything else the install uses is i
 
 Images that changed since ${since:-the previous release}:
 ${changed:-    (none listed)}
-This update carries Coder's. The ubuntu-dataflow template (UBUNTU DATAFLOW: Apache NiFi and Apache Airflow in the
+This update carries Coder's. The ubuntu-dataflow template (DATAFLOW: Apache NiFi and Apache Airflow in the
 workspace) runs on ${dataflow}, which is not in it: the helper turns that template off
 (coder-workspace.dataflowTemplate.enabled: false) unless you give it the image (--dataflow).${dataflow_note}
 The AI template (UBUNTU OPENCODE: OpenCode on the workspace's Unsloth server) runs on ${ai}, not in it either: the
@@ -105,7 +105,7 @@ in to your registry, as for the install - with its CA if it has a private one), 
               charts to the Application's chart repository (its repoURL)
   --apply     sets both sources' targetRevision to ${version} (and the dataflow and AI templates off), keeps your file as
               <file>.<time>.bak, kubectl apply -f <file>, and asks Argo CD to refresh
-  --dataflow keep | <image>   keep UBUNTU DATAFLOW on: its image is in your registry already
+  --dataflow keep | <image>   keep DATAFLOW on: its image is in your registry already
               (<registry>/${dataflow#*/}), or runs from <image>
   --ai keep | <image>         keep the AI template on: its image is in your registry already
               (<registry>/${ai#*/}), or runs from <image>

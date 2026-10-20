@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the workspace image of the AI template (ubuntu-opencode),
-# ghcr.io/user187x/coder-workspace-ai:<TAG> (../workspace-image-ai: the ubuntu-vnc-desktop image + Unsloth Studio +
+# ghcr.io/user187x/coder-workspace-ai:<TAG> (../workspace-image-ai: the DEFAULT template's image + Unsloth Studio +
 # OpenCode), and checks with no network at all that Unsloth's app starts on a desktop and its server answers, that a
 # workspace's ~/.unsloth only links to the image's install, and that OpenCode runs on it. The Unsloth desktop app is
 # the AppImage kept untracked at the repository's root as unsloth.AppImage (or UNSLOTH_APPIMAGE=<file>), checked against

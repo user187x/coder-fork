@@ -124,7 +124,7 @@ The installing machine needs `docker`, `helm` and `kubectl` (`minikube` for Mini
 |---|---|
 | Coder server and dashboard | the fork, [`user187x/coder`](https://github.com/user187x/coder) ([`development/coder-fork/FORK.md`](development/coder-fork/FORK.md)) |
 | Platform service `coder-ui-updates` | [`helm-chart/coder-airgapped/files/ui-updates/`](helm-chart/coder-airgapped/files/ui-updates/) (Python, standard library only) |
-| Workspace template **UBUNTU** (`ubuntu-vnc-desktop`) | [`charts/coder-workspace/files/`](helm-chart/coder-airgapped/charts/coder-workspace/files/): `main.tf` and its scripts in `scripts/` |
+| Workspace template **DEFAULT** (`default`) | [`charts/coder-workspace/files/`](helm-chart/coder-airgapped/charts/coder-workspace/files/): `main.tf` and its scripts in `scripts/` |
 | Workspace image | [`development/workspace-image/`](development/workspace-image/) |
 | The chart, installers, images list | [`helm-chart/`](helm-chart/), the deliverable and source of truth |
 
@@ -206,7 +206,7 @@ The full feature list, with where each piece lives and how it is tested, is
 
 ### The workspace template and image
 
-- **UBUNTU** (`ubuntu-vnc-desktop`, with the Ubuntu icon):
+- **DEFAULT** (`default`, with the Ubuntu icon):
   - an XFCE desktop in the browser (TigerVNC + noVNC);
   - Firefox (Mozilla's build, with offline policies);
   - code-server and File Browser (FileBrowser Quantum);
@@ -223,9 +223,12 @@ The full feature list, with where each piece lives and how it is tested, is
 
 ### Templates and the image builder
 
-- **Template Overview** with its resources, Details (Coder's insights) and README; Source Code with versions (squash
-  ranges, Promote, Delete - not the active one or one a workspace runs); Export as ZIP with everything the template is
-  made of: its Terraform, scripts and icons. Icons are an emoji, one of the library's, or an image uploaded from the
+- **A template's page is its Source Code** (no Overview, no tabs): the apps a workspace of it gets at the top, then its
+  files with versions (squash ranges, Promote, Delete - not the active one or one a workspace runs); members land on
+  New workspace. Each user's latency and activity (the last seven days, every template) are on the Accounts table. The
+  Templates table's **Access** menu names who may see and use a template (none: everyone; template admins always may):
+  the platform's own list, enforced by the fork - Coder's template permissions are Premium. Export as ZIP with
+  everything the template is made of: its Terraform, scripts and icons. Icons are an emoji, one of the library's, or an image uploaded from the
   icon field's menu; admins rename the base template in Create new template.
 - **Workspace image, chosen from a list:** the template's image (it follows the template), the images built or
   imported in Templates › Images, or another one entered with guidance - a workspace whose image went away is offered
@@ -259,7 +262,7 @@ The full feature list, with where each piece lives and how it is tested, is
   of their programs and versions, OS and Python packages, configuration and build steps, read from the images as
   built (`image-contents.py`), with a filter over all of it.
 - **The base template is a prototype, its platform parts a decorator:** Create new template starts every template
-  from UBUNTU (Desktop, File Browser and Terminal each in or out, and any of seven modules: Git Clone, Dotfiles,
+  from DEFAULT (Desktop, File Browser and Terminal each in or out, and any of seven modules: Git Clone, Dotfiles,
   Personalize, File Browser, Git Config, code-server, VS Code Desktop) with the template's own logic only; Coder injects
   the platform's sections (the certificate, Lock Down, the Cloud Drive, the metrics, code-server HA) into every
   template when it is built. Source Code shows the code and, beside it, the **Materialized** main.tf; **Global files**
@@ -280,7 +283,7 @@ The full feature list, with where each piece lives and how it is tested, is
   Variables, Permissions, Parameters) with one save bar. **New workspace** (a template's Create workspace) too: the
   same Resources and Environment cards, General (name, owner, preset), External authentication and Schedule, with
   Cancel and Create workspace in its bar.
-- **Three workspace templates:** UBUNTU (code-server), UBUNTU DATAFLOW (Apache NiFi, Apache Airflow) and the AI
+- **Three workspace templates:** DEFAULT (code-server), DATAFLOW (Apache NiFi, Apache Airflow) and the AI
   workspace UBUNTU OPENCODE (the OpenCode agent on the workspace's own Unsloth Studio, its window on the desktop),
   with a shared **model library** (GGUF, each model scanned with garak before workspaces have it, once the scanner
   plug-in is imported) in Templates > Images; the same workspace otherwise; everything offline.

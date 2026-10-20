@@ -14,7 +14,7 @@ Gateway) configures everything, from a values file or from an Argo CD Applicatio
 | PostgreSQL `coder-db` (CloudNativePG, 2 instances) | extraTemplate of `argocd/coder` | `templates/database.yaml` |
 | Announcement banner | Argo CD app `argocd/coder-banner` (chart 0.4.1) | `charts/coder-banner/` (unreleased 0.4.3 + platform patch; starts blank) |
 | Platform service `coder-ui-updates` + `coder-ui-logs-db` + RBAC | `coder-ui-updates apply` (plain manifests) | `templates/ui-updates*.yaml`, `files/ui-updates/` (48 files, identical to the live ConfigMap) |
-| Workspace template `ubuntu-vnc-desktop` + `/__icons/` server | Helm release `coder/coder-workspace` rev 13 | `charts/coder-workspace/` (0.1.1-platform.1, see *Changes*) |
+| Workspace template `default` (DEFAULT) + `/__icons/` server | Helm release `coder/coder-workspace` rev 13 | `charts/coder-workspace/` (0.1.1-platform.1, see *Changes*) |
 | First owner | created by hand on the reference cluster | `templates/bootstrap-job.yaml` (new) |
 
 ## Layout
@@ -154,7 +154,7 @@ What happens: Coder, its database, the banner and the platform service start. Th
 `coder-bootstrap-first-user` hook creates Coder's first user (owner) from Secret `coder-init-auth` if Coder has
 none, with the password `global.firstUser.password` (`admin`). With password sign-in off it instead links that owner
 to Keycloak by email. Every run it mints a 30-minute API token into Secret `coder-workspace-push-token`. Finally
-`coder-workspace-push-template` pushes `ubuntu-vnc-desktop` with that token. The admin signs in with its password
+`coder-workspace-push-template` pushes `default` (DEFAULT) with that token. The admin signs in with its password
 (change it after the first sign-in); everyone else signs in with Keycloak.
 
 ## Changes from the live deployment (deliberate)

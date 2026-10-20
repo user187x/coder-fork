@@ -1229,7 +1229,7 @@ class TrackedWorkspaceImageTest(unittest.TestCase):
         patches = [
             mock.patch.object(ib, "STORE", ib.DB(os.path.join(self.tmp, "images.sqlite"))),
             mock.patch.object(ib, "ENABLED", True),
-            mock.patch.object(ib, "WORKSPACE_TEMPLATE", "UBUNTU"),
+            mock.patch.object(ib, "WORKSPACE_TEMPLATE", "DEFAULT"),
             mock.patch.object(ib, "LOG", None),
             mock.patch.object(ib, "start_rescan", side_effect=lambda image_id, user: self.rescans.append(image_id)),
             mock.patch.object(ib, "manifest", side_effect=lambda repo, ref: ({}, self.digest)),
@@ -1254,7 +1254,7 @@ class TrackedWorkspaceImageTest(unittest.TestCase):
         self.assertEqual(img["status"], "ready")
         self.assertEqual(img["pullRef"], "ghcr.io/user187x/coder-workspace:1.8.2")  # what templates name
         self.assertEqual(img["ref"], ib.REGISTRY + "/coder-images/base/coder-workspace:1.8.2")  # what is scanned
-        self.assertEqual(img["tracked"]["template"], "UBUNTU")
+        self.assertEqual(img["tracked"]["template"], "DEFAULT")
         self.assertEqual(self.rescans, [ib.TRACKED_ID])
         ib.STORE.set(ib.TRACKED_ID, report={"grade": "C"})
         ib.sync_tracked()
@@ -1585,12 +1585,12 @@ class ImageImportTest(unittest.TestCase):
         ib.STORE.set("team-tool", version=2, ref="r", status="ready")
         with mock.patch.object(ib, "kube_call", return_value=(200, pods)), \
                 mock.patch.object(ib, "TEMPLATES", [
-                    {"name": "ubuntu-vnc-desktop", "displayName": "UBUNTU", "image": "ghcr.io/user187x/coder-workspace:1.8.5"},
-                    {"name": "ubuntu-dataflow", "displayName": "UBUNTU DATAFLOW",
+                    {"name": "default", "displayName": "DEFAULT", "image": "ghcr.io/user187x/coder-workspace:1.8.5"},
+                    {"name": "ubuntu-dataflow", "displayName": "DATAFLOW",
                      "image": "ghcr.io/user187x/coder-workspace-dataflow:1.1.0"}]):
             out = {x["image"]: x for x in ib.images_in_use()}
         self.assertEqual(out["ghcr.io/user187x/coder-workspace:1.8.5"]["workspaces"], ["alice/w1"])
-        self.assertEqual(out["ghcr.io/user187x/coder-workspace:1.8.5"]["templates"], ["UBUNTU"])
+        self.assertEqual(out["ghcr.io/user187x/coder-workspace:1.8.5"]["templates"], ["DEFAULT"])
         self.assertEqual(out["ghcr.io/user187x/coder-workspace-dataflow:1.1.0"]["workspaces"], [])
         self.assertEqual(out["localhost:5000/coder-images/team-tool:2"]["entry"], "team-tool")
         self.assertNotIn("old:1", out)

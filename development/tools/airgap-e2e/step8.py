@@ -80,7 +80,7 @@ check("...with a normal account (not an owner)", s == 200 and "owner" not in rol
 # --- what the install should have produced ---
 s, tpls = api("/api/v2/templates", token=admin)
 names = [t["name"] for t in tpls] if s == 200 else []
-check("template ubuntu-vnc-desktop was pushed", "ubuntu-vnc-desktop" in names, str(names))
+check("template default (DEFAULT) was pushed", "default" in names, str(names))
 s, b, _ = get(CODER + "/__coder-ui/healthz"); check("platform service /__coder-ui/ through the Gateway", s == 200, str(s))
 s, b, _ = get(CODER + "/__icons/cloud-drive.svg"); check("icon server /__icons/ through the Gateway", s == 200 and b"<svg" in b, str(s))
 s, b, _ = get(CODER + "/__banner/banner.json")
@@ -92,8 +92,8 @@ s, b, _ = get(CODER + "/__banner/admin"); check("banner admin page loads", s in 
 s, b, _ = get(CODER + "/", headers={"Accept": "text/html"}); check("dashboard HTML loads", s == 200 and b"<html" in b.lower(), str(s))
 
 # --- a workspace, end to end (as the admin) ---
-if "ubuntu-vnc-desktop" in names:
-    tpl = next(t for t in tpls if t["name"] == "ubuntu-vnc-desktop")
+if "default" in names:
+    tpl = next(t for t in tpls if t["name"] == "default")
     s, ws = api("/api/v2/organizations/%s/members/me/workspaces" % tpl["organization_id"],
                 {"template_id": tpl["id"], "name": "e2e"}, token=admin)
     check("workspace created", s in (200, 201), "" if s in (200, 201) else "%s %s" % (s, str(ws)[:700]))
@@ -175,7 +175,7 @@ check("HUD is for admins only", s_ == 403, str(s_))
 s_, saved = ui("/__coder-ui/api/scheduler", {"enabled": True, "mode": "user", "maxActiveHours": 10, "ignoreAdmins": True,
                                               "excludedUsers": []}, token=admin)
 check("Scheduler: enabled by the admin", s_ == 200 and saved["settings"]["enabled"], str(s_))
-if s_ == 200 and "ubuntu-vnc-desktop" in names:
+if s_ == 200 and "default" in names:
     s_, r = api("/api/v2/organizations/%s/members/me/workspaces" % tpl["organization_id"], {"template_id": tpl["id"], "name": "nosched"}, token=user)
     check("Scheduler: a workspace without a schedule is refused", s_ == 403 and "start time" in str(r), "%s %s" % (s_, str(r)[:160]))
     s_, r = api("/api/v2/organizations/%s/members/me/workspaces" % tpl["organization_id"],

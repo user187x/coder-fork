@@ -1,4 +1,4 @@
-# The workspace image of the AI template (ubuntu-opencode): the ubuntu-vnc-desktop image
+# The workspace image of the AI template (ubuntu-opencode): the DEFAULT template's image
 # (../workspace-image) and
 #   - Unsloth Studio (AGPL-3.0): local language models - chat with GGUF models through llama.cpp, fine-tuning on NVIDIA
 #     GPUs, datasets, exports - and its OpenAI-compatible API (127.0.0.1:8888/v1). Its desktop app (the unsloth.AppImage

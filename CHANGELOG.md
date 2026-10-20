@@ -2,10 +2,34 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.86` (fork `96a726a61`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.87` (fork `ceeb34617`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **UBUNTU is DEFAULT** (chart, docs, fork): the base template is `default` (DEFAULT), as it was renamed on the dev
+  cluster; a cluster that still has `ubuntu-vnc-desktop` (UBUNTU) has it taken over and renamed at its next deploy
+  (its workspaces and history kept). The dataflow template's default display name is DATAFLOW.
+* **Fixed: renaming the base template in the dashboard switched off the template builder's base and the template
+  decorator** (fork): both looked it up by its configured name only, so after `ubuntu-vnc-desktop` became `default`
+  Create new template had no base and other templates got no platform sections (Lock Down, the certificate, the
+  Cloud Drive, the metrics). They now record its ID and follow a rename.
+* **A template's page is its Source Code** (fork): the Overview and the tabs are gone (Prebuilds aside, where on). The
+  template's address, and the old tabs' (Overview, Docs, Resources, Details, Versions), open Source Code for those who
+  may edit it and New workspace for the others. At its top, the apps a workspace of it gets, in the files' panel
+  style - the agent, its OS and its resource in the header, the apps as centered tiles - and the file tree and files
+  take the height the tabs had.
+* **Latency and Activity on the Accounts table** (fork), from the Overview's "by user" panels: each user's median
+  latency (95th percentile on hover) and time connected (a bar against the busiest), over the last seven days and
+  every template, before Status; not shown to those who may not read the insights.
+* **Who may see and use a template** (fork, the Templates table's **Access** menu): a user search and a tick per
+  account, saved as you pick; only the ticked users see the template and create workspaces from it, none ticked:
+  everyone; its editors (owners, template admins) always may. Coder's own template permissions are a Premium feature
+  this deployment is not licensed for, so this is the platform's own list (`/api/v2/templates/{id}/access`, in the
+  runtime config), checked by the templates lists, a template read by ID or name and its versions by name, and a
+  workspace's creation for its owner. Workspaces made before a user was left out keep running.
+* **Old images cleaned up** (dev host and node): the superseded platform, platform-service, workspace and dataflow
+  builds (~24 GB); the last release's (v1.39.1) stay in the node for the next layer bundle, and workspace image 1.9.2
+  while a workspace runs it.
 * **Fixed: a Cloud Drive connected or disconnected on the Workspaces page took up to minutes to reach the
   workspace.** The workspace followed its pod's annotation through the downward API, and the kubelet sometimes took
   over 90 seconds to update that file (seen on the dev cluster). The platform service now also tells the running

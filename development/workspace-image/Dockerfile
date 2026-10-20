@@ -1,4 +1,4 @@
-# The workspace image of the ubuntu-vnc-desktop template: Coder's enterprise-base with, preinstalled,
+# The workspace image of the default template (DEFAULT): Coder's enterprise-base with, preinstalled,
 #   - the desktop the template starts (XFCE, TigerVNC, noVNC, websockify) - no apt-get at workspace start, so it
 #     also works without internet; noVNC shares the clipboard with the computer both ways, and only the viewer in use
 #     resizes the desktop (novnc/: two viewers no longer fight over its size).
