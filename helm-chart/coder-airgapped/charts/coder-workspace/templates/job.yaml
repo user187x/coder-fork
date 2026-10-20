@@ -1,15 +1,16 @@
 {{- include "coder-workspace.platform.values" . -}}
 {{- $url := .Values.coder.internalUrl | default (required "CODER_URL must be provided!" .Values.coder.url) }}
-{{- /* The templates this chart pushes, each by its own Job: default (DEFAULT) and (dataflowTemplate) the same with
-Apache NiFi and Apache Airflow in place of code-server, on its own image. Each push's message is its own: the login step
+{{- /* The templates this chart pushes, each by its own Job: default (DEFAULT: files/main.tf and its scripts) and
+(dataflowTemplate) the same plus files/dataflow/ - Apache NiFi and Apache Airflow in place of code-server - on its own
+image. Each push's message is its own: the login step
 finds a template renamed in the dashboard by it. A template a job replaces (its "replaces") is taken over: renamed, with
 its workspaces and history - default takes over ubuntu-vnc-desktop (UBUNTU), its name before. */}}
-{{- $jobs := list (dict "suffix" "" "template" .Values.template "appSet" "developer" "image" ""
+{{- $jobs := list (dict "suffix" "" "template" .Values.template "dataflow" false "image" ""
     "message" (printf "Deployed via Helm release %s" .Release.Name)
     "replaces" (dict "name" "ubuntu-vnc-desktop" "message" (printf "Deployed via Helm release %s" .Release.Name)
                      "displayName" "UBUNTU" "icon" "/icon/ubuntu.svg")) }}
 {{- if .Values.dataflowTemplate.enabled }}
-{{- $jobs = append $jobs (dict "suffix" "-dataflow" "template" .Values.dataflowTemplate "appSet" "dataflow"
+{{- $jobs = append $jobs (dict "suffix" "-dataflow" "template" .Values.dataflowTemplate "dataflow" true
     "image" .Values.dataflowImage "message" (printf "Deployed via Helm release %s (dataflow)" .Release.Name)) }}
 {{- end }}
 {{- range $n, $j := $jobs }}
@@ -184,6 +185,11 @@ spec:
               cp /tmp/tf-code/*.tf "${WORKSPACE}"/
               mkdir -p "${WORKSPACE}/scripts"
               cp /tmp/tf-code/*.sh /tmp/tf-code/*.py "${WORKSPACE}/scripts"/
+              {{- if $j.dataflow }}
+              # This template's own part: dataflow.tf, and NiFi's and Airflow's scripts
+              cp /tmp/tf-dataflow/*.tf "${WORKSPACE}"/
+              cp /tmp/tf-dataflow/*.sh "${WORKSPACE}/scripts"/
+              {{- end }}
 
               # Push the physical directory
               # The configured name, or the template it was renamed to (the login step looks it up)
@@ -191,16 +197,22 @@ spec:
               coder templates push "${TEMPLATE}" \
                 --directory "${WORKSPACE}" \
                 --message {{ $j.message | quote }} \
-                --variable app_set="{{ $j.appSet }}" \
-                --variable terminal_app="{{ $j.template.terminal | default "web" }}" \
                 {{- with $j.image }}
                 --variable workspace_image="{{ . }}" \
                 {{- end }}
                 --variable namespace="{{ $.Values.namespace | default "coder" }}" \
+                {{- if $j.dataflow }}
+                --variable terminal_app="{{ $j.template.terminal | default "web" }}" \
+                {{- if eq ($j.template.terminal | default "web") "ghostty" }}
+                --variable terminal=false \
+                {{- end }}
+                --variable code_server=false \
+                --variable default_memory=6 \
                 --variable gateway_name="{{ $.Values.icons.gateway.name }}" \
                 --variable gateway_namespace="{{ $.Values.icons.gateway.namespace }}" \
                 --variable coder_service="{{ $.Values.nifiRoute.coderService.name }}" \
                 --variable coder_service_port="{{ $.Values.nifiRoute.coderService.port }}" \
+                {{- end }}
                 --variable home_storage_class="{{ $.Values.storageClass | default "" }}" \
                 {{- with $.Values.codeServerHA }}{{ if .image }}
                 --variable code_server_ha_image="{{ .image }}" \
@@ -237,6 +249,10 @@ spec:
               readOnly: true
             - name: tf-code
               mountPath: /tmp/tf-code
+            {{- if $j.dataflow }}
+            - name: tf-dataflow
+              mountPath: /tmp/tf-dataflow
+            {{- end }}
             - name: tls-ca
               mountPath: /etc/ssl/certs/coder
               readOnly: true
@@ -248,6 +264,11 @@ spec:
         - name: tf-code
           configMap:
             name: {{ include "coder-workspace.prefix" $ }}-terraform
+        {{- if $j.dataflow }}
+        - name: tf-dataflow
+          configMap:
+            name: {{ include "coder-workspace.prefix" $ }}-terraform-dataflow
+        {{- end }}
         - name: tls-ca
           secret:
             secretName: {{ $.Values.secrets.tlsCa | quote }}

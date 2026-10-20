@@ -56,17 +56,19 @@ variable "cluster_admin_roles" {
   default     = "owner"
 }
 
-# Which apps the workspace has: "developer" (default, DEFAULT: code-server) or "dataflow" (ubuntu-dataflow:
-# Apache NiFi, Apache Airflow). Everything else is the same. The chart pushes this template once per set
-# (templates/job.yaml).
-variable "app_set" {
+# code-server, the IDE in the browser: its app and the agent's own; false for a template whose apps take its place
+# (one pushed with apps of its own beside this file).
+variable "code_server" {
+  type        = bool
+  description = "The code-server app (the IDE in the browser)."
+  default     = true
+}
+
+# The Memory parameter's default, in GB (one of its options): more for a template whose apps need it.
+variable "default_memory" {
   type        = string
-  description = "developer (code-server) or dataflow (Apache NiFi, Apache Airflow)."
-  default     = "developer"
-  validation {
-    condition     = contains(["developer", "dataflow"], var.app_set)
-    error_message = "app_set must be developer or dataflow."
-  }
+  description = "The Memory parameter's default, in GB."
+  default     = "2"
 }
 
 # The apps a template made in Templates > Create new template has (its Desktop, File Browser and Terminal choices):
@@ -89,41 +91,6 @@ variable "terminal" {
   default     = true
 }
 
-# The DATAFLOW template's: Ghostty in place of the web terminal - the Ghostty app where the Terminal was, opening the
-# same session in Coder's terminal page, drawn by Ghostty's terminal emulator (ghostty-web, in the dashboard).
-variable "terminal_app" {
-  type        = string
-  description = "The web terminal: web (Coder's own) or ghostty (Ghostty's, as the Ghostty app in its place)."
-  default     = "web"
-  validation {
-    condition     = contains(["web", "ghostty"], var.terminal_app)
-    error_message = "terminal_app: web or ghostty."
-  }
-}
-
-# The Gateway that serves Coder (the dataflow template's NiFi route attaches to it), and Coder's Service behind it.
-variable "gateway_name" {
-  type        = string
-  description = "The Gateway serving Coder's host (its NiFi route attaches to it)."
-  default     = "traefik-gateway"
-}
-
-variable "gateway_namespace" {
-  type    = string
-  default = "traefik"
-}
-
-variable "coder_service" {
-  type        = string
-  description = "Coder's Service in this namespace, as Coder's own HTTPRoute names it."
-  default     = "coder"
-}
-
-variable "coder_service_port" {
-  type    = number
-  default = 80
-}
-
 # The owner's Cloud Drive (the chart's userStorage): their own S3 storage, the same in each of their workspaces. The platform
 # service makes each account's volume (PersistentVolumeClaim coder-safe-<owner id>); the pod waits for it if it is not
 # there yet.
@@ -139,8 +106,7 @@ variable "user_storage_path" {
   default     = "/home/coder/cloud-drive"
 }
 
-# The workspace image; empty: the chart's (substituted for "codercom/enterprise-base:ubuntu" below). The dataflow
-# template's has NiFi and Airflow too (development/workspace-image-dataflow).
+# The workspace image; empty: the chart's (substituted for "codercom/enterprise-base:ubuntu" below).
 variable "workspace_image" {
   type        = string
   description = "The workspace pods' image; empty: the template's default."
@@ -155,9 +121,6 @@ variable "images_registry" {
 }
 
 locals {
-  dataflow = var.app_set == "dataflow"
-  # Ghostty in place of the web terminal (terminal_app)
-  ghostty       = var.terminal && var.terminal_app == "ghostty"
   default_image = var.workspace_image != "" ? var.workspace_image : "codercom/enterprise-base:ubuntu"
   # The Workspace image parameter's choice (data.coder_parameter.workspace_image), where the template offers one:
   # "template" - the template's own image, whatever it is at each start (so a template update brings its new image);
@@ -296,10 +259,9 @@ data "coder_parameter" "memory" {
   name         = "memory"
   display_name = "Memory"
   description  = "The amount of memory in GB"
-  # NiFi (a 1 GB Java heap) and Airflow beside the desktop need more than the developer apps.
-  default = local.dataflow ? "6" : "2"
-  icon    = "/__icons/memory.svg" # files/icons/memory.svg (a memory module), served by templates/icons.yaml
-  mutable = true
+  default      = var.default_memory
+  icon         = "/__icons/memory.svg" # files/icons/memory.svg (a memory module), served by templates/icons.yaml
+  mutable      = true
   option {
     name  = "2 GB"
     value = "2"
@@ -432,10 +394,8 @@ locals {
     toset([for r in split(",", var.cluster_admin_roles) : trimspace(r) if trimspace(r) != ""]),
   )) > 0
   cluster_kubeconfig = "/home/coder/.kube/coder-cluster.yaml"
-  # The host the workspace's agent reaches Coder on (Lock Down's Network keeps it; the dataflow template's NiFi route).
+  # The host the workspace's agent reaches Coder on (Lock Down's Network keeps it).
   coder_host = regex("^[a-z]+://([^/:]+)", data.coder_workspace.me.access_url)[0]
-  # Coder's host as browsers reach it, with its port if it has one (NiFi and Airflow make their links with it).
-  access_host = replace(replace(data.coder_workspace.me.access_url, "https://", ""), "http://", "")
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -594,7 +554,7 @@ resource "coder_agent" "main" {
   dir = data.coder_parameter.start_directory.value
 
   display_apps {
-    web_terminal = var.terminal && !local.ghostty
+    web_terminal = var.terminal
     vscode       = false
     ssh_helper   = false
   }
@@ -610,7 +570,7 @@ resource "coder_agent" "main" {
     cluster_kubeconfig     = local.cluster_kubeconfig
     cluster_oidc_issuer    = var.cluster_oidc_issuer
     cluster_oidc_client_id = var.cluster_oidc_client_id
-    code_server            = !local.dataflow
+    code_server            = var.code_server
     start_directory        = data.coder_parameter.start_directory.value
     desktop                = var.desktop
     desktop_theme          = var.desktop ? data.coder_parameter.desktop_theme[0].value : "classic"
@@ -757,7 +717,7 @@ resource "coder_app" "filebrowser" {
 }
 
 resource "coder_app" "code-server" {
-  count        = local.dataflow ? 0 : 1
+  count        = var.code_server ? 1 : 0
   agent_id     = coder_agent.main.id
   slug         = "code-server"
   display_name = "code-server"
@@ -770,142 +730,6 @@ resource "coder_app" "code-server" {
     url       = "http://localhost:13337/healthz"
     interval  = 3
     threshold = 10
-  }
-}
-
-# Ghostty in place of the web terminal (terminal_app, the DATAFLOW template's): a terminal app, so it opens where and
-# as the Terminal did - Coder's terminal page, in its own window, a login shell in the Start folder - and the
-# dashboard draws an agent's terminals with Ghostty's emulator wherever the agent has this app (slug "ghostty").
-resource "coder_app" "ghostty" {
-  count        = local.ghostty ? 1 : 0
-  agent_id     = coder_agent.main.id
-  slug         = "ghostty"
-  display_name = "Ghostty"
-  icon         = "/__icons/ghostty.png" # files/icons/ghostty.png (Ghostty's app icon, MIT), served by templates/icons.yaml
-  command      = "cd ${jsonencode(data.coder_parameter.start_directory.value)} 2>/dev/null; exec \"$SHELL\" -l"
-  share        = "owner"
-}
-
-# The dataflow template's apps, in place of code-server: path-based like the others, so they open in the
-# dashboard's panels (same origin). Each started by a script of its own (coder_script.nifi and coder_script.airflow
-# below, beside the startup script). NiFi learns its path from the headers the cluster's Gateway adds (the HTTPRoute
-# nifi_route below).
-resource "coder_app" "nifi" {
-  count        = local.dataflow ? 1 : 0
-  agent_id     = coder_agent.main.id
-  slug         = "nifi"
-  display_name = "Apache NiFi"
-  icon         = "/__icons/nifi.svg" # files/icons/nifi.svg, served by templates/icons.yaml
-  # The root: Coder joins the app URL's path to every request, and NiFi serves at /nifi and /nifi-api (its root
-  # redirects to its UI, under the app's path).
-  url       = "http://127.0.0.1:8080"
-  subdomain = false
-  share     = "owner"
-
-  # The dashboard's panel shows the port and protocol it is checked on.
-  healthcheck {
-    url       = "http://127.0.0.1:8080/nifi-api/flow/about"
-    interval  = 5
-    threshold = 60
-  }
-}
-
-# NiFi under Coder's app path: NiFi builds its pages' links and API calls from the proxy headers it is sent
-# (X-ProxyContextPath, -Scheme, -Host, -Port), which Coder's app proxy passes on but does not add. The cluster's Gateway
-# (Traefik) adds them, by an HTTPRoute of this workspace's own on Coder's host: only its NiFi path, to Coder as Coder's
-# own route does (the longest path wins), with these headers set. Nothing else in front of NiFi; Coder still decides
-# who may open the app. Needs Coder's service account to manage HTTPRoutes in the namespace (the chart's Role).
-locals {
-  nifi_path    = "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/nifi"
-  airflow_path = "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow"
-  coder_https  = startswith(data.coder_workspace.me.access_url, "https://")
-}
-
-# NiFi and Airflow at every start, each in a script of its own (the workspace's Logs show them by name): their homes
-# in ~/.nifi and ~/airflow, their app paths and Coder's host.
-resource "coder_script" "nifi" {
-  count        = local.dataflow ? 1 : 0
-  agent_id     = coder_agent.main.id
-  display_name = "Apache NiFi"
-  icon         = "/__icons/nifi.svg" # files/icons/nifi.svg, served by templates/icons.yaml
-  run_on_start = true
-  script = templatefile("${path.module}/scripts/apache_nifi.sh", {
-    path        = local.nifi_path
-    access_host = local.access_host
-  })
-}
-
-resource "coder_script" "airflow" {
-  count        = local.dataflow ? 1 : 0
-  agent_id     = coder_agent.main.id
-  display_name = "Apache Airflow"
-  icon         = "/icon/airflow.svg" # Coder's own icon
-  run_on_start = true
-  script = templatefile("${path.module}/scripts/apache_airflow.sh", {
-    path        = local.airflow_path
-    access_host = local.access_host
-  })
-}
-
-resource "kubernetes_manifest" "nifi_route" {
-  count = local.dataflow ? 1 : 0
-  manifest = {
-    apiVersion = "gateway.networking.k8s.io/v1"
-    kind       = "HTTPRoute"
-    metadata = {
-      name      = "coder-${data.coder_workspace.me.id}-nifi"
-      namespace = var.namespace
-      labels = {
-        "app.kubernetes.io/name"    = "coder-workspace"
-        "app.kubernetes.io/part-of" = "coder"
-        "com.coder.resource"        = "true"
-        "com.coder.workspace.id"    = data.coder_workspace.me.id
-        "com.coder.workspace.name"  = data.coder_workspace.me.name
-        "com.coder.user.username"   = data.coder_workspace_owner.me.name
-      }
-    }
-    spec = {
-      hostnames = [local.coder_host]
-      parentRefs = [{
-        group     = "gateway.networking.k8s.io"
-        kind      = "Gateway"
-        name      = var.gateway_name
-        namespace = var.gateway_namespace
-      }]
-      rules = [{
-        matches = [{ path = { type = "PathPrefix", value = local.nifi_path } }]
-        filters = [{
-          type = "RequestHeaderModifier"
-          requestHeaderModifier = {
-            set = [
-              { name = "X-ProxyContextPath", value = local.nifi_path },
-              { name = "X-ProxyScheme", value = local.coder_https ? "https" : "http" },
-              { name = "X-ProxyHost", value = local.coder_host },
-              { name = "X-ProxyPort", value = local.coder_https ? "443" : "80" },
-            ]
-          }
-        }]
-        backendRefs = [{ name = var.coder_service, port = var.coder_service_port }]
-      }]
-    }
-  }
-}
-
-resource "coder_app" "airflow" {
-  count        = local.dataflow ? 1 : 0
-  agent_id     = coder_agent.main.id
-  slug         = "airflow"
-  display_name = "Apache Airflow"
-  icon         = "/icon/airflow.svg" # Coder's own icon
-  # Airflow serves under the full app path (its base_url, in scripts/apache_airflow.sh), so the URL carries it too.
-  url       = "http://localhost:8090/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow/"
-  subdomain = false
-  share     = "owner"
-
-  healthcheck {
-    url       = "http://localhost:8090/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow/api/v2/monitor/health"
-    interval  = 5
-    threshold = 60
   }
 }
 

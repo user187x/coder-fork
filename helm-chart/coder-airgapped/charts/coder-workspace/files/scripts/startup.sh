@@ -3,8 +3,7 @@
 # the desktop and the apps (code-server, File Browser). A template made in Create new template may leave out the
 # desktop or File Browser (its desktop and file_browser variables). Runs at every start; each step is safe to repeat.
 # Scripts of their own run beside it (each its coder_script in main.tf, in the workspace's Logs under its name): the
-# ubuntu-dataflow template's Apache NiFi and Apache Airflow (apache_nifi.sh, apache_airflow.sh), the Cloud Drive
-# (cloud-drive.sh: everything the workspace does with it), Lock Down and the certificate.
+# Cloud Drive (cloud-drive.sh: everything the workspace does with it), Lock Down and the certificate.
 # The .tf file renders this with templatefile(), so Terraform template syntax applies here: a shell variable in
 # braces is written with two dollar signs ($${HOME}), and a percent sign before a brace is doubled (%%{).
 set -e
@@ -17,7 +16,7 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
-CODE_SERVER_APP='${code_server}' # true: the code-server app (every template but ubuntu-dataflow)
+CODE_SERVER_APP='${code_server}' # true: the code-server app (main.tf's code_server)
 DESKTOP='${desktop}'             # true: the desktop (noVNC's Desktop app)
 DESKTOP_THEME='${desktop_theme}' # the Desktop theme parameter: serenade or classic (coder-desktop-theme)
 FILE_BROWSER='${file_browser}'   # true: File Browser

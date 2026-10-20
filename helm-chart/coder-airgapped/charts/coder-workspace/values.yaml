@@ -36,9 +36,9 @@ template:
   displayName: "DEFAULT"
   icon: "/icon/ubuntu.svg"
 
-# A second template: the same workspace with Apache NiFi and Apache Airflow in place of code-server
-# (files/main.tf's app_set = dataflow), on its own image (development/workspace-image-dataflow). Pushed by its own Job
-# (<prefix>-push-template-dataflow). Its display name and icon as for template above.
+# A second template: the same workspace with Apache NiFi and Apache Airflow in place of code-server (files/main.tf
+# plus files/dataflow/, which only this template gets), on its own image (development/workspace-image-dataflow).
+# Pushed by its own Job (<prefix>-push-template-dataflow). Its display name and icon as for template above.
 dataflowTemplate:
   enabled: false
   name: "ubuntu-dataflow"

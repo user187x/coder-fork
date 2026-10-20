@@ -164,6 +164,7 @@ def icon_checks(chart, default_render):
     unserved = [f for f in files if os.path.splitext(f)[1].lower() not in types or not name_re.match(f)]
     check("template icons: each one's type and name the platform service serves (else a 404)", not unserved, unserved)
     texts = [os.path.join(chart, "charts", "coder-workspace", "files", "main.tf"),
+             os.path.join(chart, "charts", "coder-workspace", "files", "dataflow", "dataflow.tf"),
              os.path.join(chart, "charts", "coder-workspace", "values.yaml"),
              os.path.join(chart, "charts", "coder-workspace", "templates", "job.yaml"), os.path.join(chart, "values.yaml")]
     refs = sorted({m for t in texts for m in re.findall(r"/__icons/([A-Za-z0-9._-]+)", open(t).read())})
@@ -188,11 +189,19 @@ def template_checks(B, chart, default_render):
             for k, d in docs.items() if k[0] == "Job" and "push-template" in k[1]}
     vals = open(os.path.join(chart, "values.yaml")).read()
     sub_vals = open(os.path.join(chart, "charts", "coder-workspace", "values.yaml")).read()
-    check("templates: DEFAULT and DATAFLOW pushed (app_set developer, dataflow), no other - no AI, Unsloth, LM Studio "
-          "or Obsidian template",
+    vols = {k[1]: [v["name"] for v in d["spec"]["template"]["spec"]["volumes"]]
+            for k, d in docs.items() if k[0] == "Job" and "push-template" in k[1]}
+    dflt, dflow = jobs.get("coder-workspace-push-template", ""), jobs.get("coder-workspace-push-template-dataflow", "")
+    check("templates: DEFAULT and DATAFLOW pushed, no other (no AI, Unsloth, LM Studio or Obsidian template); only "
+          "DATAFLOW's push gets files/dataflow/ (its ConfigMap) and its variables",
           sorted(n.rsplit("push-template", 1)[1] for n in jobs) == ["", "-dataflow"]
-          and sorted(re.findall(r'--variable app_set="(\w+)"', "\n".join(jobs.values()))) == ["dataflow", "developer"],
-          sorted(jobs))
+          and "tf-dataflow" in vols.get("coder-workspace-push-template-dataflow", [])
+          and "tf-dataflow" not in vols.get("coder-workspace-push-template", ["tf-dataflow"])
+          and "/tmp/tf-dataflow" in dflow and "/tmp/tf-dataflow" not in dflt
+          and all(v in dflow for v in ("--variable code_server=false", "--variable default_memory=6",
+                                       "--variable gateway_name=", "--variable coder_service="))
+          and not re.search(r"--variable (code_server|default_memory|terminal_app|terminal|gateway_\w+|coder_service\w*|app_set)=",
+                            dflt), sorted(jobs))
     ui_env = {e["name"]: e.get("value") for c in docs[("Deployment", "coder-ui-updates")]["spec"]["template"]["spec"]["containers"]
               for e in c.get("env", [])}
     names = [t["name"] for t in json.loads(ui_env.get("BUILDER_TEMPLATES") or "[]")]
@@ -202,12 +211,25 @@ def template_checks(B, chart, default_render):
           not re.search(r"aiTemplates|aiImage|opencode|coder-workspace-ai", vals + sub_vals, re.I), "")
     tf = open(os.path.join(chart, "charts", "coder-workspace", "files", "main.tf")).read()
     startup = open(os.path.join(chart, "charts", "coder-workspace", "files", "scripts", "startup.sh")).read()
-    check("main.tf: app_set developer or dataflow only - no OpenCode app, Unsloth, Context length or model library mount",
-          'contains(["developer", "dataflow"], var.app_set)' in tf and not re.search(r"\blocal\.ai\b", tf)
-          and not re.search(r"opencode|unsloth|context_length|coder-models", tf + startup, re.I)
-          and "lmstudio" not in tf and "LM Studio" not in tf + startup, "")
-    check("main.tf: no Obsidian app set, code-server everywhere but dataflow",
-          "obsidian" not in (tf + startup).lower() and "local.dataflow ? 0 : 1" in tf, "")
+    # DEFAULT (main.tf and the shared scripts, the files its push gets): its own apps and nothing else's - Desktop,
+    # File Browser, code-server, Coder's web terminal and Ports; no word of another template's apps
+    shared_dir = os.path.join(chart, "charts", "coder-workspace", "files")
+    shared = tf + "".join(open(os.path.join(shared_dir, "scripts", n)).read()
+                          for n in sorted(os.listdir(os.path.join(shared_dir, "scripts"))))
+    apps = re.findall(r'^resource "coder_app" "([\w-]+)"', tf, re.M)
+    display = re.search(r"display_apps \{(.*?)\n  \}", tf, re.S)
+    named = sorted(set(w.lower() for w in re.findall(
+        r"nifi|airflow|dataflow|ghostty|terminal_app|opencode|unsloth|context_length|coder-models|lmstudio|LM Studio|"
+        r"obsidian|app_set", shared, re.I)))
+    check("DEFAULT (main.tf + shared scripts): only Desktop, File Browser, code-server, the web terminal and Ports; no "
+          "other template's app named (NiFi, Airflow, Ghostty, OpenCode...)",
+          sorted(apps) == ["code-server", "filebrowser", "novnc"] and display
+          and "web_terminal = var.terminal" in display.group(1) and "vscode       = false" in display.group(1)
+          and "ssh_helper   = false" in display.group(1) and "port_forwarding_helper" not in display.group(1)
+          and not named, {"apps": apps, "named": named})
+    check("main.tf: code-server unless a template turns it off (code_server), memory's default a variable",
+          "count        = var.code_server ? 1 : 0" in tf and "code_server            = var.code_server" in tf
+          and re.search(r"\n  default\s+= var\.default_memory\n", tf), "")
     # "(cd X && app >log 2>&1 &)" backgrounds a bash that keeps the script's output open: the agent then reports
     # start_error ("script exited without closing output pipes"); the whole subshell is redirected instead
     tpl_scripts = os.path.join(chart, "charts", "coder-workspace", "files", "scripts")
@@ -511,8 +533,14 @@ def main():
     check("telemetry and update check off", "CODER_TELEMETRY_ENABLE" not in r or re.search(r"CODER_TELEMETRY_ENABLE\s*\n\s*value: \"?false", r),
           "")
     tf_dir = os.path.join(chart, "charts/coder-workspace/files")
-    scripts = sorted(glob.glob(os.path.join(tf_dir, "scripts", "*.sh")))
+    scripts = sorted(glob.glob(os.path.join(tf_dir, "scripts", "*.sh")) + glob.glob(os.path.join(tf_dir, "dataflow", "*.sh")))
     tf = {n: open(os.path.join(tf_dir, n)).read() for n in ("main.tf", "agent-audit.tf")}
+    tf["dataflow.tf"] = open(os.path.join(tf_dir, "dataflow", "dataflow.tf")).read()
+    # a script a .tf file reads: the shared ones in files/scripts/, the DATAFLOW template's in files/dataflow/ (both
+    # land in scripts/ next to the .tf files at its push)
+    def script_file(n):
+        shared_file = os.path.join(tf_dir, "scripts", n)
+        return shared_file if os.path.isfile(shared_file) else os.path.join(tf_dir, "dataflow", n)
     refs = sorted({m for m in re.findall(r'file\("\$\{path\.module\}/scripts/([^"]+)"', tf["main.tf"])})
     # the base template (the DEFAULT prototype): one main.tf, its platform sections marked for the template decorator
     check("template: consolidated - no certificates.tf, no lockdown-start.sh (lockdown.sh's start mode)",
@@ -572,20 +600,23 @@ def main():
         check("template: Coder's decorator reads its platform sections (the fork's extraction, on this template)",
               dec.returncode == 0 and dec.stdout.startswith("ok"), (dec.stdout + dec.stderr).strip()[-300:])
     shipped = re.findall(r"^  ([\w.-]+\.(?:sh|py)): \|$", r, re.M)
-    check("template: every script the .tf files read is in files/scripts/ and in the push's ConfigMap",
-          refs and all(os.path.isfile(os.path.join(tf_dir, "scripts", s)) and s in shipped for s in refs),
-          "read: %s; shipped: %s" % (refs, shipped))
+    df_refs = sorted(set(re.findall(r'templatefile\("\$\{path\.module\}/scripts/([^"]+)"', tf["dataflow.tf"])))
+    check("template: every script the .tf files read is in files/scripts/ (DATAFLOW's: files/dataflow/) and in the "
+          "push's ConfigMaps",
+          refs and all(os.path.isfile(os.path.join(tf_dir, "scripts", s)) and s in shipped for s in refs)
+          and df_refs and all(os.path.isfile(os.path.join(tf_dir, "dataflow", s)) and s in shipped for s in df_refs),
+          "read: %s + %s; shipped: %s" % (refs, df_refs, shipped))
     # templatefile() reads ${...} in a script as its own: each must be a variable main.tf passes to that script (a
     # shell expansion is written $${...}), else the template fails to plan.
     bad = []
     for name, body in tf.items():
         for m in re.finditer(r'templatefile\("\$\{path\.module\}/scripts/([\w.-]+)",\s*\{(.*?)\n\s*\}\)', body, re.S):
             keys = set(re.findall(r"^\s*(\w+)\s*=", m.group(2), re.M))
-            text = open(os.path.join(tf_dir, "scripts", m.group(1))).read()
+            text = open(script_file(m.group(1))).read()
             for ref in re.findall(r"(?<!\$)\$\{([^}]*)\}", text):
                 if ref.strip() not in keys:
                     bad.append("%s: ${%s}" % (m.group(1), ref))
-    check("template scripts: every ${...} is a variable main.tf passes (shell's written $${...})", not bad, bad[:5])
+    check("template scripts: every ${...} is a variable its .tf file passes (shell's written $${...})", not bad, bad[:5])
     # The image store (development/image-store): the provided pictures, each with its preview, in the platform
     # service's image as a layer of their own under the code (build-ui-image.sh), served and listed by the service.
     repo_top = os.path.dirname(B)
@@ -603,19 +634,24 @@ def main():
     # Ghostty in place of the web terminal (the DATAFLOW template's): its push asks for it, the app's slug is the one
     # the dashboard draws an agent's terminals with Ghostty for (site/src/modules/terminal/terminalConfig.ts), its icon
     # is served, and the built-in terminal is off where it is on.
-    pushes = dict(re.findall(r'--variable app_set="(\w+)" \\\n\s*--variable terminal_app="(\w+)"', r))
+    import yaml
+    push_jobs = {d["metadata"]["name"]: "\n".join(c["args"][0] for c in d["spec"]["template"]["spec"]["containers"])
+                 for d in yaml.safe_load_all(r) if d and d.get("kind") == "Job" and "push-template" in d["metadata"]["name"]}
+    pushes = {n.rsplit("push-template", 1)[1] or "default": re.findall(r'--variable (terminal_app="\w+"|terminal=\w+)', a)
+              for n, a in push_jobs.items()}
     fork_slug = ""
     cfg_ts = os.path.join(os.path.expanduser(os.environ.get("CODER_FORK", "~/workspace/coder")),
                           "site/src/modules/terminal/terminalConfig.ts")
     if os.path.isfile(cfg_ts):
         m = re.search(r'GHOSTTY_APP = "([^"]+)"', open(cfg_ts).read())
         fork_slug = m.group(1) if m else ""
-    app = re.search(r'resource "coder_app" "ghostty" \{(.*?)\n\}', tf["main.tf"], re.S)
-    check("template: DATAFLOW's terminal is Ghostty (the Ghostty app in the Terminal's place), the others' Coder's own",
-          pushes.get("dataflow") == "ghostty" and pushes.get("developer") == "web" and app
-          and 'count        = local.ghostty ? 1 : 0' in app.group(1)
+    app = re.search(r'resource "coder_app" "ghostty" \{(.*?)\n\}', tf["dataflow.tf"], re.S)
+    check("template: DATAFLOW's terminal is Ghostty (its dataflow.tf's Ghostty app, Coder's own terminal off), "
+          "DEFAULT's Coder's own",
+          pushes.get("-dataflow") == ['terminal_app="ghostty"', "terminal=false"] and pushes.get("default") == [] and app
+          and 'count        = var.terminal_app == "ghostty" ? 1 : 0' in app.group(1)
           and re.search(r'slug\s*=\s*"%s"' % (fork_slug or "ghostty"), app.group(1))
-          and "web_terminal = var.terminal && !local.ghostty" in tf["main.tf"]
+          and "web_terminal = var.terminal\n" in tf["main.tf"]
           and os.path.isfile(os.path.join(chart, "charts/coder-workspace/files/icons/ghostty.png"))
           and '"/__icons/ghostty.png"' in app.group(1), {"pushes": pushes, "fork slug": fork_slug})
     check("template: no script left inline in the .tf files (heredocs)", not any("<<" in t for t in tf.values()),
@@ -723,18 +759,21 @@ def main():
           and cd_sh.index("write_self\n") < cd_sh.index("sync_link\nlink_shared\nfiles_again"), leaked[:3])
     # NiFi and Airflow start in scripts of their own (the dataflow template's only), beside the startup script, which
     # knows nothing of them.
-    nifi_sh = open(os.path.join(tf_dir, "scripts", "apache_nifi.sh")).read()
-    airflow_sh = open(os.path.join(tf_dir, "scripts", "apache_airflow.sh")).read()
+    nifi_sh = open(os.path.join(tf_dir, "dataflow", "apache_nifi.sh")).read()
+    airflow_sh = open(os.path.join(tf_dir, "dataflow", "apache_airflow.sh")).read()
     code = "\n".join(re.sub(r"\s+#.*$", "", ln) for ln in startup.splitlines()
                      if not ln.lstrip().startswith("#")).lower()
-    check("template: NiFi and Airflow each a coder_script of its own (apache_nifi.sh, apache_airflow.sh), dataflow only",
+    check("template: NiFi and Airflow each a coder_script of its own (apache_nifi.sh, apache_airflow.sh), in DATAFLOW's "
+          "dataflow.tf (moved from main.tf's counted ones: workspaces keep them)",
           not any(w in code for w in ("nifi", "airflow", "dataflow"))
-          and re.search(r'resource "coder_script" "nifi" \{\n  count        = local\.dataflow \? 1 : 0\n(?:.*\n){0,6}?'
-                        r'  script = templatefile\("\$\{path\.module\}/scripts/apache_nifi\.sh"', tf["main.tf"])
-          and re.search(r'resource "coder_script" "airflow" \{\n  count        = local\.dataflow \? 1 : 0\n(?:.*\n){0,6}?'
-                        r'  script = templatefile\("\$\{path\.module\}/scripts/apache_airflow\.sh"', tf["main.tf"])
+          and re.search(r'resource "coder_script" "nifi" \{\n(?:.*\n){0,6}?'
+                        r'  script = templatefile\("\$\{path\.module\}/scripts/apache_nifi\.sh"', tf["dataflow.tf"])
+          and re.search(r'resource "coder_script" "airflow" \{\n(?:.*\n){0,6}?'
+                        r'  script = templatefile\("\$\{path\.module\}/scripts/apache_airflow\.sh"', tf["dataflow.tf"])
           and "nifi.web.proxy.context.path=$NIFI_PATH" in nifi_sh and "exec airflow standalone" in airflow_sh
-          and "code_server            = !local.dataflow" in tf["main.tf"], "")
+          and all(("moved {\n  from = %s[0]\n  to   = %s\n}" % (a, a)) in tf["dataflow.tf"] for a in (
+              "coder_app.nifi", "coder_script.nifi", "coder_script.airflow", "kubernetes_manifest.nifi_route",
+              "coder_app.airflow")), "")
     # Beside the startup script, Airflow's line in ~/.bashrc waits for the startup script's default ~/.bashrc (added
     # first, it would keep the default out).
     check("apache_airflow.sh: its ~/.bashrc line after the startup script's default ~/.bashrc",

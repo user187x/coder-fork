@@ -26,3 +26,18 @@ data:
 {{ $.Files.Get $path | indent 4 }}
   {{- end }}
   {{- end }}
+{{- if .Values.dataflowTemplate.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "coder-workspace.prefix" . }}-terraform-dataflow
+  namespace: {{ .Values.namespace | default "coder" }}
+data:
+  # The DATAFLOW template's own part (files/dataflow/), pushed beside the files above for that template only:
+  # dataflow.tf (Apache NiFi and Apache Airflow, NiFi's route) and their scripts, which go in scripts/.
+  {{- range $path, $_ := .Files.Glob "files/dataflow/*.{tf,sh}" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+  {{- end }}
+{{- end }}

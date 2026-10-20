@@ -4,6 +4,14 @@
 
 Coder `2.0.0-platform.98` (fork `61769b225`).
 
+* **DEFAULT is the basic template, with nothing of DATAFLOW's** (chart): its files are `main.tf` and the shared
+  scripts only, naming no other template's app - its apps are Desktop, File Browser, code-server, the web terminal
+  and Ports. DATAFLOW's own part moved to `files/dataflow/` (`dataflow.tf`: Apache NiFi and Apache Airflow, NiFi's
+  route on the Gateway, Ghostty in place of the web terminal; `apache_nifi.sh`, `apache_airflow.sh`), in a ConfigMap
+  only DATAFLOW's push mounts. `app_set` is gone: `main.tf` has `code_server` and `default_memory` like its `desktop`,
+  `file_browser` and `terminal`, which DATAFLOW's push sets (code-server off, 6 GB, Coder's terminal off for Ghostty).
+  `moved` blocks keep a DATAFLOW workspace's NiFi and Airflow objects as they were. Templates made in Create new
+  template start from DEFAULT, so they have none of it either.
 * **The Model Library and the garak model-scanner plug-in are removed** (service, fork, chart), as the AI workspaces
   are: the Images page has the ISO library only; the platform service drops `/api/models*` and the scan Jobs'
   `/internal/model-scans` routes, `modelscan.py`; the chart drops `modelScanner` and its `MODEL_SCANNER_*` settings;
