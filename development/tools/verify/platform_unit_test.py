@@ -652,6 +652,87 @@ class BuiltinBackgroundTest(unittest.TestCase):
                 ui.parse_background_picture("/pictures/missing.gif")   # Coder's index page: not a picture
 
 
+class ImageStoreTest(unittest.TestCase):
+    """The image store: its baked pictures (with their previews) listed for every chooser and served publicly,
+    streamed with a version for an ETag; backgrounds may reference them."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.dir, "pictures"))
+        os.makedirs(os.path.join(self.dir, "thumbs"))
+        for name, data in (("synthsun.gif", b"GIF89a" + b"x" * 64), ("notes.txt", b"no"), ("still.PNG", b"\x89PNG")):
+            with open(os.path.join(self.dir, "pictures", name), "wb") as f:
+                f.write(data)
+        with open(os.path.join(self.dir, "thumbs", "synthsun.gif.webp"), "wb") as f:
+            f.write(b"RIFF....WEBP")
+        self.store = ui.ImageStore(self.dir)
+        self.patch = mock.patch.object(ui, "STORE_IMAGES", self.store)
+        self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop()
+        import shutil
+        shutil.rmtree(self.dir)
+
+    def test_listed_with_previews_pictures_only(self):
+        listed = {i["name"]: i for i in self.store.listing()}
+        self.assertEqual(sorted(listed), ["still.PNG", "synthsun.gif"])
+        sun = listed["synthsun.gif"]
+        self.assertEqual((sun["type"], sun["bytes"], sun["source"]), ("image/gif", 70, "store"))
+        self.assertTrue(sun["url"].startswith("/__coder-ui/image-store/synthsun.gif?v="))
+        self.assertTrue(sun["thumb"].startswith("/__coder-ui/image-store/thumbs/synthsun.gif?v="))
+        self.assertIsNone(listed["still.PNG"]["thumb"])
+        # every chooser's list: the store's, then the gallery's and the announcement's uploads
+        with mock.patch.object(ui, "GALLERY", mock.Mock(listing=lambda: [{"name": "cube.png", "url": "/g"}])), \
+                mock.patch.object(ui, "BANNER_PICTURES", mock.Mock(pool=True, listing=lambda: [
+                    {"name": "flag", "source": "uploaded", "url": "/__coder-ui/banner-picture/0123456789abcdef"}])):
+            sources = [(i["name"], i["source"]) for i in ui.image_store_listing()]
+        self.assertEqual(sources[-2:], [("cube.png", "gallery"), ("flag", "uploaded")])
+
+    def test_a_background_may_reference_a_store_picture(self):
+        ctype, data = ui.parse_background_picture("/__coder-ui/image-store/synthsun.gif")
+        bg = {"type": ctype, "data": data, "sha": "x", "opacity": 0.06, "fit": "cover", "layer": "under"}
+        self.assertEqual(ui.background_picture(bg), ("/__coder-ui/image-store/synthsun.gif", 70))
+        self.assertEqual(ui.background_public("login", bg)["url"], "/__coder-ui/image-store/synthsun.gif")
+        for bad in ("/__coder-ui/image-store/missing.gif", "/__coder-ui/image-store/../ui-service.py",
+                    "/__coder-ui/image-store/notes.txt"):
+            with self.assertRaises(ValueError, msg=bad):
+                ui.parse_background_picture(bad)
+
+    def test_streamed_with_its_version_for_an_etag(self):
+        import io
+
+        class H(ui.Handler):
+            def __init__(self, inm=None):
+                self.headers = {"If-None-Match": inm} if inm else {}
+                self.command = "GET"
+                self.wfile = io.BytesIO()
+                self.sent = []
+                self.close_connection = False
+
+            def send_response(self, code, message=None):
+                self.sent.append(("status", code))
+
+            def send_header(self, k, v):
+                self.sent.append((k, v))
+
+            def end_headers(self):
+                pass
+
+        hit = self.store.items()["synthsun.gif"]
+        h = H()
+        h.send_file(hit["path"], hit["type"], hit["tag"], versioned=True)
+        head = dict(h.sent)
+        self.assertEqual((head["status"], head["Content-Type"], head["Content-Length"]), (200, "image/gif", "70"))
+        self.assertEqual(head["Cache-Control"], "public, max-age=31536000, immutable")
+        self.assertEqual(h.wfile.getvalue(), b"GIF89a" + b"x" * 64)
+        again = H(inm=head["ETag"])
+        again.send_file(hit["path"], hit["type"], hit["tag"], versioned=False)
+        self.assertEqual(dict(again.sent)["status"], 304)
+        self.assertEqual(again.wfile.getvalue(), b"")
+
+
 class BannerPictureTest(unittest.TestCase):
     """Insert picture: what is accepted, and how pictures are kept (named by their content, the newest kept)."""
 

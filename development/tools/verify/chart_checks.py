@@ -580,6 +580,20 @@ def main():
                 if ref.strip() not in keys:
                     bad.append("%s: ${%s}" % (m.group(1), ref))
     check("template scripts: every ${...} is a variable main.tf passes (shell's written $${...})", not bad, bad[:5])
+    # The image store (development/image-store): the provided pictures, each with its preview, in the platform
+    # service's image as a layer of their own under the code (build-ui-image.sh), served and listed by the service.
+    repo_top = os.path.dirname(B)
+    store_dir = os.path.join(repo_top, "development/image-store")
+    pics = sorted(os.listdir(os.path.join(store_dir, "pictures"))) if os.path.isdir(os.path.join(store_dir, "pictures")) else []
+    no_preview = [n for n in pics if not os.path.isfile(os.path.join(store_dir, "thumbs", n + ".webp"))]
+    build_ui = open(os.path.join(repo_top, "development/tools/build-ui-image.sh")).read()
+    svc = open(os.path.join(chart, "files/ui-updates/ui-service.py")).read()
+    check("image store: the provided pictures, each with its preview, baked into the platform service's image under "
+          "its code, served publicly and listed for every chooser",
+          len(pics) > 0 and not no_preview
+          and re.search(r"COPY image-store/ /image-store/\nCOPY app/ /app/", build_ui)
+          and 'BASE + "/image-store/"' in svc and 'BASE + "/api/image-store"' in svc,
+          {"pictures": len(pics), "without a preview": no_preview[:5]})
     # Ghostty in place of the web terminal (the DATAFLOW template's): its push asks for it, the app's slug is the one
     # the dashboard draws an agent's terminals with Ghostty for (site/src/modules/terminal/terminalConfig.ts), its icon
     # is served, and the built-in terminal is off where it is on.
@@ -612,6 +626,13 @@ def main():
     names = sorted(n for n in os.listdir(ui_dir) if os.path.isfile(os.path.join(ui_dir, n)) and not n.endswith(".pyc"))
     lines = "".join("%s  %s\n" % (hashlib.sha256(open(os.path.join(ui_dir, n), "rb").read()).hexdigest(), n)
                     for n in names)
+    # ... and the image store's files (pictures/, thumbs/), as build-ui-image.sh hashes them after the code
+    store_top = os.path.join(os.path.dirname(B), "development/image-store")
+    store_files = sorted((os.path.relpath(os.path.join(d, f), store_top) for sub in ("pictures", "thumbs")
+                          for d, _, fs in os.walk(os.path.join(store_top, sub)) for f in fs),
+                         key=lambda x: x.encode())
+    lines += "".join("%s  %s\n" % (hashlib.sha256(open(os.path.join(store_top, f), "rb").read()).hexdigest(), f)
+                     for f in store_files)
     want = "coder-ui-updates:code-" + hashlib.sha256(lines.encode()).hexdigest()[:12]
     values_txt = open(os.path.join(chart, "values.yaml")).read()
     pinned = re.search(r"ghcr\.io/user187x/(coder-ui-updates:code-[0-9a-f]+)", values_txt)

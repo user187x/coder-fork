@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds ghcr.io/user187x/coder-ui-updates:code-<hash>: the platform service (coder-ui-updates) - its code,
 # helm-chart/coder-airgapped/files/ui-updates/, in /app of the tools image (coder-image-tools: Python and the tools
-# the Images view runs) - and pins it: uiUpdates.image in values.yaml, its [ui] line in images.txt (tag, image ID), and
+# the Images view runs), with the image store's baked pictures in /image-store - and pins it: uiUpdates.image in values.yaml, its [ui] line in images.txt (tag, image ID), and
 # its archive in the bundle (helm-chart/images/ui/, mirror-images.sh store).
 #
 # The chart refers to this image instead of carrying the code in a ConfigMap: Helm keeps every release in a Secret of
@@ -12,12 +12,19 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
 src="${top}/helm-chart/coder-airgapped/files/ui-updates"
+# The image store's baked pictures and their previews (development/image-store, image-store-thumbs.sh): in the image
+# at /image-store, a layer of their own under the code's, so a build of new code ships only the code's layer.
+store="${dev}/image-store"
 base="ghcr.io/user187x/coder-image-tools:1.1.0"
 repo="ghcr.io/user187x/coder-ui-updates"
 
-# The code: every file of files/ui-updates but Python's bytecode.
+# The code: every file of files/ui-updates but Python's bytecode; and the image store's files (the tag follows both).
 mapfile -t files < <(cd "$src" && find . -maxdepth 1 -type f ! -name '*.pyc' -printf '%P\n' | LC_ALL=C sort)
-hash=$(cd "$src" && sha256sum "${files[@]}" | sha256sum | cut -c1-12)
+mapfile -t pictures < <(cd "$store" && find pictures thumbs -type f -printf '%p\n' | LC_ALL=C sort)
+for p in "${pictures[@]}"; do
+	case "$p" in pictures/*) [ -s "${store}/thumbs/${p#pictures/}.webp" ] || { echo "ERROR: no preview for $p: run development/tools/image-store-thumbs.sh" >&2; exit 1; };; esac
+done
+hash=$({ (cd "$src" && sha256sum "${files[@]}"); (cd "$store" && sha256sum "${pictures[@]}"); } | sha256sum | cut -c1-12)
 img="${repo}:code-${hash}"
 
 if docker image inspect "$img" >/dev/null 2>&1; then
@@ -25,11 +32,15 @@ if docker image inspect "$img" >/dev/null 2>&1; then
 else
 	docker image inspect "$base" >/dev/null 2>&1 || { echo "ERROR: $base is not in this docker (build-image-tools.sh, or load it from the bundle)" >&2; exit 1; }
 	ctx="$(mktemp -d)"; trap 'rm -rf "$ctx"' EXIT
-	mkdir "$ctx/app"
+	mkdir "$ctx/app" "$ctx/image-store"
 	(cd "$src" && cp -- "${files[@]}" "$ctx/app/")
-	chmod -R a+rX,go-w "$ctx/app"
+	# as they are in the repository, times too: the same pictures make the same layer
+	cp -rp -- "${store}/pictures" "${store}/thumbs" "$ctx/image-store/"
+	touch -r "$store" "$ctx/image-store"
+	chmod -R a+rX,go-w "$ctx/app" "$ctx/image-store"
 	cat >"$ctx/Dockerfile" <<EOF
 FROM ${base}
+COPY image-store/ /image-store/
 COPY app/ /app/
 LABEL org.opencontainers.image.title="coder-ui-updates" org.opencontainers.image.revision="code-${hash}"
 EOF
@@ -46,7 +57,8 @@ spec.loader.exec_module(importlib.util.module_from_spec(spec))
 print(\"modules import\")"
 		trivy --version | grep -q "Vulnerability DB"
 		copa --version >/dev/null
-		shellcheck --version >/dev/null && shfmt --version >/dev/null'
+		shellcheck --version >/dev/null && shfmt --version >/dev/null
+		test "$(ls /image-store/pictures | wc -l)" -gt 0 && test "$(ls /image-store/thumbs | wc -l)" -gt 0'
 	echo "built $img"
 fi
 

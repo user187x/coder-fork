@@ -49,6 +49,10 @@
        {slot}. html: an HTML / CSS background, served sandboxed (BG_HTML_CSP); params: its dials (speed, hue,
        saturation, brightness, blur) and, for a preset, the preset's settings
   GET  /__coder-ui/gallery/<file>?v=<sha>     one of them (public, like the default avatar)
+  GET  /__coder-ui/api/image-store            every picture a chooser offers: the image store's baked pictures, the
+       gallery's and the announcement's uploaded ones (signed in)
+  GET  /__coder-ui/image-store/<file>         a baked picture (public; streamed); .../image-store/thumbs/<file>: its
+       animated preview
   POST /__coder-ui/api/banner-pictures {name, dataUrl}   admins: a picture for the announcement (PNG, JPEG, GIF - animated
        too -, WebP, AVIF; at most 8 MB, stored as it is) -> {id, url}
   GET  /__coder-ui/banner-picture/<id>        one of them (public: the sign-in page may show the banner; never changes)
@@ -2865,6 +2869,79 @@ class Gallery:
 GALLERY = None
 
 
+# --------------------------------------------------------------------------- The image store (baked pictures)
+IMAGE_STORE_DIR = os.environ.get("IMAGE_STORE_DIR", "/image-store")
+STORE_PICTURE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(gif|png|jpe?g|webp|avif)$", re.I)
+STORE_PICTURE_TYPES = {"gif": "image/gif", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                       "webp": "image/webp", "avif": "image/avif"}
+
+
+class ImageStore:
+    """The image store's baked pictures: the files of IMAGE_STORE_DIR/pictures (development/image-store, in this
+    service's image, a layer of its own), each with a small animated preview, thumbs/<name>.webp. Served publicly at
+    /__coder-ui/image-store/<name> (the sign-in page's background, avatars and the announcement show them, signed in
+    or not) and listed - with the gallery's pictures and the announcement's uploaded ones - for every picture chooser
+    (GET /api/image-store). The listing is re-read at most every 60 seconds."""
+
+    def __init__(self, folder):
+        self.folder = folder
+        self.cache = (0, {})
+        self.lock = threading.Lock()
+
+    def items(self):
+        """{name: {"path", "type", "bytes", "tag", "thumb"}}; tag: the file's size and time (its address's version)."""
+        with self.lock:
+            if time.time() - self.cache[0] < 60:
+                return self.cache[1]
+            found = {}
+            try:
+                names = sorted(os.listdir(os.path.join(self.folder, "pictures")))
+            except OSError:
+                names = []
+            for name in names:
+                m = STORE_PICTURE_RE.match(name)
+                path = os.path.join(self.folder, "pictures", name)
+                if not m or not os.path.isfile(path):
+                    continue
+                st = os.stat(path)
+                thumb = os.path.join(self.folder, "thumbs", name + ".webp")
+                found[name] = {"path": path, "type": STORE_PICTURE_TYPES[m.group(1).lower()], "bytes": st.st_size,
+                               "tag": "%x%x" % (st.st_size, int(st.st_mtime)),
+                               "thumb": thumb if os.path.isfile(thumb) else None}
+            self.cache = (time.time(), found)
+            return found
+
+    def path_of(self, name):
+        """A store picture's address (no version: what a background keeps), or None."""
+        return "%s/image-store/%s" % (BASE, name) if name in self.items() else None
+
+    def listing(self):
+        out = []
+        for name, it in self.items().items():
+            q = urllib.parse.quote(name)
+            out.append({"name": name, "type": it["type"], "bytes": it["bytes"], "source": "store",
+                        "url": "%s/image-store/%s?v=%s" % (BASE, q, it["tag"]),
+                        "thumb": "%s/image-store/thumbs/%s?v=%s" % (BASE, q, it["tag"]) if it["thumb"] else None})
+        return out
+
+
+STORE_IMAGES = None
+
+
+def image_store_listing():
+    """Every picture a chooser offers, from the image store: its baked pictures, the gallery's, and the announcement's
+    uploaded ones (newest first). The dashboard adds the pictures baked into itself (/pictures/)."""
+    images = STORE_IMAGES.listing() if STORE_IMAGES else []
+    for it in GALLERY.listing() if GALLERY else []:
+        images.append(dict(it, source="gallery", thumb=None))
+    if BANNER_PICTURES and BANNER_PICTURES.pool:
+        try:
+            images += BANNER_PICTURES.listing()
+        except Exception as e:  # noqa: BLE001 - the baked ones still
+            log(event="image-store-uploads-unread", error=str(e)[:200])
+    return images
+
+
 class LogoStore:
     """The uploaded logo, one row in coder_ui_updates.logo of Coder's own database (so it survives everything this
     tool's pods and volumes go through), cached in memory and re-read at most every 30 seconds.
@@ -3144,14 +3221,24 @@ def serve_background_html(data):
 # Coder is.
 BG_PICTURE_REF = "text/x-coder-picture"
 BG_PICTURE_RE = re.compile(r"^/pictures/[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(gif|png|jpe?g|webp|avif)$")
+# ... or one of the image store's (ImageStore): its address on this service
+BG_STORE_PICTURE_RE = re.compile(r"^/__coder-ui/image-store/([A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(gif|png|jpe?g|webp|avif))$",
+                                 re.I)
 BG_PICTURE_TYPES = {"gif": "image/gif", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                     "webp": "image/webp", "avif": "image/avif"}
 
 
 def parse_background_picture(path):
-    """A dashboard picture by its path: (BG_PICTURE_REF, b"<path>\n<bytes>"), once Coder serves it as an image."""
+    """A dashboard picture by its path: (BG_PICTURE_REF, b"<path>\n<bytes>"), once Coder serves it as an image; or
+    one of the image store's, once it has it."""
+    store = BG_STORE_PICTURE_RE.match(path) if isinstance(path, str) else None
+    if store:
+        hit = (STORE_IMAGES.items() if STORE_IMAGES else {}).get(store.group(1))
+        if not hit:
+            raise ValueError("The image store has no %s." % store.group(1))
+        return BG_PICTURE_REF, ("%s\n%d" % (path, hit["bytes"])).encode()
     if not isinstance(path, str) or not BG_PICTURE_RE.match(path):
-        raise ValueError("Not one of the dashboard's pictures (/pictures/<name>).")
+        raise ValueError("Not one of the dashboard's pictures (/pictures/<name>) or the image store's.")
     req = urllib.request.Request(CODER_URL + path, method="HEAD")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -3373,6 +3460,16 @@ class BannerPictureStore:
                 [BANNER_PICTURE_KEEP],
             )
         return pid
+
+    def listing(self):
+        """The pictures uploaded for the announcement, newest first, as the image store lists them."""
+        with self.lock:
+            self._schema()
+        rows = self.pool.query(
+            "SELECT id, name, content_type, length(data) FROM coder_ui_updates.banner_picture ORDER BY created_at DESC"
+        )
+        return [{"name": r[1], "type": r[2], "bytes": int(r[3]), "source": "uploaded", "thumb": None,
+                 "url": "%s/banner-picture/%s" % (BASE, r[0])} for r in rows]
 
     def get(self, pid):
         """(content type, bytes) or None."""
@@ -7869,6 +7966,26 @@ class Handler(BaseHTTPRequestHandler):
             {"Cache-Control": "no-store"},
         )
 
+    def send_file(self, path, content_type, tag, versioned):
+        """A file, streamed (the image store's pictures run to tens of MB), with its version as its ETag: for good when
+        asked for by a versioned address, else checked again within the hour."""
+        etag = '"%s"' % tag
+        cache = "public, max-age=31536000, immutable" if versioned else "public, max-age=3600"
+        if self.headers.get("If-None-Match") == etag:
+            return self.send(304, b"", content_type, {"ETag": etag, "Cache-Control": cache})
+        try:
+            f = open(path, "rb")
+        except OSError:
+            return self.send(404, "not found\n", headers={"Cache-Control": "no-cache"})
+        with f:
+            self.send_response(200)
+            for k, v in {**self.SECURITY, "Content-Type": content_type, "Content-Length": str(os.fstat(f.fileno()).st_size),
+                         "ETag": etag, "Cache-Control": cache}.items():
+                self.send_header(k, v)
+            self.end_headers()
+            if self.command != "HEAD":
+                shutil.copyfileobj(f, self.wfile, 256 * 1024)
+
     def token(self):
         token = self.headers.get("Coder-Session-Token")
         if token:
@@ -8202,6 +8319,20 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 return
             return self.send_json(200, {"images": GALLERY.listing() if GALLERY else []})
+        if path == BASE + "/api/image-store":
+            user, err = self.user()
+            if err:
+                return
+            return self.send_json(200, {"images": image_store_listing()})
+        if path.startswith(BASE + "/image-store/"):
+            rest = urllib.parse.unquote(path[len(BASE) + 13 :])
+            preview = rest.startswith("thumbs/")
+            name = rest[7:] if preview else rest
+            hit = (STORE_IMAGES.items() if STORE_IMAGES else {}).get(name)
+            if not hit or (preview and not hit["thumb"]):
+                return self.send(404, "not found\n", headers={"Cache-Control": "no-cache"})
+            return self.send_file(hit["thumb"] if preview else hit["path"], "image/webp" if preview else hit["type"],
+                                  hit["tag"] + ("t" if preview else ""), "v=" in url.query)
         if path.startswith(BASE + "/gallery/"):
             hit = (GALLERY.items() if GALLERY else {}).get(urllib.parse.unquote(path[len(BASE) + 9 :]))
             if not hit:
@@ -9550,6 +9681,7 @@ def safe_owner_workspaces(owner_id):
 
 def main():
     global STORE, LOGOS, MONITOR, AVATARS, DEFAULTS, CHAT, ICONS, GALLERY, BACKGROUNDS, BANNER_PICTURES, HUD_HISTORY
+    global STORE_IMAGES
     global NET_HISTORY
     STORE = Store(DB_PATH)
     CHAT = ChatStore(DB_PATH)
@@ -9557,6 +9689,7 @@ def main():
         DEFAULTS_DIR
     )  # before the logo store, which installs the default logo on a fresh database
     GALLERY = Gallery(os.path.join(DEFAULTS_DIR, "gallery"))
+    STORE_IMAGES = ImageStore(IMAGE_STORE_DIR)
     LOGOS = LogoStore()
     AVATARS = AvatarStore(LOGOS)
     BACKGROUNDS = BackgroundStore(LOGOS)

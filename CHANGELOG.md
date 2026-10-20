@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.94` (fork `ce69e5f1d`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.95` (fork `704883071`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
@@ -46,6 +46,18 @@ is a plug-in now (`dist/plugins/`, not in the bundle).
   field, and with a menu or dialog open (that closes as it would, then the wheel opens) - but in a terminal, whose
   programs need Escape: there Shift+Escape (which works anywhere). Escape again or a click off the wheel closes it;
   the arrow keys go round it and Enter opens.
+* **The image store** (service, fork, platform service image): one store of pictures behind every picture chooser -
+  the announcement's image (its Upload image arrow), the dashboard's and the sign-in page's backgrounds, avatars, the
+  logo and template icons (Image store, beside Upload). It holds 29 provided animated pictures baked into the platform
+  service's image (`development/image-store`, 155 MB, a layer of its own under the code's so later builds do not ship
+  it again), the pictures baked into the dashboard, the gallery's, and every picture uploaded for the announcement.
+  The choosers show small animated previews (`thumbs/`, 2.6 MB in all) rather than the pictures. A background keeps a
+  store picture's address; an avatar, logo or icon is resized from it as from an upload. Served publicly (the sign-in
+  page shows them) and streamed: `/__coder-ui/image-store/<name>`; listed at `/__coder-ui/api/image-store`.
+* **The banner's terminal in the banner's colours** (fork): the announcement's full view (its fake terminal) takes
+  the banner's background and text colours, and the banner's background picture - an animated GIF moving - runs
+  across its screen too, with the banner's fit (span: rolling), under a light veil so the text stays readable.
+* **The Workspaces bar see-through** (fork): the bar holding the search and the Cloud Drive has no background.
 * **DATAFLOW's terminal is Ghostty** (chart, fork): the template's web terminal is replaced by the **Ghostty** app,
   wherever the Terminal was (the Workspaces table's apps, the workspace page, the template's apps panel): it opens
   the same session in Coder's terminal page, in its own window, a login shell in the Start folder - drawn by
