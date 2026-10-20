@@ -80,17 +80,14 @@ each account's volume over once none of its workspaces runs (files already store
 
 Only ever the caller's own prefix: paths are checked segment by segment (no "..", no control characters).
 
-The shared libraries (the Images view), each a prefix of the same bucket mounted read-only in workspaces (one shared
-volume each, ReadOnlyMany); everyone sees them, admins and template admins add and remove their files:
-  - the ISO library: disk images for every workspace, library/isos/, at ~/isos (volume coder-isos);
-  - the model library: GGUF language models for the AI workspaces (Unsloth, OpenCode), library/models/, at ~/models
-    (volume coder-models). A model added waits in library/quarantine/models/ (mounted nowhere) until its security scan
-    (garak, modelscan.py) releases it.
+The shared library (the Images view), a prefix of the same bucket mounted read-only in workspaces (one shared volume,
+ReadOnlyMany); everyone sees it, admins and template admins add and remove its files:
+  - the ISO library: disk images for every workspace, library/isos/, at ~/isos (volume coder-isos).
 
-  GET  /__coder-ui/api/<isos|models>                   the library, and the imports under way
-  PUT  /__coder-ui/api/<isos|models>/upload?name=      a file (the body; Content-Length)
-  POST /__coder-ui/api/<isos|models>/import {url, name}   a file the service downloads (http/https), in the background
-  POST /__coder-ui/api/<isos|models>/delete {name, held?}   (held: the model waiting in the hold, not the library's)
+  GET  /__coder-ui/api/isos                    the library, and the imports under way
+  PUT  /__coder-ui/api/isos/upload?name=       a file (the body; Content-Length)
+  POST /__coder-ui/api/isos/import {url, name}   a file the service downloads (http/https), in the background
+  POST /__coder-ui/api/isos/delete {name}
 """
 import base64
 import hashlib
@@ -141,23 +138,7 @@ LIBRARIES = {
              "maxBytes": int(float(os.environ.get("SAFE_ISO_MAX_GIB", "20")) * 1024 ** 3),
              "nameRe": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,120}\.(iso|img)$", re.I),
              "nameRule": "ending in .iso or .img"},
-    "models": {"title": "the model library", "noun": "model", "prefix": "library/models/", "claim": "coder-models",
-               "mountPath": os.environ.get("SAFE_MODEL_MOUNT_PATH", "/home/coder/models"),
-               "maxBytes": int(float(os.environ.get("SAFE_MODEL_MAX_GIB", "100")) * 1024 ** 3),
-               "nameRe": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,160}\.gguf$", re.I),
-               "nameRule": "ending in .gguf",
-               # new models wait here, mounted nowhere, until their security scan releases them (modelscan.py)
-               "holdPrefix": "library/quarantine/models/"},
 }
-# The model library's security gate (modelscan.py): told of each file added or deleted, and adds the scans to the
-# listing.
-LIBRARY_HOOKS = {"added": None, "deleted": None, "decorate": None, "gate": None}
-
-
-def _held(lib):
-    """Whether a new file of the library waits in its hold: it has one, and its gate is on (the model scanner hooked
-    up: a plug-in, none by default)."""
-    return bool(lib.get("holdPrefix") and LIBRARY_HOOKS["gate"] and LIBRARY_HOOKS["gate"]())
 
 SETTINGS_FILE = os.environ.get("SAFE_SETTINGS_FILE", "/data/cloud-drive.json")
 # Every account's capacity as an admin set it (Cloud Drive > Settings), over the chart's (QUOTA_BYTES).
@@ -215,7 +196,7 @@ _sources_seen = {}  # owner id -> {running, pod, started, tried, error}
 
 def setup(log, kube, users, can_edit=None, is_admin=None, workspace_info=None, shared=None, workspaces=None,
           attachment=None):
-    """users(): [(id, username)] of every account (Coder's database); can_edit(user): may change the libraries;
+    """users(): [(id, username)] of every account (Coder's database); can_edit(user): may change the ISO library;
     is_admin(user): may change the backend; workspace_info(token, id): the workspace (Coder's API), if the session may
     see it; shared(): {workspace id: owner id} of the workspaces shared with other users or groups (Coder's
     database), None while it cannot be read; workspaces(owner id): [{id, name}] of the account's workspaces;
@@ -2025,23 +2006,9 @@ def library(kind, user):
                    key=lambda f: f["name"].lower())
     with _lock:
         imports = [dict(i) for (k, _n), i in _imports.items() if k == kind]
-    out = {"enabled": True, "canEdit": bool(CAN_EDIT and CAN_EDIT(user)), "mountPath": lib["mountPath"],
-           "maxBytes": lib["maxBytes"], "files": files, "usedBytes": sum(f["size"] for f in files),
-           "imports": sorted(imports, key=lambda i: i["startedAt"], reverse=True)}
-    if lib.get("holdPrefix") and LIBRARY_HOOKS["decorate"]:
-        out = LIBRARY_HOOKS["decorate"](out)
-    return out
-
-
-def library_key(kind, name):
-    """Where a new file of the library goes: its hold, where it has one and its gate is on."""
-    lib = LIBRARIES[kind]
-    return (lib["holdPrefix"] if _held(lib) else lib["prefix"]) + name
-
-
-def library_added(kind, name, user, size):
-    if LIBRARY_HOOKS["added"]:
-        LIBRARY_HOOKS["added"](kind, name, user, size)
+    return {"enabled": True, "canEdit": bool(CAN_EDIT and CAN_EDIT(user)), "mountPath": lib["mountPath"],
+            "maxBytes": lib["maxBytes"], "files": files, "usedBytes": sum(f["size"] for f in files),
+            "imports": sorted(imports, key=lambda i: i["startedAt"], reverse=True)}
 
 
 def library_upload(kind, h, user, name):
@@ -2053,10 +2020,9 @@ def library_upload(kind, h, user, name):
     if length > lib["maxBytes"]:
         return h.send_json(413, {"error": "A%s %s can be at most %s." % (
             "n" if lib["noun"][0] in "AEIOU" else "", lib["noun"], human(lib["maxBytes"]))})
-    client().put_large(bucket(), library_key(kind, name), h.rfile, length)
+    client().put_large(bucket(), lib["prefix"] + name, h.rfile, length)
     LOG(event="library-upload", library=kind, user=user["username"], name=name, bytes=length)
-    library_added(kind, name, user["username"], length)
-    return h.send_json(200, {"ok": True, "name": name, "size": length, "held": _held(lib)})
+    return h.send_json(200, {"ok": True, "name": name, "size": length})
 
 
 def _download(kind, state, url):
@@ -2075,11 +2041,10 @@ def _download(kind, state, url):
 
             def progress(n):
                 state["bytes"] = n
-            client().put_large(bucket(), library_key(kind, state["name"]), resp, total, progress=progress)
+            client().put_large(bucket(), lib["prefix"] + state["name"], resp, total, progress=progress)
         state["done"] = True
         LOG(event="library-import", library=kind, user=state["by"], name=state["name"], url=url,
             bytes=state.get("total"))
-        library_added(kind, state["name"], state["by"], total)
     except Exception as e:  # noqa: BLE001 - shown in the library until dismissed by the next import of the name
         state["error"] = str(e)[:300]
         LOG(event="library-import-failed", library=kind, user=state["by"], name=state["name"], error=str(e)[:300])
@@ -2104,7 +2069,7 @@ def library_import(kind, user, body):
 
 
 def handle_libraries(h, method, path, query):
-    """The libraries' API (/api/isos, /api/models). True when it answered."""
+    """The library's API (/api/isos). True when it answered."""
     kind = next((k for k in LIBRARIES if path == BASE + "/api/" + k or path.startswith(BASE + "/api/" + k + "/")),
                 None)
     if kind is None:
@@ -2113,7 +2078,7 @@ def handle_libraries(h, method, path, query):
     root = BASE + "/api/" + kind
     if not ENABLED:
         h.send_json(404, {"error": "%s needs the Cloud Drive's storage (global.userStorage)." %
-                                   lib["title"][0].upper() + lib["title"][1:]})
+                                   (lib["title"][0].upper() + lib["title"][1:])})
         return True
     if method != "GET" and not upload_csrf_ok(h):
         h.send_json(403, {"error": "Request rejected (cross-site protection)."})
@@ -2134,13 +2099,10 @@ def handle_libraries(h, method, path, query):
         elif method == "POST" and path == root + "/delete":
             body = read_json(h)
             name = library_name(kind, body.get("name"))
-            held = bool(body.get("held")) and bool(lib.get("holdPrefix"))
-            client().delete(bucket(), (lib["holdPrefix"] if held else lib["prefix"]) + name)
+            client().delete(bucket(), lib["prefix"] + name)
             with _lock:
                 _imports.pop((kind, name), None)
-            LOG(event="library-delete", library=kind, user=user["username"], name=name, held=held)
-            if LIBRARY_HOOKS["deleted"]:
-                LIBRARY_HOOKS["deleted"](kind, name, held)
+            LOG(event="library-delete", library=kind, user=user["username"], name=name)
             h.send_json(200, {"ok": True})
         else:
             h.send_json(404, {"error": "not found"})

@@ -136,18 +136,6 @@ spec:
             - {name: SAFE_MAX_UPLOAD_GIB, value: {{ $us.maxUploadGiB | quote }}}
             - {name: SAFE_NAMESPACE, value: {{ $ns | quote }}}
             - {name: SAFE_MOUNT_OPTIONS, value: {{ $us.csi.mountOptions | quote }}}
-            {{- with .Values.modelScanner }}{{ if .enabled }}
-            # The Model Library's security gate (modelscan.py): garak's scan Jobs
-            - {name: MODEL_SCANNER_IMAGE, value: {{ .image | quote }}}
-            - {name: MODEL_SCANNER_CPU, value: {{ .cpu | quote }}}
-            - {name: MODEL_SCANNER_MEMORY_GIB, value: {{ .memoryGiB | quote }}}
-            - {name: MODEL_SCANNER_PARALLEL, value: {{ .parallel | quote }}}
-            - {name: MODEL_SCANNER_PYPI_URL, value: {{ .pypiUrl | quote }}}
-            - {name: MODEL_SCANNER_SERVICE_URL, value: {{ printf "http://coder-ui-updates.%s.svc" $ns | quote }}}
-            {{- with $ui.imagePullSecrets }}
-            - {name: MODEL_SCANNER_PULL_SECRETS, value: {{ toJson . | quote }}}
-            {{- end }}
-            {{- end }}{{ end }}
             {{- if $us.minio.enabled }}
             # MinIO's TLS port, its certificate checked (an encrypted Cloud Drive's key goes over TLS only); the nodes'
             # mounts: plain through its bridge (9000), encrypted ones on 9443.

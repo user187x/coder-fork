@@ -114,8 +114,6 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
     verbs: [get, create, delete]
-  # The same Jobs right: the Model Library's security scans (modelscan.py: garak on each new model, no service
-  # account token in their pods).
   - apiGroups: [batch]
     resources: [jobs]
     verbs: [get, create, delete]

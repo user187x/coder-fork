@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Coder `2.0.0-platform.98` (fork `61769b225`).
+
+* **The Model Library and the garak model-scanner plug-in are removed** (service, fork, chart), as the AI workspaces
+  are: the Images page has the ISO library only; the platform service drops `/api/models*` and the scan Jobs'
+  `/internal/model-scans` routes, `modelscan.py`; the chart drops `modelScanner` and its `MODEL_SCANNER_*` settings;
+  `development/garak-image/` and `build-garak-image.sh` are deleted. On an upgrade the `coder-models` PV/PVC the
+  service created stay, unused (the PV is Retain), as do the bucket's `library/models/`, `library/quarantine/models/`
+  and `library/scans/models/`: delete them by hand if wanted. The ISO library is unchanged (its "needs the Cloud
+  Drive's storage" message reads right again).
+
 ## 1.40.0 – 2026-10-20
 
 Coder `2.0.0-platform.97` (fork `1b6b14dbf`), platform service on `coder-image-tools:1.2.0`, workspace image

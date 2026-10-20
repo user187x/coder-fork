@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.97 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.98 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.97-airgap
+      tag: 2.0.0-platform.98-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -375,30 +375,6 @@ codeServerHA:
   replicas: 2
 
 # ---------------------------------------------------------------------------------------------------------------
-# The Model Library's security gate (Templates > Images > Model library), a plug-in: with a scanner hooked up, every
-# model added to the library is scanned with garak (NVIDIA's LLM vulnerability scanner) in a Job before workspaces can
-# use it; until then it waits in a hold mounted nowhere (files/ui-updates/modelscan.py). The platform ships no scanner
-# (image ""): models go straight into the library, unscanned, until an admin imports one (Model library > Import
-# scanner: the docker save archive of development/tools/build-garak-image.sh - garak, its detector models and probe
-# data, and llama.cpp's llama-server, offline) or this names one in your registry. Needs the Cloud Drive's storage
-# (global.userStorage). Admins choose the scan profile and the grade a model needs to be released in the dashboard,
-# and may hide the section while no scanner is hooked up.
-# ---------------------------------------------------------------------------------------------------------------
-modelScanner:
-  enabled: true
-  # none shipped: e.g. '{{ include "platform.image" (list . "ghcr.io/user187x/coder-garak:0.17.1-2") }}'
-  image: ""
-  # Each scan Job's CPU limit (llama.cpp runs the model on CPUs), its memory beyond the model's own size (llama.cpp's
-  # context for the parallel prompts, garak and its detector models), and how many of garak's prompts it answers at
-  # once.
-  cpu: "4"
-  memoryGiB: 6
-  parallel: 4
-  # Where the newest garak release is looked up, to show it next to the scanner's (PyPI's JSON API for garak; in an
-  # air-gapped network your PyPI mirror's, or "off").
-  pypiUrl: https://pypi.org/pypi/garak/json
-
-# ---------------------------------------------------------------------------------------------------------------
 # The Cloud Drive (global.userStorage.enabled): each account's own storage, a prefix users/<user id>/ in one S3 bucket. The
 # platform service makes every account's volume (a PersistentVolume of the CSI driver below, its claim coder-safe-<id>)
 # and serves the Workspaces page's Cloud Drive; every workspace of the account mounts it (ReadWriteMany). The files are on the
@@ -454,7 +430,7 @@ uiUpdates:
   # (+ its database) and regctl (development/image-tools), which the Images view lints, formats and scans with -
   # tagged with the code's hash (development/tools/build-ui-image.sh builds and pins it). The chart carries no code:
   # Helm keeps each release in a Secret of at most 1 MiB.
-  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-4c13c62a81e9") }}'
+  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-24d4f77973b6") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'

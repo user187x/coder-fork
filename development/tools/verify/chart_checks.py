@@ -242,11 +242,6 @@ def template_checks(B, chart, default_render):
           and startup.index("Terminal=false/") < startup.index("Xtigervnc :1 -auth"), "")
     check("startup.sh: only copies reach the computer's clipboard (Xtigervnc -SendPrimary=0)",
           "-SendPrimary=0" in startup, "")
-    # The Model Library's scanner (garak) is a plug-in: imported in the dashboard, never shipped with the platform
-    scanner = yaml.safe_load(vals).get("modelScanner") or {}
-    check("model scanner: a plug-in - no image pinned or bundled (Model library > Import scanner)",
-          scanner.get("image") == "" and scanner.get("enabled") is True
-          and "coder-garak" not in open(os.path.join(B, "images.txt")).read(), scanner.get("image"))
     # Every template has the GPU parameter (the workspace settings' GPU switch), disabled (styling): no template runs
     # its workspaces on GPUs, so its value never reaches the pod
     gpu_param = re.search(r'data "coder_parameter" "gpus" \{(.*?)\n\}', tf, re.S)
@@ -276,6 +271,21 @@ def template_checks(B, chart, default_render):
           not os.path.exists(os.path.join(dev, "tools", "build-ai-image.sh"))
           and not os.path.exists(os.path.join(dev, "workspace-image-ai", "Dockerfile"))
           and "coder-workspace-ai" not in images_txt, "")
+    # The Model Library and its scanner plug-in (garak) went with the AI template: no values, no settings or code in the
+    # platform service, no scanner image or its build
+    ui_dir = os.path.join(chart, "files", "ui-updates")
+    left = [what for what, there in (
+        ("values.yaml modelScanner", "modelScanner" in vals),
+        ("garak, MODEL_SCANNER_* or modelscan in the render",  # \b: the banner's emoji data has "jeotgarak"
+         re.search(r"\bgarak|MODEL_SCANNER|modelscan", default_render, re.I)),
+        ("files/ui-updates/modelscan.py", os.path.exists(os.path.join(ui_dir, "modelscan.py"))),
+        ("ui-service.py uses modelscan", "modelscan" in open(os.path.join(ui_dir, "ui-service.py")).read()),
+        ("safe.py's model library", re.search(r'"models"|coder-models|SAFE_MODEL_|holdPrefix|LIBRARY_HOOKS',
+                                              open(os.path.join(ui_dir, "safe.py")).read())),
+        ("development/garak-image/", os.path.exists(os.path.join(dev, "garak-image"))),
+        ("build-garak-image.sh", os.path.exists(os.path.join(dev, "tools", "build-garak-image.sh"))),
+        ("coder-garak in images.txt", "coder-garak" in images_txt)) if there]
+    check("model library and its scanner (garak): removed - no values, service code, image or build", not left, left)
 
 
 def decorator_checks(B, chart, full_render):

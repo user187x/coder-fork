@@ -270,14 +270,6 @@ The full feature list, with where each piece lives and how it is tested, is
   `docs/fix-image-api.md`.
 - **Every image is scanned offline**, built ones and the workspace image the template runs (listed first, read-only,
   "In use by workspaces"). See [Image security](#image-security).
-- **Every model scanned before it is used, with the LLM scanner plug-in:** once an admin hooks up the scanner (Model
-  library > Import scanner: the archive `build-garak-image.sh` writes to `dist/plugins/`, not part of the bundle), a
-  model added to the model library waits in a hold (mounted nowhere) until [garak](https://github.com/NVIDIA/garak)
-  has probed it in a Job, offline (its detector models and probe data in its image; llama.cpp serves the model), and
-  its file is checked (no code in its chat template, nothing appended); its grade (A-F, from garak's DEFCON levels)
-  releases it, or an admin does. The report: every probe's severity and OWASP LLM category, failing prompts and
-  answers, garak's own files. A newer garak is a newer scanner image, imported and chosen in the library. Without the
-  plug-in, models go straight in, marked unscanned, and the LLM scanning section can be hidden.
 - **Delete any image** in Images (confirmed first; the workspace template's own entry comes back with the next
   workspace image), and see **what each of the Coder fork's images holds:** a "Coder fork" tag on them opens a tree
   of their programs and versions, OS and Python packages, configuration and build steps, read from the images as
@@ -473,7 +465,7 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 | **Static** (`chart_checks.py`, 31 checks) | The chart renders for Minikube, EKS, a private registry, Keycloak-only and admins' kubectl, plus: every image pinned and archived; no floating tags; Keycloak's Secrets optional; nothing at workspace start needs the internet; the first owner is the installer's; Argo CD hook order; the template's scripts shipped, `shfmt -i 1` formatted and `bash -n` clean | `./run.sh static` |
 | **Unit: fork** | `go test` on every package the fork changed (or upstream's whole suite), and the dashboard's vitest suite (upstream's ~4,700 tests and the fork's). New fork code comes with tests, e.g. OIDC fallback, first-owner guard, MD5, uptime, network lights, Inbox, Images | `./run.sh unit` |
 | **Unit: platform service** (`platform_unit_test.py`, 16 tests) | The session cache, admin sync, image builder offline refusals and base seeding, the tracked workspace image, add-ons parsing, Coder uptime | `python3 -m unittest` |
-| **Image build checks** | Every workspace image build asserts its tools, desktop, fonts and shell setup. With **no network**, it then runs Firefox and starts code-server and File Browser. The model scanner's build loads every probe and detector with no network, then scans a small model within a scan Job's memory | `build-workspace-image.sh`, `build-garak-image.sh` |
+| **Image build checks** | Every workspace image build asserts its tools, desktop, fonts and shell setup. With **no network**, it then runs Firefox and starts code-server and File Browser. | `build-workspace-image.sh` |
 | **code-server HA on PostgreSQL** (`csha_db_test.py`) | A throwaway PostgreSQL: the relay role confined to its workspace, two clusters' operators keeping one instance (replaced, taken over, fenced), the relays carrying a connection to the active code-server, its state restored | `python3 csha_db_test.py` |
 | **Air-gapped end to end** | DEPLOY.md followed from a fresh bundle on a kind cluster with **all internet egress blocked**, every image loaded from the bundle. The steps: sign-in and workspace checks (8), the image builder offline (9), Keycloak down and its Secrets missing (10) | `airgap-e2e/e2e.sh`, `step8–10.sh` |
 | **Live conformance** (`live.py`) | On a real deployment with a throwaway user and workspace. **Upstream:** users, tokens, organizations, templates (offline `terraform init`), the workspace lifecycle, agent, apps through Coder's proxy, the web terminal, ports, logs, insights, health, provisioners, notifications. **Fork:** every platform service view and its access rules | `./run.sh live` |

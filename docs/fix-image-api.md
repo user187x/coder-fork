@@ -86,5 +86,5 @@ Step = {key, label, state: "done"|"active"|"pending"|"failed", startedAt?, finis
   - **webhook:** a URL that is posted the run and answers through the run's token.
 - **Questions for review:**
   - Which agents does this deployment allow?
-  - May a runner reach a model endpoint from an air-gapped cluster (the model library's, in-cluster)?
+  - May a runner reach a model endpoint from an air-gapped cluster?
   - Who may approve Promote: the same editing roles, or owners only?

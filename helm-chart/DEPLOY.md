@@ -446,9 +446,6 @@ background chosen from them is stored as its path and drawn from Coder. `helm-ch
 `~/isos` in each. Admins and template admins upload ISOs (or `.img`) or have the platform service fetch one from an
 address the cluster reaches; up to 20 GB each (`SAFE_ISO_MAX_GIB`). Personal ones go in each user's Cloud Drive.
 
-**The model library** (the same storage): language models in GGUF format, uploaded or fetched like ISOs; up to 100 GB
-each (`SAFE_MODEL_MAX_GIB`). No template of the chart mounts it (its volume: `coder-models`, read-only).
-
 Builds start from the workspace image in the builder's own registry in the cluster, so BuildKit needs no access
 to your registry. `./make --deploy` puts it there (on any cluster); after an Argo CD or plain Helm install, run
 `./mirror-images.sh seed-builder coder` once (Step 8). Until then, builds use the workspace image in your registry
@@ -501,43 +498,6 @@ volume (`imageBuilder.enabled`) and the platform service's permission to manage 
 > `filebrowser-quantum` release binary, under the app's path, no sign-in of its own, no update check), tmux,
 > k9s/kubectl and the JetBrains Mono Nerd Font. Nothing is downloaded when a workspace starts (`coder-workspace:1.8.0`
 > and later).
-
-## The model library's security scan (garak)
-
-**A plug-in:** the platform ships no scanner (`modelScanner.image: ""`; the 8 GB image is no part of the bundle), and
-nothing depends on one. Without it, models go straight into the library, unscanned, and Templates › Images › Model
-library says so - admins may hide that section. To hook it up, an admin chooses **Import scanner** there: the
-`docker save` archive `development/tools/build-garak-image.sh` writes to `dist/plugins/` (or an image already imported
-in the Images view, or a registry's). The platform checks it (an info Job reads its garak version, probes and
-profiles) and uses it from then on; **Back to none** unhooks it. A deployment of your own may pin it instead
-(`modelScanner.image`, the image in your registry).
-
-With a scanner hooked up, every model added to the model library (uploaded, or fetched from an address) is scanned
-with [garak](https://github.com/NVIDIA/garak), NVIDIA's LLM vulnerability scanner, **before any workspace can use
-it**. Until then it waits in a hold that is mounted nowhere (`library/quarantine/models/` of the Cloud Drive's
-bucket). A scan Job (`modelScanner.image`, `ghcr.io/user187x/coder-garak`: garak, its detector models and probe data,
-CPU PyTorch and llama.cpp's `llama-server`, all in the image - it needs no network) fetches the model from the
-platform service, checks the file (a well-formed GGUF; no code in its chat template - the Jinja escape of
-CVE-2024-34359; nothing appended after its tensors), serves it with `llama-server` and runs garak's probes against
-it. Its report is graded like an image's (A to F) from garak's DEFCON levels against garak's calibration: DC-1
-critical, DC-2 high, DC-3 medium, DC-4 low. A model graded at the **release grade** or better, with no failed file
-check, moves into the library; any other stays held until an admin releases it anyway (recorded), rescans or
-deletes it. Models already in the library are scanned where they are; an admin can hold a released model again.
-
-* **The report**, in the image report's layout: the grade and garak's own TBSA score; every probe and detector with
-  its severity, failure rate and OWASP LLM Top 10 category (a filter each); a few failing prompts and answers per
-  probe; the model file's details and checks; garak's own `report.jsonl`, hits and HTML report to download.
-* **Profiles** (the scanner's settings): Quick (garak's tier 1 probes, 10 prompts each), **Standard** (tier 1, up to
-  30 prompts: enough for garak's calibrated scores; the default) and Thorough (tiers 1 and 2, 128 prompts, 3 answers
-  each: hours to days on CPUs). One scan at a time; each Job gets `modelScanner.cpu` and the model's size plus
-  `modelScanner.memoryGiB` of memory.
-* **Updating garak** (its probes, detectors, payloads and calibration - garak's "definitions" - ship with garak): build
-  a newer scanner with `development/tools/build-garak-image.sh <garak version>-<n> --relock` on a connected machine
-  (it checks the image offline and saves its archive), import it in the Images view (from a registry, or the
-  `docker save` archive) and choose it in the model library's **Scanner** settings: it is read first (its garak
-  version, profiles and probes), then used; **Rescan every model** grades the library again. Where the platform
-  service reaches PyPI (`modelScanner.pypiUrl`, or your mirror's), the newest garak release is shown beside the
-  scanner's. A release of the platform carries the newest scanner as `modelScanner.image`.
 
 ## The Cloud Drive (each account's own storage)
 

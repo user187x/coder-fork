@@ -39,7 +39,6 @@ SOURCES = {
     "coder-workspace-dataflow": ("development/workspace-image-dataflow", "development/tools/build-dataflow-image.sh"),
     "coder-registry": ("development/registry-image", "development/tools/build-registry-image.sh"),
     "coder-minio": ("development/tools/build-minio-image.sh", "development/tools/build-minio-image.sh"),
-    "coder-garak": ("development/garak-image", "development/tools/build-garak-image.sh"),
 }
 
 # The programs we put in each (beyond the workspace images' add-ons): (name, what it does, command, version pattern).
@@ -64,13 +63,6 @@ PROGRAMS = {
     "coder-registry": [
         ("Docker registry", "Where built and imported images are kept", ["registry", "--version"],
          r"distribution/v\d+ (\S+)"),
-    ],
-    "coder-garak": [
-        ("garak", "NVIDIA's LLM vulnerability scanner", ["sh", "-c", "python3 -m pip show garak 2>/dev/null || "
-                                                          "/opt/garak/bin/python3 -m pip show garak"],
-         r"Version: (\S+)"),
-        ("llama.cpp (llama-server)", "Serves the model to garak", ["sh", "-c", "llama-server --version 2>&1"],
-         r"version: (\S+)"),
     ],
 }
 
