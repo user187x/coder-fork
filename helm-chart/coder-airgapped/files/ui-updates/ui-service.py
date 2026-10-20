@@ -32,6 +32,8 @@
   Sign-in and sign-out page
   GET  /__coder-ui/api/login-page         public (the sign-in page reads it; boot.js has it too)
   POST /__coder-ui/api/login-page         admins: {title, effect, color, speed, message, signedOutMessage}
+  GET  /__coder-ui/api/quick-menu         the quick access wheel's wedges (signed in; items null: the default)
+  POST /__coder-ui/api/quick-menu {items}  admins: 3 to 12 choices' IDs, in order   POST .../quick-menu/reset
 
   Logo (stored in Coder's own CloudNativePG database, schema coder_ui_updates)
   GET  /__coder-ui/boot.js                loaded first by every Coder page: the logo (and classification) to use
@@ -1388,6 +1390,30 @@ def clean_login_page(p):
 
 def login_page_settings():
     return dict(LOGIN_PAGE_DEFAULT, **(STORE.get_setting("login_page", {}) or {}))
+
+
+# The quick access wheel (Escape, on every page): its wedges, as admins arrange them (Admin Settings > Quick Menu).
+# The dashboard knows the choices (the admin categories and its own pages) by their IDs; none saved: its default wheel.
+QUICK_MENU_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+QUICK_MENU_WEDGES = (3, 12)
+
+
+def clean_quick_menu(p):
+    items = p.get("items")
+    if not isinstance(items, list) or not all(isinstance(i, str) and QUICK_MENU_ID.match(i) for i in items):
+        raise ValueError("items: the wedges' choices, by their IDs.")
+    if len(set(items)) != len(items):
+        raise ValueError("A choice can be on the wheel once.")
+    least, most = QUICK_MENU_WEDGES
+    if not least <= len(items) <= most:
+        raise ValueError("The wheel takes %d to %d wedges." % (least, most))
+    return {"items": items}
+
+
+def quick_menu_settings():
+    saved = STORE.get_setting("quick_menu", None) or {}
+    return {"items": saved.get("items") or None, "updatedBy": saved.get("updatedBy"), "updatedAt": saved.get("updatedAt"),
+            "wedges": list(QUICK_MENU_WEDGES)}
 
 
 CLASSIFICATION_DEFAULT = {
@@ -8492,6 +8518,11 @@ class Handler(BaseHTTPRequestHandler):
             )
         if path == BASE + "/api/login-page":
             return self.send_json(200, login_page_settings())
+        if path == BASE + "/api/quick-menu":
+            user, err = self.user()
+            if err:
+                return
+            return self.send_json(200, quick_menu_settings())
         if path == BASE + "/api/keycloak":
             user, err = self.user(admin=True)
             if err:
@@ -9201,6 +9232,8 @@ class Handler(BaseHTTPRequestHandler):
             BASE + "/api/events/clear",
             BASE + "/api/classification",
             BASE + "/api/login-page",
+            BASE + "/api/quick-menu",
+            BASE + "/api/quick-menu/reset",
             BASE + "/api/keycloak/apply",
             BASE + "/api/keycloak/undo",
             BASE + "/api/keycloak/connect",
@@ -9294,6 +9327,19 @@ class Handler(BaseHTTPRequestHandler):
             STORE.put_setting("login_page", value)
             log(event="login-page-saved", user=user["username"], effect=value["effect"], title=value["title"])
             return self.send_json(200, login_page_settings())
+        if path == BASE + "/api/quick-menu":
+            try:
+                value = clean_quick_menu(payload)
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            value.update({"updatedBy": user["username"], "updatedAt": now()})
+            STORE.put_setting("quick_menu", value)
+            log(event="quick-menu-saved", user=user["username"], items=",".join(value["items"]))
+            return self.send_json(200, quick_menu_settings())
+        if path == BASE + "/api/quick-menu/reset":
+            STORE.put_setting("quick_menu", {"items": None, "updatedBy": user["username"], "updatedAt": now()})
+            log(event="quick-menu-reset", user=user["username"])
+            return self.send_json(200, quick_menu_settings())
         if path == BASE + "/api/scheduler":
             try:
                 value = clean_scheduler(payload)

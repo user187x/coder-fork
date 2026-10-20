@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.95` (fork `704883071`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.96` (fork `c62a06cae`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
@@ -46,6 +46,13 @@ is a plug-in now (`dist/plugins/`, not in the bundle).
   field, and with a menu or dialog open (that closes as it would, then the wheel opens) - but in a terminal, whose
   programs need Escape: there Shift+Escape (which works anywhere). Escape again or a click off the wheel closes it;
   the arrow keys go round it and Enter opens.
+* **Quick Menu** (fork, service; Admin Settings > Quick Menu): admins arrange the quick access wheel's wedges -
+  which choices, from the dashboard's pages (Workspaces, Templates, Images, Account, Chat, HUD) and every admin
+  category (Accounts, Announcement, Appearance, Authentication, Classification, Health, Monitoring, Network,
+  Notifications, OAuth2 Applications, Observability, Persistence, Quick Menu, Security), in what order, 3 to 12 -
+  beside a live preview of the wheel; Save gives everyone that wheel, Reset to default the eight. A wedge someone
+  may not open shows dimmed for them; long names are set smaller to fit their wedge. Kept by the platform service
+  (`/__coder-ui/api/quick-menu`).
 * **The image store** (service, fork, platform service image): one store of pictures behind every picture chooser -
   the announcement's image (its Upload image arrow), the dashboard's and the sign-in page's backgrounds, avatars, the
   logo and template icons (Image store, beside Upload). It holds 29 provided animated pictures baked into the platform

@@ -733,6 +733,28 @@ class ImageStoreTest(unittest.TestCase):
         self.assertEqual(again.wfile.getvalue(), b"")
 
 
+class QuickMenuTest(unittest.TestCase):
+    """Admin Settings > Quick Menu: the wheel's wedges, checked (IDs, each once, 3 to 12) and kept; none: the default."""
+
+    def test_checked(self):
+        self.assertEqual(ui.clean_quick_menu({"items": ["workspaces", "accounts", "oauth2-applications"]}),
+                         {"items": ["workspaces", "accounts", "oauth2-applications"]})
+        for bad, why in (({"items": ["a", "a", "b"]}, "once"), ({"items": ["a", "b"]}, "3 to 12"),
+                         ({"items": ["x%d" % i for i in range(13)]}, "3 to 12"), ({"items": "workspaces"}, "IDs"),
+                         ({"items": ["Workspaces", "b", "c"]}, "IDs"), ({"items": ["../x", "b", "c"]}, "IDs")):
+            with self.assertRaises(ValueError) as e:
+                ui.clean_quick_menu(bad)
+            self.assertIn(why, str(e.exception))
+
+    def test_none_saved_is_the_default(self):
+        with mock.patch.object(ui, "STORE", mock.Mock(get_setting=lambda key, default=None: None)):
+            self.assertEqual(ui.quick_menu_settings()["items"], None)
+        saved = {"items": ["hud", "images", "security"], "updatedBy": "admin", "updatedAt": "t"}
+        with mock.patch.object(ui, "STORE", mock.Mock(get_setting=lambda key, default=None: saved)):
+            got = ui.quick_menu_settings()
+        self.assertEqual((got["items"], got["wedges"]), (["hud", "images", "security"], [3, 12]))
+
+
 class BannerPictureTest(unittest.TestCase):
     """Insert picture: what is accepted, and how pictures are kept (named by their content, the newest kept)."""
 
