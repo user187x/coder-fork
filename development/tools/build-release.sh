@@ -4,7 +4,7 @@
 # files can be the assets of a GitHub release as they are.
 #   coder-airgapped-<version>.tgz    the chart (helm lint and a render first; packaged from a copy without __pycache__):
 #                                    one helm install installs the whole platform (INSTALL.md)
-#   images/<name>_<tag>.tar.gz       each image (docker save | gzip, from helm-chart/images: hard-linked when on the same
+#   <name>_<tag>.tar.gz              each image (docker save | gzip, from helm-chart/images: hard-linked when on the same
 #                                    file system, else copied); one over SPLIT_SIZE in parts <file>.part-00, -01, ...
 #                                    (streamed by split, no extra whole copy; cat joins them)
 #   push-images.sh                   the far side: ./push-images.sh REGISTRY [--dry-run] - checks SHA256SUMS, then docker
@@ -14,7 +14,7 @@
 #                                    push, the one helm install, the first sign-in (release/INSTALL.md.in)
 #   values-eks-airgap.example.yaml   the values to start from
 #   SHA256SUMS                       every file in the folder, parts one by one (sha256sum -c SHA256SUMS works as is)
-#   SHA256SUMS.joined                the split archives as joined (images/<file>.tar.gz), when any is split
+#   SHA256SUMS.joined                the split archives as joined (<file>.tar.gz), when any is split
 #   CVE-REPORT.md                    with --scan / --scan-only
 # The images: those of images.txt that are ours (ghcr.io/user187x/...), outside its [rollback] and [reference]
 # sections, and in `helm template --set global.registry=REGISTRY.invalid` (matched on path:tag). An image of ours the
@@ -175,7 +175,7 @@ build_release() {
 		fi
 		s=$(awk -v f="$(basename "$f")" '$2 == f {print $1}' "${dir}/SHA256SUMS" 2>/dev/null || true)
 		[[ -n "$s" ]] || { errors+=("${f#"${top}"/} is not listed in its folder's SHA256SUMS"); continue; }
-		[[ -z "${taken[${n}_${tag}]:-}" ]] || { errors+=("two images would both be images/${n}_${tag}.tar.gz"); continue; }
+		[[ -z "${taken[${n}_${tag}]:-}" ]] || { errors+=("two images would both be ${n}_${tag}.tar.gz"); continue; }
 		taken[${n}_${tag}]=1
 		src+=("$f") sum+=("$s") file+=("${n}_${tag}.tar.gz") size+=("$(stat -c %s "$f")")
 		if ((${size[-1]} > split_bytes)); then mode+=(split)
@@ -211,7 +211,7 @@ build_release() {
 		copy) need=$((need + size[k])); how="copied" ;;
 		link) how="hard link" ;;
 		esac
-		printf '  %-62s %10s  %s\n' "images/${file[$k]}" "$(human "${size[$k]}")" "$how"
+		printf '  %-62s %10s  %s\n' "${file[$k]}" "$(human "${size[$k]}")" "$how"
 	done
 	echo "  ${#sel[@]} images, $(human "$total"); to write: $(human "$need") (split size $(human "$split_bytes"))"
 	if ((${#left_out[@]})); then
@@ -234,7 +234,7 @@ build_release() {
 		[[ -z "$(/bin/ls -A "$out")" || -f "$out/IMAGES.txt" ]] ||
 			die "$out is not empty and not a release folder (no IMAGES.txt): choose another --out"
 	fi
-	stage="${out}.partial"; rm -rf "$stage"; mkdir -p "$stage/images"
+	stage="${out}.partial"; rm -rf "$stage"; mkdir -p "$stage"
 	: >"$tmp/sums"; : >"$tmp/joined"
 	local whole got list meta cfg man tags hash_pid
 	local -a plist
@@ -247,7 +247,7 @@ build_release() {
 		echo "# image  files  size  config  manifest"
 	} >"$stage/IMAGES.txt"
 	for k in "${!sel[@]}"; do
-		img=${images[${sel[$k]}]} f="images/${file[$k]}"
+		img=${images[${sel[$k]}]} f="${file[$k]}"
 		echo "${img} -> ${f} ($(human "${size[$k]}"), ${mode[$k]})"
 		if [[ "${mode[$k]}" == split ]]; then
 			# one pass: tee into sha256sum (the whole archive, checked against SHA256SUMS below) and into split, whose
@@ -308,7 +308,8 @@ build_release() {
 
 	# SHA256SUMS: every file (the images' from the pass above); SHA256SUMS.joined: the split archives as joined
 	if [[ -s "$tmp/joined" ]]; then sort -k2,2 "$tmp/joined" >"$stage/SHA256SUMS.joined"; fi
-	(cd "$stage" && find . -type f ! -path './images/*' -printf '%P\n' | sort | xargs -d '\n' sha256sum) >>"$tmp/sums"
+	(cd "$stage" && find . -type f -printf '%P\n' | grep -vxF -f <(awk '{print $2}' "$tmp/sums") | sort |
+		xargs -d '\n' sha256sum) >>"$tmp/sums"
 	sort -k2,2 "$tmp/sums" >"$stage/SHA256SUMS"
 
 	rm -rf "$out"; mv "$stage" "$out"; stage=""

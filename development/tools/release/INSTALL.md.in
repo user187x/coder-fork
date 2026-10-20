@@ -7,7 +7,7 @@ platform with one `helm install`.
 | File | What it is |
 |---|---|
 | `coder-airgapped-@VERSION@.tgz` | The chart |
-| `images/` | @IMAGE_COUNT@ images of ours, `docker save` + gzip (@IMAGES_SIZE@); one over 1900 MiB is split into `<file>.part-00`, `-01`, ... (`cat` joins them) |
+| `<name>_<tag>.tar.gz` | @IMAGE_COUNT@ images of ours, `docker save` + gzip (@IMAGES_SIZE@); one over 1900 MiB is split into `<file>.part-00`, `-01`, ... (`cat` joins them) |
 | `push-images.sh` | Checks the files, then loads each image and pushes it to your registry (docker only) |
 | `IMAGES.txt` | Each image: its reference, file(s), size, config and manifest digests |
 | `values-eks-airgap.example.yaml` | The values to start `my-values.yaml` from |
