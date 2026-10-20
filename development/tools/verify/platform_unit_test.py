@@ -1610,6 +1610,28 @@ class PitStopTest(unittest.TestCase):
         self.assertEqual((env["COPA_ADDR"], env["DOCKER_CONFIG"]), ("unix:///run/copa/buildkitd.sock", "/docker"))
         self.assertEqual(spec["securityContext"]["seccompProfile"]["type"], "Unconfined")  # rootlesskit
 
+    def test_the_lap_reads_its_report_without_java_archives(self):
+        # Copa does not patch them, and trivy would need its Java database for them (none: it stops on the first run)
+        import io
+        plan = {"lap": 1, "source": "%s/coder-images/base/ai:2" % ib.REGISTRY, "target": "%s/coder-images/ai-patched:1"
+                % ib.REGISTRY, "libraries": True, "pairs": [], "report": None}
+        runs = []
+
+        def run(cmd, **kw):
+            runs.append(cmd)
+            return mock.Mock(returncode=1, stdout=b"", stderr=b"FATAL")
+
+        with mock.patch.object(ib, "_forward"), mock.patch.object(ib.subprocess, "run", run), \
+                mock.patch.object(ib.securitydata, "job_stamp", lambda d: {"cacheDir": "/data"}), \
+                mock.patch.object(ib.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(json.dumps(plan).encode())), \
+                mock.patch.dict(os.environ, {"BUILDER_REGISTRY": ib.REGISTRY}), \
+                self.assertRaises(SystemExit), mock.patch("builtins.print"):
+            ib.copa("http://svc/copa/1")
+        cmd = runs[0]
+        self.assertEqual(cmd[:2], ["trivy", "image"])
+        self.assertEqual([cmd[i + 1] for i, a in enumerate(cmd) if a == "--skip-files"], ["**/*.jar", "**/*.war", "**/*.ear"])
+        self.assertEqual((cmd[cmd.index("--pkg-types") + 1], cmd[-1]), ("os,library", "localhost:5000/coder-images/base/ai:2"))
+
     def test_the_jobs_own_endpoints(self):
         import io
         image_id = self.scanned()

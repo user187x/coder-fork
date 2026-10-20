@@ -2036,6 +2036,8 @@ class PitStop(Build):
 
     def fail(self, error):
         super().fail(error)
+        # the pit lane's headline: what stopped it, not the station it was at
+        STORE.update_build(self.build_id, message="Cancelled" if self.cancelled else error.strip().split("\n")[0][:200])
         st = pit_state(self.build_id)
         if st:
             st["outcome"] = "cancelled" if self.cancelled else "failed"
@@ -2222,9 +2224,11 @@ def copa(url):
         print("[pit] report: trivy on %s (%s packages)" % (plan["source"], "OS and library" if plan["libraries"]
                                                              else "OS"), flush=True)
         data = securitydata.job_stamp(os.environ.get("SECURITY_DIR"))
+        # Java archives aside: Copa does not patch them, and they would need trivy's Java database
         cmd = ["trivy", "image", "--insecure", "--cache-backend", "memory", "--cache-dir", data["cacheDir"],
                "--skip-db-update", "--skip-java-db-update", "--scanners", "vuln", "--ignore-unfixed",
                "--pkg-types", "os,library" if plan["libraries"] else "os", "--format", "json", "--quiet",
+               "--skip-files", "**/*.jar", "--skip-files", "**/*.war", "--skip-files", "**/*.ear",
                "--timeout", "45m", source]
         p = subprocess.run(cmd, capture_output=True, timeout=3600)
         if p.returncode != 0:
