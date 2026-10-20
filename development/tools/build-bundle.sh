@@ -25,17 +25,20 @@
 #   ./build-bundle.sh [--no-save] [--no-full] [--no-slim] [--no-split] [--layer-base VERSION | --no-layer]
 # --no-slim: not the slim tarball (not a release asset; it holds every image of ours, the dataflow one among them).
 # --no-full: not the full tarball (a release of our images only: the slim one is the bundle).
+# --parts: the full and slim tarballs written straight as parts of under 2 GiB (GitHub's limit for a release asset):
+#   <tarball>.part-NN, their <name>.parts.sha256 and the whole one's .sha256 - no whole tarball on disk.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; top="$(cd "${here}/../.." && pwd)"
 bundle="${top}/helm-chart"; chart="${bundle}/coder-airgapped"; dist="${top}/dist"
 version=$(sed -n 's/^version: *//p' "${chart}/Chart.yaml"); name="coder-airgapped-${version}"
-save=1 full=1 slim=1 split=1 layer_base=""
+save=1 full=1 slim=1 split=1 parts=0 layer_base=""
 while (($#)); do
 	case "$1" in
 	--no-save) save=0 ;;
 	--no-full) full=0 ;;
 	--no-slim) slim=0 ;;
 	--no-split) split=0 ;;
+	--parts) parts=1 ;;
 	--layer-base) layer_base="${2:?--layer-base VERSION}"; shift ;;
 	--no-layer) layer_base=none ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
@@ -73,8 +76,17 @@ helm repo index "$charts"
 
 tarball() { # OUT [tar options...]: the bundle's tree as coder-airgapped-<version>/, but what the options leave out
 	local out="$1"; shift
-	tar -I "$zip" -C "$top" -cf "${dist}/${out}.part" --exclude='*.part' --exclude='__pycache__' --exclude='helm-chart/.deploy' \
-		--exclude='helm-chart/LAYER.json' "$@" --transform "s|^helm-chart|${name}|" helm-chart
+	local -a tar_args=(-I "$zip" -C "$top" --exclude='*.part' --exclude='__pycache__' --exclude='helm-chart/.deploy'
+		--exclude='helm-chart/LAYER.json' "$@" --transform "s|^helm-chart|${name}|" helm-chart)
+	if ((parts)); then
+		rm -f "${dist}/${out}".part-*
+		tar -cf - "${tar_args[@]}" | split -b 1900M -d -a 2 - "${dist}/${out}.part-"
+		(cd "$dist" && sha256sum "${out}".part-* >"${out%.tar.gz}.parts.sha256" &&
+			cat "${out}".part-* | sha256sum | sed "s|-\$|${out}|" >"${out}.sha256")
+		echo "wrote dist/${out}.part-* ($(du -cb "${dist}/${out}".part-* | tail -n1 | cut -f1 | numfmt --to=iec), $(ls "${dist}/${out}".part-* | wc -l) parts)"
+		return
+	fi
+	tar -cf "${dist}/${out}.part" "${tar_args[@]}"
 	mv "${dist}/${out}.part" "${dist}/${out}"; (cd "$dist" && sha256sum "$out" >"${out}.sha256")
 	echo "wrote dist/${out} ($(du -h "${dist}/${out}" | cut -f1))"
 }

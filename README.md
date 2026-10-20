@@ -510,7 +510,9 @@ Image archives are not in git: `images.txt` pins every image by digest, and `bui
 public ones (`mirror-images.sh save`). The Coder server is built from the fork (`scripts/build_platform_image.sh`
 there; see [`development/coder-fork/FORK.md`](development/coder-fork/FORK.md)). Releases are published on GitHub in
 pieces of under 2 GiB, each with SHA-256 files: an asset over that (the bundle, `-images-workspaces`) is split with
-`split -b 1900M -d <asset> <asset>.part-` and listed in `<asset-name>.parts.sha256`. `main` is always release-ready in both repositories.
+`split -b 1900M -d <asset> <asset>.part-` and listed in `<asset-name>.parts.sha256` (`build-bundle.sh --parts` writes
+the bundles that way straight from tar, with no whole copy on disk; 1.40.0: `--no-full --no-split --no-layer --parts`).
+`main` is always release-ready in both repositories.
 
 ## Following upstream and rolling back
 
