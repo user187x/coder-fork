@@ -451,6 +451,9 @@ Both are small, write-light and indexed by `replica_id`. Nothing in `public` cha
   disabled. Ours is new Community code (AGPL), in the fork, using Coder's public Community interfaces and the
   BSD-licensed tailscale library.
 - When a `high_availability` license is active, Coder's Enterprise HA runs and ours stands aside.
+- **Use (the owner's statement, 2026-10-20):** this platform supports one internal team only. It is a one-off for a
+  niche team. It will never be used as the basis of a project for gain, never function toward profit, and never divert
+  business from Coder. It is not offered, sold or hosted for anyone else.
 - **Sign-off needed:** the owner confirms this reading of `LICENSE.enterprise` before Phase 3 ships.
 
 ## Rollout and verification
