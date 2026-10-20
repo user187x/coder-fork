@@ -53,6 +53,40 @@ def ha_checks(B, ha_render, default_render):
               "maxUnavailable": 1, "selector": {"matchLabels": {"app.kubernetes.io/name": "coder",
                                                                 "app.kubernetes.io/instance": "coder"}}}}, got)
     check("one Coder replica: no PodDisruptionBudget", ("PodDisruptionBudget", "coder") not in objects(default_render))
+    # ADR-0001 phase 0: the infrastructure part of high availability, all in values-ha.example.yaml, none by default
+    db = docs.get(("Cluster", "coder-db"), {}).get("spec", {})
+    pooler = docs.get(("Pooler", "coder-db-pooler-rw"), {}).get("spec", {})
+    pdbs = sorted(n for k, n in docs if k == "PodDisruptionBudget")
+    relay = docs.get(("Secret", "coder-code-server-ha-relay"), {}).get("stringData", {}).get("uri", "")
+    alt = (db.get("certificates") or {}).get("serverAltDNSNames") or []
+    check("high availability: synchronous replication (a commit waits for one standby, none lost in a failover)",
+          (db.get("postgresql") or {}).get("synchronous") == {"method": "any", "number": 1, "dataDurability": "required"},
+          db.get("postgresql"))
+    check("high availability: PgBouncer for the relays (2 pods, transaction mode, its pinned image, its name in the "
+          "server certificate, the relays' URI on it; Coder stays on -rw)",
+          pooler.get("type") == "rw" and pooler.get("instances") == 2
+          and (pooler.get("pgbouncer") or {}).get("poolMode") == "transaction"
+          and pooler.get("template", {}).get("spec", {}).get("containers", [{}])[0].get("image", "").endswith(
+              "cloudnative-pg/pgbouncer:1.25.1")
+          and "coder-db-pooler-rw.coder.svc" in alt and "@coder-db-pooler-rw.coder.svc:5432/" in relay,
+          {"pooler": bool(pooler), "alt": alt, "relay host": relay.split("@")[-1].split("/")[0]})
+    check("high availability: a PodDisruptionBudget for every component with more than one copy",
+          {"coder", "coder-banner", "coder-code-server-replicator", "coder-db-pooler-rw"} <= set(pdbs), pdbs)
+    dflt = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d}
+    ddb = dflt.get(("Cluster", "coder-db"), {}).get("spec", {})
+    druri = dflt.get(("Secret", "coder-code-server-ha-relay"), {}).get("stringData", {}).get("uri", "")
+    check("default: no synchronous replication, no pooler, the relays on -rw (as before)",
+          not ddb.get("postgresql") and not ddb.get("certificates") and ("Pooler", "coder-db-pooler-rw") not in dflt
+          and "@coder-db-rw.coder.svc:5432/" in druri, "")
+    traefik = os.path.join(B, "prereqs", "traefik-41.4.0.ha-values.yaml")
+    rc, out, err = run(["helm", "template", "traefik", os.path.join(B, "prereqs", "traefik-41.4.0.tgz"), "-n", "traefik",
+                        "-f", os.path.join(B, "prereqs", "traefik-41.4.0.reference-values.yaml"), "-f", traefik])
+    tdocs = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(out) if d} if rc == 0 else {}
+    check("high availability: Traefik's overlay - 2 replicas spread over nodes and zones, one down at a time",
+          tdocs.get(("Deployment", "traefik"), {}).get("spec", {}).get("replicas") == 2
+          and tdocs.get(("PodDisruptionBudget", "traefik"), {}).get("spec", {}).get("maxUnavailable") == 1
+          and tdocs.get(("Deployment", "traefik"), {}).get("spec", {}).get("template", {}).get("spec", {}).get(
+              "topologySpreadConstraints"), err.strip()[-200:])
 
 
 def banner_checks(chart):

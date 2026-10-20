@@ -114,6 +114,7 @@ metadata:
   name: metrics-server
   labels: {app.kubernetes.io/name: metrics-server}
 spec:
+  replicas: {{ $ms.replicas | default 1 }}
   selector:
     matchLabels: {app.kubernetes.io/name: metrics-server}
   strategy:
@@ -124,6 +125,22 @@ spec:
     spec:
       serviceAccountName: metrics-server
       priorityClassName: system-cluster-critical
+      {{- if gt (int ($ms.replicas | default 1)) 1 }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app.kubernetes.io/name: metrics-server}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: metrics-server}
+      {{- end }}
       {{- with .Values.uiUpdates.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -181,4 +198,17 @@ spec:
   service: {name: metrics-server, namespace: {{ $ns }}}
   version: v1beta1
   versionPriority: 100
+{{- if gt (int ($ms.replicas | default 1)) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: metrics-server
+  namespace: {{ $ns }}
+  labels: {app.kubernetes.io/name: metrics-server}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: metrics-server}
+{{- end }}
 {{- end }}

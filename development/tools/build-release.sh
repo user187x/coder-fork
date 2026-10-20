@@ -199,6 +199,17 @@ build_release() {
 		[[ -n "${rendered[$r]:-}" && "$r" != user187x/* ]] || continue
 		public+=("${r}	${pub_src[$r]:-(not in images.txt)}")
 	done <"$tmp/rendered"
+	# and the ones only high availability runs (values-ha.example.yaml: the database's pooler, ...)
+	local -a public_ha=()
+	if [[ -f "${bundle}/values-ha.example.yaml" ]]; then
+		helm template coder "$chart" -n coder -f "${bundle}/values-ha.example.yaml" --set global.registry=REGISTRY.invalid \
+			>"$tmp/render-ha.yaml" 2>"$tmp/render.log" || { cat "$tmp/render.log" >&2; die "helm template with values-ha.example.yaml failed"; }
+		while read -r r; do
+			[[ -z "${rendered[$r]:-}" && "$r" != user187x/* && "${r##*/}" == *:* && "$r" != *@* ]] || continue
+			public_ha+=("${r}	${pub_src[$r]:-(not in images.txt)}")
+		done < <(grep -oE 'REGISTRY\.invalid/[A-Za-z0-9._/-]+(:[A-Za-z0-9_.-]+)?(@sha256:[0-9a-f]{64})?' "$tmp/render-ha.yaml" |
+			sed 's|^REGISTRY\.invalid/||' | sort -u)
+	fi
 
 	# the plan
 	local total=0 need=0 k parts how
@@ -220,6 +231,10 @@ build_release() {
 	if ((${#public[@]})); then
 		echo "public images the chart runs (not in the release; your registry must have them):"
 		printf '%s\n' "${public[@]}" | sed 's/\t/  <- /; s/^/  /'
+	fi
+	if ((${#public_ha[@]})); then
+		echo "and with high availability (values-ha.example.yaml):"
+		printf '%s\n' "${public_ha[@]}" | sed 's/\t/  <- /; s/^/  /'
 	fi
 	((!plan)) || { echo "plan only: nothing written"; return 0; }
 
@@ -298,6 +313,9 @@ build_release() {
 		case "$line" in
 		@PUBLIC_IMAGES@)
 			((${#public[@]} == 0)) || printf '%s\n' "${public[@]}" | awk -F'\t' '{printf "| `$REGISTRY/%s` | `%s` |\n", $1, $2}' ;;
+		@PUBLIC_IMAGES_HA@)
+			if ((${#public_ha[@]} == 0)); then echo "| (none more) | |"; else
+				printf '%s\n' "${public_ha[@]}" | awk -F'\t' '{printf "| `$REGISTRY/%s` | `%s` |\n", $1, $2}'; fi ;;
 		*)
 			line=${line//@VERSION@/$version}; line=${line//@CODER_VERSION@/$coder_version}
 			line=${line//@IMAGE_COUNT@/${#sel[@]}}; line=${line//@IMAGES_SIZE@/$(human "$total")}

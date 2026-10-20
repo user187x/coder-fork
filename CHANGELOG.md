@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+* **Platform HA ([ADR-0001](docs/adr/0001-platform-ha.md), accepted): phase 0, the infrastructure part** (chart; all
+  opt-in through `values-ha.example.yaml`, nothing changes by default but a budget for the code-server-replicator):
+  * the database's **synchronous replication** (`database.synchronous`: a commit waits for one standby, so a failover
+    loses no committed transaction);
+  * **PgBouncer** in front of it (`database.pooler`, a CloudNativePG Pooler: 2 pods, transaction mode, image
+    `ghcr.io/cloudnative-pg/pgbouncer:1.25.1`, pinned in `images.txt`) for code-server HA's relays, whose connections
+    then stop counting against `max_connections`; its name is added to the server certificate, which the relays verify
+    (tested on CloudNativePG: TLS by name, parameterized queries and writes through it, an unlisted host refused);
+  * **PodDisruptionBudgets** and zone spread for every component with more than one copy: the
+    code-server-replicator (always), the banner and metrics-server (`metricsServer.replicas`), the pooler;
+  * **Traefik's HA overlay**, `prereqs/traefik-41.4.0.ha-values.yaml` (2 replicas, spread, a budget);
+  * `build-release.sh` lists the public images high availability adds in the release's INSTALL.md.
+
 ## 1.40.1 – 2026-10-20
 
 Coder `2.0.0-platform.98` (fork `61769b225`); the images otherwise as 1.40.0's (workspace 1.9.4, dataflow 1.1.4).

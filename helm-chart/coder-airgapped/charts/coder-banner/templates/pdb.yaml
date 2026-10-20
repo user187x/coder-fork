@@ -1,0 +1,17 @@
+{{- include "coder-banner.platform.values" . -}}
+{{- /* More than one replica (replicaCount): drains and upgrades take one down at a time. */ -}}
+{{- if gt (int .Values.replicaCount) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: coder-banner
+  namespace: {{ include "coder-banner.namespace" . }}
+  labels:
+    {{- include "coder-banner.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coder-banner
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

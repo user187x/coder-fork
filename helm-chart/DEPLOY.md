@@ -670,6 +670,12 @@ agent's token (Coder's own registry of agents), an instance's relay with its ins
 
 ## High availability
 
+**Platform HA** ([ADR-0001](../docs/adr/0001-platform-ha.md), accepted) is the platform's own high availability for
+Coder's control plane, without the Enterprise license: a replica registry with fencing, an active/standby mode, then
+active/active replicas with a mesh coordinator and DERP cells. It ships in phases; until its active/standby and
+active/active modes ship, what follows still applies to Coder's own replicas. The infrastructure part (synchronous
+replication, the pooler, the PodDisruptionBudgets) is in `values-ha.example.yaml` today.
+
 Coder can run as several replicas behind one address. Any replica serves any user and relays to any workspace, and
 when one stops, the others carry on. This is Coder's own high availability: the fork leaves it as it is. The chart
 gives each replica what it needs to find the others: its pod IP as `CODER_DERP_SERVER_RELAY_URL` and
@@ -682,8 +688,11 @@ gives each replica what it needs to find the others: its pod IP as `CODER_DERP_S
 | | Default | `values-ha.example.yaml` |
 |---|---|---|
 | Coder | 1 replica, 2 vCPU and 4 GiB | 3 replicas of 2 vCPU and 8 GiB (Coder's reference for up to 1,000 users), one per node, spread over the zones; a PodDisruptionBudget lets node drains take only one down at a time |
-| Database (CloudNativePG) | 2 instances | 3 instances, one per zone. The operator promotes a replica when the primary fails, and Coder follows, because it connects through the `-rw` Service. The operator makes the database's own PodDisruptionBudgets |
-| Banner | 1 replica | 2 replicas |
+| Database (CloudNativePG) | 2 instances | 3 instances, one per zone. The operator promotes a replica when the primary fails, and Coder follows, because it connects through the `-rw` Service. The operator makes the database's own PodDisruptionBudgets. **Synchronous replication** (`database.synchronous`): a commit waits for one standby, so a failover loses no committed transaction |
+| Database pooler | none | PgBouncer (`database.pooler`, a CloudNativePG Pooler, 2 pods, transaction mode) for code-server HA's relays, whose connections then stop counting against PostgreSQL's `max_connections`; Coder and the replicator keep connecting to `-rw`. Its image, `ghcr.io/cloudnative-pg/pgbouncer:1.25.1`, must be in your registry |
+| Banner | 1 replica | 2 replicas, with a PodDisruptionBudget |
+| metrics-server | 1 replica | 2 replicas on separate nodes, with a PodDisruptionBudget |
+| code-server-replicator | 2 replicas (one works) | the same; a PodDisruptionBudget and zone spread are always on |
 
 **What it needs:**
 
@@ -696,9 +705,9 @@ gives each replica what it needs to find the others: its pod IP as `CODER_DERP_S
 - [ ] **Coder's pods reach each other on TCP 8080** (relayed workspace connections) **and 6222** (the replicas'
       message bus). EKS's node security group allows traffic between nodes by default. With NetworkPolicies in
       `coder`, allow both ports between the pods labelled `app.kubernetes.io/name: coder`.
-- [ ] **Traefik with 2 or more replicas**, so the Gateway isn't a single pod. In Traefik's chart, set
-      `deployment.replicas: 2` and `podDisruptionBudget: {enabled: true, maxUnavailable: 1}`, behind a load balancer
-      in all three zones.
+- [ ] **Traefik with 2 or more replicas**, so the Gateway isn't a single pod: pass
+      `prereqs/traefik-41.4.0.ha-values.yaml` after the reference values (2 replicas on separate nodes, spread over the
+      zones, a PodDisruptionBudget), behind a load balancer in all three zones.
 
 **Upgrades.** A rolling update replaces one replica at a time, and each new replica is ready before an old one stops.
 Connections through a stopping replica drop for a moment and reconnect to another. A new Coder version

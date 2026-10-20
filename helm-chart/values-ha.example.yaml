@@ -1,5 +1,7 @@
-# High availability: Coder on 3 replicas across 3 availability zones, its database on 3 instances (one per zone), the
-# announcement banner on 2. Pass it after your own values (it sets no list you set there: Helm replaces lists):
+# High availability: Coder on 3 replicas across 3 availability zones, its database on 3 instances (one per zone) with
+# synchronous replication and a PgBouncer pooler, the announcement banner and metrics-server on 2 each; every component
+# with more than one replica gets a PodDisruptionBudget. Pass it after your own values (it sets no list you set there:
+# Helm replaces lists):
 #   ./install.sh -f my-values.yaml -f values-ha.example.yaml ...
 # With Argo CD, put the same keys in the Application's valuesObject.
 #
@@ -9,7 +11,10 @@
 #   - nodes for Coder in 3 zones of one region, with room for a 4th replica during a rollout, under 10 ms from each
 #     other and from the database;
 #   - TCP 8080 and 6222 open between Coder's pods (security groups, NetworkPolicies);
-#   - Traefik with 2 or more replicas.
+#   - Traefik with 2 or more replicas (prereqs/traefik-41.4.0.ha-values.yaml);
+#   - the pooler's image in your registry: ghcr.io/cloudnative-pg/pgbouncer:1.25.1 (images.txt).
+# Platform HA (docs/adr/0001-platform-ha.md) will run Coder's replicas without the license; until its active/standby
+# and active/active modes ship, keep Coder at 1 replica unless you have that license.
 
 coder:
   coder:
@@ -50,6 +55,17 @@ database:
   resources:                                              # CHANGE-ME to your size
     requests: {cpu: "2", memory: 8Gi}
     limits: {memory: 8Gi}
+  # A commit waits for one standby: a failover loses no committed transaction. With 3 instances one standby can be
+  # down and writes go on.
+  synchronous: {method: any, number: 1, dataDurability: required}
+  # PgBouncer (2 pods, one per node and zone) for code-server HA's relays: their connections stop counting against
+  # PostgreSQL's max_connections.
+  pooler:
+    enabled: true
+    instances: 2
+
+metricsServer:
+  replicas: 2
 
 coder-banner:
   replicaCount: 2

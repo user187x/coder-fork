@@ -252,6 +252,23 @@ database:
   # instances on separate nodes when they can). E.g. one instance per zone: {topologyKey: topology.kubernetes.io/zone}.
   affinity: {}
   resources: {}
+  # Synchronous replication (the Cluster's spec.postgresql.synchronous), e.g. {method: any, number: 1,
+  # dataDurability: required}: a commit waits for a standby, so a failover loses no committed transaction (needs
+  # instances >= 2; with "required" writes wait while no standby is up, so run 3). Empty: off (asynchronous).
+  synchronous: {}
+  # PgBouncer in front of the database (a CloudNativePG Pooler: <name>-pooler-rw, transaction mode) for the platform's
+  # short clients - code-server HA's relays - so their connections stop counting against max_connections. Coder and
+  # the replicator (its advisory lock) keep connecting to <name>-rw. Its name is added to the database's server
+  # certificate (the relays verify it). Off: as before.
+  pooler:
+    enabled: false
+    instances: 2
+    image: '{{ include "platform.image" (list . "ghcr.io/cloudnative-pg/pgbouncer:1.25.1") }}'
+    # PgBouncer's settings (strings): a pool per user and database; named prepared statements kept per connection.
+    parameters:
+      max_client_conn: "2000"
+      default_pool_size: "20"
+      max_prepared_statements: "200"
   # Kept on `helm uninstall` / Argo CD prune: the database holds every user, template and workspace.
   keep: true
 
@@ -313,6 +330,8 @@ metricsServer:
   image: '{{ include "platform.image" (list . "registry.k8s.io/metrics-server/metrics-server:v0.8.1") }}'
   # Kubelets with self-signed serving certificates (Minikube, kind; ./make sets it there). Keep false on EKS.
   kubeletInsecureTLS: false
+  # Its replicas: 2 for high availability (upstream's HA layout: on separate nodes, one down at a time).
+  replicas: 1
 
 # ---------------------------------------------------------------------------------------------------------------
 # Images view (Templates > Images): workspace images built in the cluster (templates/image-builder.yaml). Builds run as

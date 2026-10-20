@@ -1,6 +1,6 @@
 # ADR-0001: Platform HA – an active/active Coder control plane of our own
 
-**Status:** Proposed
+**Status:** Accepted (2026-10-20, the platform owner)
 **Date:** 2026-10-20
 **Deciders:** the platform owner (user187x)
 **Scope:** the fork (`user187x/coder`, Community/AGPL code only) and this repository's chart

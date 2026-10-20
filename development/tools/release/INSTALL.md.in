@@ -34,6 +34,13 @@ The cluster needs these already:
 |---|---|
 @PUBLIC_IMAGES@
 
+High availability (`values-ha.example.yaml`: the database's synchronous standby and PgBouncer pooler, and more
+replicas) also runs:
+
+| In your registry | Pull it on a connected machine as (tested digest) |
+|---|---|
+@PUBLIC_IMAGES_HA@
+
 Files: `ca.crt` (the CA that signed your HTTPS certificate), `wildcard.crt` / `wildcard.key` (the certificate for
 `*.<your-domain>`), and for OIDC sign-in (Keycloak) `keycloak-ca.crt` and the client secret.
 Tools: `docker`, `helm`, `kubectl` (and `aws` for ECR).

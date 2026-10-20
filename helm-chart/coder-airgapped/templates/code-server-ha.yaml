@@ -36,7 +36,8 @@ type: kubernetes.io/basic-auth
 stringData:
   username: code_server_relay
   password: {{ $pw | quote }}
-  uri: {{ printf "postgresql://code_server_relay:%s@%s-rw.%s.svc:5432/app?sslmode=require" $pw $db $ns | quote }}
+  # The relays' short calls go through the database's pooler when it has one (database.pooler), else to -rw.
+  uri: {{ printf "postgresql://code_server_relay:%s@%s-%s.%s.svc:5432/app?sslmode=require" $pw $db (ternary "pooler-rw" "rw" (and .Values.database.enabled .Values.database.pooler.enabled)) $ns | quote }}
 ---
 # What a workspace pod's relay reads: the name of the cluster it runs in.
 apiVersion: v1
@@ -131,6 +132,12 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 labelSelector:
                   matchLabels: {app.kubernetes.io/name: coder-code-server-replicator}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: coder-code-server-replicator}
       containers:
         - name: operator
           image: {{ $ui.image }}
@@ -161,4 +168,19 @@ spec:
           secret:
             secretName: {{ printf "%s-ca" $db }}
             items: [{key: ca.crt, path: ca.crt}]
+{{- if gt (int $h.replicas) 1 }}
+---
+# Drains and upgrades take one replicator down at a time: the other holds the lock and keeps the leases.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: coder-code-server-replicator
+  namespace: {{ $ns }}
+  labels:
+    {{- include "ca.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: coder-code-server-replicator}
+{{- end }}
 {{- end }}
