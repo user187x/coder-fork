@@ -446,12 +446,20 @@ install_argocd() {
 	warn "Argo CD is not Synced/Healthy yet ($s): kubectl -n argocd get application coder"
 }
 
-# A rebuilt image under an unchanged tag does not change any Deployment, so restart the ones that run it.
+# A rebuilt image under an unchanged tag does not change any Deployment, so restart the ones that run it: the
+# release's own (Helm's annotation), never a workspace's (its owner restarts it). Any container counts (a JSONPath
+# filter cannot compare a list of them).
 restart_reloaded() {
 	[[ -s "${RELOADED:-}" ]] || return 0
 	local img d
 	while read -r img; do
-		for d in $(kube -n coder get deploy -o jsonpath="{range .items[?(@.spec.template.spec.containers[*].image=='${img}')]}{.metadata.name}{' '}{end}"); do
+		for d in $(kube -n coder get deploy -o json | python3 -c '
+import json, sys
+for d in json.load(sys.stdin)["items"]:
+    if "meta.helm.sh/release-name" not in d["metadata"].get("annotations", {}):
+        continue
+    if any(c.get("image") == sys.argv[1] for c in d["spec"]["template"]["spec"].get("containers", [])):
+        print(d["metadata"]["name"])' "$img"); do
 			say "restarting deploy/$d (new build of $img)"
 			kube -n coder rollout restart "deploy/$d" >/dev/null && kube -n coder rollout status "deploy/$d" --timeout=10m >/dev/null
 		done

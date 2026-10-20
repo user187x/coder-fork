@@ -31,7 +31,11 @@ model scanner `coder-garak:0.17.1-2` is a plug-in now (`dist/plugins/`, not in t
   * The dataflow image (1.1.4, on 1.9.4): NiFi 2.12.0's vulnerable jars replaced inside its NARs (and their WARs) and
     `lib/bootstrap` before NiFi first unpacks them - Jackson 2.22.4 and 3.2.4, lz4-java 1.11.4, amqp-client 5.37.0,
     Wire 6.4.7 (the AWS NAR's Glue Protobuf serde) - each from Maven Central, pinned by SHA-256, and checked for no old
-    jar left (`patch-nifi-jars.py`); every processor and service still loads (294 / 125 / 10). Airflow's venv takes
+    jar left (`patch-nifi-jars.py`); the two jars that shade Jackson (no newer release of either), Hazelcast 5.7.0's
+    and parquet-jackson 1.18.1's, are re-shaded with Jackson 2.21.8 / 3.1.8 and 2.22.4 by their own projects'
+    relocation rules - checked in every build by re-shading the original Jackson and matching the published jar class
+    by class - so the Hazelcast cache services and the Iceberg Parquet writer keep working (a cache put/get and a
+    Parquet write tested); every processor and service still loads (294 / 125 / 10). Airflow's venv takes
     Mako 1.4.3, PyJWT 2.15.1 and urllib3 2.8.0 over its constraints (`airflow-overrides.txt`, `pip check` clean), and
     its pip is removed after the install (pip's own vendored libraries have no fixed release).
   * MinIO and the image registry: none to fix.

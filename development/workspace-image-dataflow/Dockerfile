@@ -5,7 +5,9 @@
 #   - Apache Airflow (/opt/airflow, a virtual environment pinned with Airflow's own constraints, but for the newer
 #     releases airflow-overrides.txt names, which fix vulnerabilities).
 # NiFi's own libraries with vulnerabilities fixed in a compatible release are replaced by that release before its first
-# start (patch-nifi-jars.py: in lib/bootstrap, in the NARs and in the WARs inside them; versions and SHA-256 pinned).
+# start (patch-nifi-jars.py: in lib/bootstrap, in the NARs and in the WARs inside them; versions and SHA-256 pinned),
+# and the two jars that bundle a relocated vulnerable Jackson with no newer release (hazelcast, parquet-jackson) are
+# re-shaded with the fixed Jackson, relocated by their own build's rules (checked against what they ship first).
 # Built by ../tools/build-dataflow-image.sh, which downloads NiFi (checked against Apache's SHA-512) beforehand: the
 # build itself needs the network only for apt, pip and those jars (Maven Central).
 ARG BASE=ghcr.io/user187x/coder-workspace:1.9.4
