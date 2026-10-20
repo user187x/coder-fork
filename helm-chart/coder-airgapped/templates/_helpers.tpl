@@ -40,6 +40,12 @@ these too). All derive from .Values.global; see values.yaml > global.
 {{- end -}}
 
 {{- define "platform.wildcardHost" -}}
+{{- /* A single-label domain ("vm", "lab") cannot take the default "*.<domain>": browsers treat an unknown top-level
+     name as a public suffix, so they refuse a wildcard certificate and cookies directly under it (subdomain apps and
+     port forwarding break). */ -}}
+{{- if and (not .Values.global.wildcardHost) (not (contains "." (toString .Values.global.domain))) -}}
+{{- fail (printf "global.domain %q is a single label: browsers refuse a wildcard certificate and cookies directly under it, so the default wildcardHost \"*.%s\" cannot work. Set global.wildcardHost to a name below Coder's, e.g. \"*.coder.%s\" (and the Gateway's certificate for it)." (toString .Values.global.domain) (toString .Values.global.domain) (toString .Values.global.domain)) -}}
+{{- end -}}
 {{ .Values.global.wildcardHost | default (printf "*.%s" .Values.global.domain) }}
 {{- end -}}
 

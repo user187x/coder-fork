@@ -184,7 +184,8 @@ mk_dns() {
 	local domain="$1" re cf
 	re="$(sed 's/\./\\\\./g' <<<"$domain")"
 	cf=$(kc -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -v '# coder-airgapped$')
-	cf=$(awk -v line="    rewrite name regex (.*)\\\\.${re} traefik.traefik.svc.cluster.local answer auto # coder-airgapped" \
+	# anchored: the domain's names and only those (a short domain must not catch vmware.com or *.vm.svc names)
+	cf=$(awk -v line="    rewrite name regex ^(.+)\\\\.${re}\\\\.?\$ traefik.traefik.svc.cluster.local answer auto # coder-airgapped" \
 		'{print} /^\.:53 \{/ && !done {print line; done=1}' <<<"$cf")
 	kc -n kube-system create configmap coredns --from-literal=Corefile="$cf" --dry-run=client -o yaml | kc apply -f - >/dev/null 2>&1
 	kc -n kube-system rollout restart deploy/coredns >/dev/null && kc -n kube-system rollout status deploy/coredns --timeout=120s >/dev/null

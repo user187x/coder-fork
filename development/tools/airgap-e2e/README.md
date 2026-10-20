@@ -17,7 +17,7 @@ helm install traefik ../../../helm-chart/prereqs/traefik-41.4.0.tgz -n traefik -
   -f <(sed 's/grey-marshall-tls/airgap-tls/' ../../../helm-chart/prereqs/traefik-41.4.0.reference-values.yaml) --set service.type=ClusterIP
 helm install argocd argo-cd --repo https://argoproj.github.io/argo-helm --version 10.8.1 -n argocd --create-namespace --set dex.enabled=false
 kubectl apply -f keycloak.yaml   # client "coder" + user tester: ./keycloak-setup.sh (e2e.sh re-runs it)
-# CoreDNS: rewrite name regex (.*)\.airgap\.test traefik.traefik.svc.cluster.local answer auto
+# CoreDNS: rewrite name regex ^(.+)\.airgap\.test\.?$ traefik.traefik.svc.cluster.local answer auto
 # Service default/airgap-registry (+ EndpointSlice to the registry container's IP) so Argo CD can reach the charts
 # Air gap: ./airgap-on.sh (iptables REJECT of all egress except 127/8, 10/8, 172.16/12, 192.168/16; e2e.sh re-applies it)
 ```

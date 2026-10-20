@@ -778,6 +778,7 @@ at a time, the primary last. Coder's database requests pause while the primary m
 | "You have multiple replicas but …" in Coder | More than one replica runs Coder: Coder's own high availability needs a license with `high_availability`. Without one, use Platform HA's `global.platformHA.mode: activeStandby` (one replica runs Coder; `values-ha.example.yaml`), or set `coder.coder.replicaCount: 1` |
 | An upgrade hangs with a `coder` pod Pending | High availability: Coder's nodes have no room for the rollout's extra replica (`kubectl -n coder describe pod`) |
 | A new workspace waits in `ContainerCreating` | The Cloud Drive: `kubectl -n coder get pvc coder-safe-<user id>` (made by the platform service), `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-csi` (FUSE and systemd on the node) |
+| Deleting the namespace hangs: workspace pods stay `Terminating`, PVCs too | The Cloud Drive's CSI driver went first (the namespace was deleted without `helm uninstall`, whose hook stops those workspaces before the driver goes): `kubectl -n coder delete pod <pod> --grace-period=0 --force`, then on its node `umount -l` the pod's leftover `fuse` mounts. Next time: `helm uninstall coder -n coder --wait` first (Argo CD: delete the Application, whose PreDelete hook does the same), then the namespace |
 | The Cloud Drive says its storage cannot be reached (a red dot) | `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-minio`, or your S3's endpoint and keys (`userStorage.s3`, or the one in its Settings) |
 
 ---

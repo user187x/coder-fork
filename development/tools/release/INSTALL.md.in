@@ -21,19 +21,24 @@ platform with one `helm install`.
 The cluster needs these already:
 
 - **Kubernetes 1.27 or newer with amd64 (x86_64) nodes** – the images are amd64 only.
-- **DNS** for `coder.<your-domain>` and `*.<your-domain>` – from your users' machines **and from inside the
-  cluster**: workspace agents and the chart's Jobs (the first user, the template pushes) reach Coder at
+- **DNS** for `coder.<your-domain>` and `*.<your-domain>` – from your users' machines **and from inside the cluster**:
+  workspace agents and the chart's Jobs (the first user, the template pushes) reach Coder at
   `https://coder.<your-domain>`, and without it they fail quietly. A cluster with no such DNS (minikube, kind) can
-  have CoreDNS answer it with the Gateway: in `kubectl -n kube-system edit configmap coredns`, add to the `.:53`
-  block `rewrite name regex (.*)\.<your-domain> traefik.traefik.svc.cluster.local answer auto` (the domain's dots
-  escaped), then `kubectl -n kube-system rollout restart deploy/coredns`.
+  have CoreDNS answer it with the Gateway: in `kubectl -n kube-system edit configmap coredns`, add to the `.:53` block
+  `rewrite name regex ^(.+)\.<your-domain>\.?$ traefik.traefik.svc.cluster.local answer auto` (anchored, the domain's
+  dots escaped), then `kubectl -n kube-system rollout restart deploy/coredns`.
 - **Your certificate:** `ca.crt` (the CA that signed it) and `wildcard.crt` / `wildcard.key` for `*.<your-domain>`.
 - **A container registry** (ECR, Harbor, ...) – `$REGISTRY` below, the chart's `global.registry` – that already holds
-  the **public images** the chart runs, under the same paths (the source host left out). This release carries none
-  of them (nor the prerequisites' two images, step 0). No registry - a single minikube node without internet? Load every image into the node instead (`docker
-  load`, then `minikube image load`): ours from this folder, the public ones saved on a connected machine by the
-  digests below, plus the prerequisites' (`ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0`, `docker.io/traefik:v3.7.12`),
-  and set `global.registry: ""`.
+  the **public images** the chart runs, under the same paths (the source host left out). This release carries none of
+  them (nor the prerequisites' two images, step 0). No registry - a single minikube node without internet? Load every
+  image into the node instead (`docker load`, then `minikube image load`): ours from this folder, the public ones
+  saved on a connected machine by the digests below, plus the prerequisites'
+  (`ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0`, `docker.io/traefik:v3.7.12`), and set `global.registry: ""`. A
+  minikube started offline needs its own images staged too: kicbase, the preload, and its storage addon's
+  (storage-provisioner-rancher: rancher/local-path-provisioner and busybox).
+- **A domain of one label** (`vm`, `lab`): browsers refuse a wildcard certificate and cookies directly under it, so set
+  `global.wildcardHost` to a name below Coder's, e.g. `*.coder.vm`, with the certificate to match (the chart stops
+  with this advice otherwise).
 
 | In your registry | Pull it on a connected machine as (tested digest) |
 |---|---|
@@ -119,3 +124,15 @@ optional: without them it shows Coder's, and an admin sets the platform's in Adm
 store offers the platform's logo, `minecraft-cube.gif`).
 
 The next release: push its images, then `helm upgrade coder coder-airgapped-<next>.tgz -n coder` with the same options.
+
+## 5. Uninstall
+
+```bash
+helm uninstall coder -n coder --wait       # first: its hook stops the workspaces that mount a Cloud Drive
+kubectl delete namespace coder             # then the rest (the database, the volumes, Coder's workspaces)
+```
+
+In this order. Uninstalling first lets a hook stop every workspace that mounts a Cloud Drive while the Cloud Drive's
+CSI driver can still unmount it. Deleting the namespace straight away removes the driver too, and those workspace
+pods never finish terminating. If that happened: `kubectl -n coder delete pod <pod> --grace-period=0 --force`, and
+on its node `umount -l` the pod's leftover `fuse` mounts.

@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.43.1 – 2026-10-20
+
+Coder `2.0.0-platform.102` and every image as 1.43.0's: a chart and documentation release (found installing plain Helm
+air-gapped on a 2-node VM).
+
+* **Uninstalling no longer hangs on the Cloud Drive.** Workspace pods that mounted a Cloud Drive used to keep the
+  namespace in Terminating: Helm removed the CSI driver's node plugin while those pods still had volumes it alone could
+  unmount.
+  * **The fix:** a pre-delete hook (Helm `pre-delete`, Argo CD `PreDelete`) first scales every Deployment whose pods
+    mount a Cloud Drive volume to 0, deletes any other such pod, and waits until they are gone. It never fails the
+    uninstall.
+  * **Measured** with a running workspace that mounted its owner's Cloud Drive: `helm uninstall` took 9 s, then the
+    namespace was gone in 246 s, with no GeeseFS mount left and the volumes Released (the files stay).
+  * **Docs:** INSTALL.md step 5 and DEPLOY.md give the order (`helm uninstall` first, then the namespace) and the
+    recovery.
+* **A single-label domain** (`vm`, `lab`) without `global.wildcardHost` is refused with advice: browsers reject a
+  wildcard certificate and cookies directly under it, so use e.g. `*.coder.vm`.
+* **The in-cluster DNS rewrite is anchored** to the domain (`^(.+)\.<domain>\.?$`): in `./make`, INSTALL.md and
+  the e2e kit. A short domain no longer catches other names.
+* **INSTALL.md:** what a minikube started offline needs besides the images (kicbase, the preload, the storage addon's
+  images).
+* **Checks:** 136 static (4 new), 153 platform unit (the hook against a fake API).
+
 ## 1.43.0 – 2026-10-20
 
 Coder `2.0.0-platform.102` (fork `5ec304d58`); the workspace images as 1.42.0's (workspace 1.9.4, dataflow 1.1.4).

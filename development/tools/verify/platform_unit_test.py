@@ -2810,6 +2810,62 @@ class CloudDriveMountTest(unittest.TestCase):
         self.assertEqual(json.loads(out)["overwritten"], ["src/main.py"], err)
 
 
+class UninstallHookTest(unittest.TestCase):
+    """helm uninstall's pre-delete hook (files/hooks/stop_cloud_drive_mounts.py): the Deployments whose pods mount a
+    Cloud Drive volume are scaled to 0, any other pod that mounts one is deleted, and it waits until none is left -
+    against a fake API; it never fails the uninstall."""
+
+    def load(self):
+        env = {"NAMESPACE": "coder", "KUBERNETES_SERVICE_HOST": "k", "KUBERNETES_SERVICE_PORT": "443", "TIMEOUT": "30"}
+        path = os.path.normpath(os.path.join(SRC, "../../files/hooks/stop_cloud_drive_mounts.py"))
+        with mock.patch.dict(os.environ, env), mock.patch("ssl.create_default_context"):
+            spec = importlib.util.spec_from_file_location("stop_mounts", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        return mod
+
+    def test_it_stops_the_mounts_and_waits(self):
+        h = self.load()
+        pv = lambda name, driver: {"spec": {"csi": {"driver": driver}, "claimRef": {"namespace": "coder", "name": name}}}
+        vol = lambda claim: {"volumes": [{"name": "v", "persistentVolumeClaim": {"claimName": claim}}]}
+        pods = {"ws-a-1": vol("coder-safe-a"), "job-x": vol("coder-isos"), "db-1": vol("coder-db-1")}
+        calls = []
+
+        def call(method, path, body=None, content_type="application/json"):
+            calls.append((method, path, body))
+            if path == "/api/v1/persistentvolumes":
+                return 200, {"items": [pv("coder-safe-a", "ru.yandex.s3.csi"), pv("coder-isos", "ru.yandex.s3.csi"),
+                                       pv("coder-db-1", "rancher.io/local-path")]}
+            if path.endswith("/deployments"):
+                return 200, {"items": [{"metadata": {"name": "ws-a"}, "spec": {"replicas": 1, "template": {"spec": vol("coder-safe-a")}}},
+                                       {"metadata": {"name": "coder"}, "spec": {"replicas": 2, "template": {"spec": {}}}}]}
+            if path.endswith("/pods"):
+                out = {"items": [{"metadata": {"name": n, "deletionTimestamp": "t" if n == "ws-a-1" else None}, "spec": sp}
+                                 for n, sp in pods.items()]}
+                pods.pop("ws-a-1", None)  # the scaled Deployment's pod goes at the next look
+                return 200, out
+            if method == "DELETE":
+                pods.pop(path.rsplit("/", 1)[1], None)
+            return 200, {}
+
+        with mock.patch.object(h, "call", side_effect=call), mock.patch.object(h.time, "sleep"), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            h.main()
+        self.assertIn(("PATCH", "/apis/apps/v1/namespaces/coder/deployments/ws-a", {"spec": {"replicas": 0}}), calls)
+        self.assertNotIn("/deployments/coder", " ".join(c[1] for c in calls), "a Deployment that mounts none stays")
+        self.assertIn(("DELETE", "/api/v1/namespaces/coder/pods/job-x", None), calls)
+        self.assertNotIn(("DELETE", "/api/v1/namespaces/coder/pods/ws-a-1", None), calls, "terminating already")
+        self.assertNotIn(("DELETE", "/api/v1/namespaces/coder/pods/db-1", None), calls, "not a Cloud Drive volume")
+        self.assertIn("the CSI driver may go", out.getvalue())
+
+    def test_it_never_fails_the_uninstall(self):
+        h = self.load()
+        with mock.patch.object(h, "main", side_effect=RuntimeError("API down")), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(h.run(), 0)
+        self.assertIn("uninstall goes on", out.getvalue())
+
+
 class CodeServerHATest(unittest.TestCase):
     """code-server HA (csha.py) without a database: its schema split into statements, an instance's pod (code-server
     on loopback only, its home volume on its node, or a folder of its own elsewhere), the endpoints. The database

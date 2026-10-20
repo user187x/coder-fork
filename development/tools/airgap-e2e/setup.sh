@@ -49,7 +49,7 @@ if ! kubectl -n kube-system get cm coredns -o jsonpath='{.data.Corefile}' | grep
 import json, sys
 cm = json.load(sys.stdin)
 cm["data"]["Corefile"] = cm["data"]["Corefile"].replace("    kubernetes ",
-    "    rewrite name regex (.*)\\.airgap\\.test traefik.traefik.svc.cluster.local answer auto\n    kubernetes ", 1)
+    "    rewrite name regex ^(.+)\\.airgap\\.test\\.?$ traefik.traefik.svc.cluster.local answer auto\n    kubernetes ", 1)
 print(json.dumps(cm))' | kubectl apply -f - >/dev/null
 	kubectl -n kube-system rollout restart deploy/coredns >/dev/null
 	kubectl -n kube-system rollout status deploy/coredns --timeout=120s >/dev/null

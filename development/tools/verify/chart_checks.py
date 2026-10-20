@@ -155,6 +155,36 @@ def no_rewrite_checks(B, chart, renders):
     check("no Traefik body rewriting: the banner is Coder's own (no coder-banner subchart)", not left, left)
 
 
+def install_checks(B, chart, default_render):
+    """Uninstall, domains and DNS (found installing plain Helm air-gapped on a VM, 2026-10-20): the pre-delete hook that
+    stops the Cloud Drive's mounts before its CSI driver goes; a single-label domain refused without a wildcard host
+    below Coder's; the CoreDNS rewrite anchored to the domain."""
+    import yaml
+    docs = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d}
+    name = "coder-user-storage-uninstall"
+    job = docs.get(("Job", name), {})
+    hooked = [k for k, n in docs if n.endswith(name) and (docs[(k, n)]["metadata"].get("annotations") or {}).get(
+        "helm.sh/hook") == "pre-delete" and docs[(k, n)]["metadata"]["annotations"].get("argocd.argoproj.io/hook") == "PreDelete"]
+    rules = docs.get(("Role", name), {}).get("rules") or []
+    cmd = ((job.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or [{}])[0].get("command") or [])
+    check("uninstall: a pre-delete hook (Helm and Argo CD) stops the Cloud Drive's mounts before its CSI driver goes",
+          sorted(hooked) == sorted(["ServiceAccount", "Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding", "Job"])
+          and {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "list", "patch"]} in rules
+          and len(cmd) == 3 and "def cloud_drive_claims" in cmd[2], sorted(hooked))
+    rc, out, _ = run(["helm", "template", "coder", chart, "-n", "coder", "--set", "global.userStorage.enabled=false"])
+    check("uninstall: no hook without the Cloud Drive", rc == 0 and name not in out, "")
+    rc, _, err = run(["helm", "template", "coder", chart, "-n", "coder", "--set", "global.domain=vm"])
+    rc2, _, _ = run(["helm", "template", "coder", chart, "-n", "coder", "--set", "global.domain=vm",
+                     "--set", "global.wildcardHost=*.coder.vm"])
+    check("a single-label domain needs a wildcard host below Coder's (the chart says so; *.coder.vm renders)",
+          rc != 0 and '"*.coder.vm"' in err and rc2 == 0, err.strip()[-160:])
+    mk = open(os.path.join(B, "minikube-support")).read()
+    doc = open(os.path.join(os.path.dirname(B), "development", "tools", "release", "INSTALL.md.in")).read()
+    check("CoreDNS: the rewrite is anchored to the domain (make and INSTALL.md)",
+          "rewrite name regex ^(.+)" in mk and "rewrite name regex (.*)" not in mk
+          and "rewrite name regex ^(.+)\\.<your-domain>\\.?$" in doc, "")
+
+
 def safe_checks(chart, default_render):
     """The safe (global.userStorage): on, the template push mounts it, the platform service serves it and the chart
     runs its MinIO and CSI driver; off, nothing of it anywhere; an S3 service of one's own needs its endpoint and keys."""
@@ -574,6 +604,7 @@ def main():
     decorator_checks(B, chart, r)
     ha_checks(B, renders["high availability (values-ha.example.yaml)"], r)
     no_rewrite_checks(B, chart, renders)
+    install_checks(B, chart, r)
     safe_checks(chart, r)
     template_checks(B, chart, r)
     pit_checks(B, chart, r)
