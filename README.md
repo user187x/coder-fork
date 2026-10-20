@@ -24,14 +24,15 @@ your network.
 
 ## Quick start
 
-The release is one folder (download every asset of the GitHub release into it): every image the chart can run -
-ours (Coder, the platform service, the DEFAULT and DATAFLOW workspace images, MinIO, the image registry) and the
-public ones (PostgreSQL, PgBouncer, Python, BuildKit, the CSI driver, metrics-server, Traefik, the CloudNativePG
-operator) - and the one Helm chart. On any air-gapped cluster, one push and one install:
+The release is one folder (download every asset of the GitHub release into it): our images (Coder, the platform
+service, the DEFAULT and DATAFLOW workspace images, MinIO, the image registry) and the one Helm chart. The public
+images the chart runs (PostgreSQL, PgBouncer, Python, BuildKit, the CSI driver, metrics-server, Traefik, the
+CloudNativePG operator) come from your registry - `INSTALL.md` lists each one's path and tested digest; their CVEs are
+their projects', the release's CVE gate covers ours. With those in the registry, one push and one install:
 
 ```bash
 sha256sum -c SHA256SUMS                                   # every file: OK
-./push-images.sh $REGISTRY                                # every image, where the chart pulls it (--ours-only: ours alone)
+./push-images.sh $REGISTRY                                # our images, where the chart pulls them
 cp values.example.yaml values.yaml                        # set every CHANGE-ME (domain, registry)
 helm install coder-fork coder-airgapped-1.45.0.tgz -n coder-fork --create-namespace -f values.yaml
 ```

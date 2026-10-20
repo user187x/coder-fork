@@ -1,19 +1,20 @@
 # coder-fork @VERSION@ – install
 
-Coder @CODER_VERSION@ (the fork's open-source build) for an air-gapped Kubernetes cluster, in one step: push this
-folder's images, then one `helm install` with one values file. The chart `coder-airgapped-@VERSION@.tgz` installs the
-whole platform, and on a bare cluster also its prerequisites (Traefik with the Gateway API, the CloudNativePG operator).
+Coder @CODER_VERSION@ (the fork's open-source build) for an air-gapped Kubernetes cluster: with the public images the
+chart runs in your registry, push this folder's images, then one `helm install` with one values file. The chart
+`coder-airgapped-@VERSION@.tgz` installs the whole platform, and on a bare cluster also its prerequisites (Traefik with
+the Gateway API, the CloudNativePG operator).
 
 | File | What it is |
 |---|---|
 | `coder-airgapped-@VERSION@.tgz` | The chart |
-| `<name>_<tag>.tar.gz` | @IMAGE_COUNT@ images, ours and the public ones the chart runs, `docker save` + gzip (@IMAGES_SIZE@); one over 1900 MiB is split into `<file>.part-00`, `-01`, ... (`cat` joins them) |
+| `<name>_<tag>.tar.gz` | Our @IMAGE_COUNT@ images, `docker save` + gzip (@IMAGES_SIZE@); one over 1900 MiB is split into `<file>.part-00`, `-01`, ... (`cat` joins them) |
 | `push-images.sh` | Checks the files, then loads each image and pushes it to your registry, where the chart pulls it (docker only) |
 | `IMAGES.txt` | Each image: its reference, file(s), size, config and manifest digests |
 | `values.example.yaml` | The values to start `values.yaml` from: every input of the install |
 | `values-ha.example.yaml` | High availability, on top of your values |
 | `SHA256SUMS` | Every file here (`sha256sum -c SHA256SUMS`); `SHA256SUMS.joined`: the split archives, joined |
-| `CVE-REPORT.md` | The release's CVE scan |
+| `CVE-REPORT.md` | The CVE scan of the release's images (ours): no fixable finding |
 
 ## Before you start
 
@@ -21,6 +22,8 @@ whole platform, and on a bare cluster also its prerequisites (Traefik with the G
 - **A container registry** the nodes pull from (ECR, Harbor, a plain registry ...) – `$REGISTRY` below, the
   chart's `global.registry`. Log in to it from where you run `push-images.sh` (`docker login $REGISTRY`; ECR:
   `aws ecr get-login-password | docker login --username AWS --password-stdin $REGISTRY`).
+- **The public images the chart runs, in that registry** (step 1): they are not in this folder. They come from their
+  own projects, through your site's usual import and scanning; their CVEs are those projects' to fix.
 - **A domain** for the platform: Coder at `coder.<domain>`, workspace apps at `*.<domain>`. Your users' machines must
   resolve both to the Gateway (Traefik's Service). A domain of one label (`vm`, `lab`) needs
   `global.wildcardHost: "*.coder.<domain>"`: browsers refuse a wildcard certificate and cookies directly under it.
@@ -29,22 +32,29 @@ whole platform, and on a bare cluster also its prerequisites (Traefik with the G
 
 Tools: `docker`, `helm`, `kubectl`.
 
-## 1. Push the images
+## 1. Images
+
+The public images the chart runs (with high availability and its own prerequisites too) must be in your registry at
+these paths - each at the digest tested, or a later build of the same tag:
+
+| In your registry | The public image (tested digest) |
+|---|---|
+@PUBLIC_IMAGES@
+
+(The path is the image's own without its registry: `docker.io/traefik:v3.7.12` → `$REGISTRY/traefik:v3.7.12`. A
+connected machine can copy them with `skopeo copy --all docker://<the public image> docker://<the path>`, or `docker
+pull` / `tag` / `push`.) Where the cluster already runs Traefik or CloudNativePG (`global.bundled` off, step 2), their
+images are not needed.
+
+Then push ours:
 
 ```bash
 ./push-images.sh $REGISTRY     # --dry-run first if you like; ECR=1 creates missing ECR repositories
 ```
 
 It checks every file against `SHA256SUMS`, then loads, tags and pushes each image to `$REGISTRY/<its path without
-the source registry>` (e.g. `ghcr.io/user187x/coder-platform:T` → `$REGISTRY/user187x/coder-platform:T`,
-`docker.io/traefik:v3.7.12` → `$REGISTRY/traefik:v3.7.12`) - where the chart pulls it - and ends with a summary.
-
-Your registry already holds the public images? `./push-images.sh --ours-only $REGISTRY` pushes ours alone; the
-public ones must then be at these paths:
-
-| In your registry | The public image (tested digest) |
-|---|---|
-@PUBLIC_IMAGES@
+the source registry>` (e.g. `ghcr.io/user187x/coder-platform:T` → `$REGISTRY/user187x/coder-platform:T`) - where the
+chart pulls it - and ends with a summary.
 
 ## 2. Values
 

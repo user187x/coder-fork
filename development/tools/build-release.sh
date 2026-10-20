@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Builds the release as a plain directory, dist/coder-fork-<version>/ (<version>: the chart's): every image the chart
-# can run - ours and the public ones - and the one chart, for one push and one helm install on any air-gapped cluster.
-# Every file is under 2 GiB, so the folder's files can be the assets of a GitHub release as they are.
+# Builds the release as a plain directory, dist/coder-fork-<version>/ (<version>: the chart's): the images of ours the
+# chart can run and the one chart - one push of ours and one helm install on any air-gapped cluster whose registry
+# holds the public images (INSTALL.md lists them; the owner's choice: the release's CVE gate covers what is ours, the
+# public images' CVEs are their projects'). Every file is under 2 GiB, so the folder's files can be the assets of a
+# GitHub release as they are.
 #   coder-airgapped-<version>.tgz    the chart (helm lint and a render first; packaged from a copy without __pycache__):
 #                                    one helm install installs the whole platform (INSTALL.md)
 #   <name>_<tag>.tar.gz              each image (docker save | gzip, from helm-chart/images: hard-linked when on the same
@@ -9,18 +11,19 @@
 #                                    (streamed by split, no extra whole copy; cat joins them)
 #   push-images.sh                   the far side: ./push-images.sh REGISTRY [--dry-run] [--ours-only] - checks SHA256SUMS,
 #                                    then docker load / tag / push each image as REGISTRY/<its path without the source
-#                                    host> (release/push-images.sh)
+#                                    host> (release/push-images.sh; it would push public ones too, were any here)
 #   IMAGES.txt                       per image: its reference, file(s), size, config digest, manifest digest
-#   INSTALL.md                       push, values, the one helm install, sign-in, uninstall (release/INSTALL.md.in)
+#   INSTALL.md                       the public images your registry must hold, push, values, the one helm install,
+#                                    sign-in, uninstall (release/INSTALL.md.in)
 #   values.example.yaml              the one values file to start from; values-ha.example.yaml, high availability on top
 #   SHA256SUMS                       every file in the folder, parts one by one (sha256sum -c SHA256SUMS works as is)
 #   SHA256SUMS.joined                the split archives as joined (<file>.tar.gz), when any is split
 #   CVE-REPORT.md                    with --scan / --scan-only
-# The images: those of images.txt (ours and public), outside its [rollback] and [reference] sections, that the chart
-# renders under `--set global.registry=REGISTRY.invalid` - by default, and with high availability and its own
-# prerequisites (global.bundled) - matched on path:tag. An image the chart renders without an archive (or not in
-# images.txt) is an error; those of ours it does not render are listed as left out. Each archive is checked against
-# its folder's SHA256SUMS on the way.
+# The images: those of images.txt that are ours (ghcr.io/user187x/...), outside its [rollback] and [reference]
+# sections, that the chart renders under `--set global.registry=REGISTRY.invalid` - by default, and with high
+# availability and its own prerequisites (global.bundled) - matched on path:tag. An image of ours the chart renders
+# without an archive (or not in images.txt) is an error; those of ours it does not render are listed as left out; the
+# public ones it renders go into INSTALL.md's list. Each archive is checked against its folder's SHA256SUMS on the way.
 #
 #   ./build-release.sh [--out DIR] [--plan] [--scan [--vex FILE]... [--no-db-update]]
 #   ./build-release.sh --scan-only [--out DIR] [--vex FILE]... [--no-db-update]
@@ -118,7 +121,7 @@ build_release() {
 	helm template coder "$chart" -n coder --set global.registry=REGISTRY.invalid >"$tmp/render.yaml" 2>"$tmp/render.log" ||
 		{ cat "$tmp/render.log" >&2; die "helm template --set global.registry=REGISTRY.invalid failed"; }
 	# every image the chart can run: also with high availability and with its own prerequisites (Traefik, the
-	# CloudNativePG operator: global.bundled) - the release carries them all, public ones too
+	# CloudNativePG operator: global.bundled) - the release carries ours, INSTALL.md lists the public ones
 	helm template coder "$chart" -n coder --set global.registry=REGISTRY.invalid -f "${bundle}/values-ha.example.yaml" \
 		--set global.bundled.traefik=true --set global.bundled.cloudnativePG=true --set secrets.generateTls=true \
 		>>"$tmp/render.yaml" 2>"$tmp/render.log" ||
@@ -147,25 +150,21 @@ build_release() {
 		groups+=("$g") images+=("$a") digests+=("$b")
 	done <"${bundle}/images.txt"
 
-	# every image of images.txt the chart runs (ours and public), outside [rollback]/[reference]
+	# ours, outside [rollback]/[reference], rendered by the chart
 	local -a sel=() left_out=() errors=()
 	local -A listed=()
 	local i img p
 	for i in "${!images[@]}"; do
 		img=${images[$i]} p=$(path_of "${images[$i]}")
-		case "${groups[$i]}" in rollback | reference)
-			[[ "$img" == ghcr.io/user187x/* ]] && left_out+=("${img}  ([${groups[$i]}])")
-			continue ;;
-		esac
+		[[ "$img" == ghcr.io/user187x/* ]] || continue
+		case "${groups[$i]}" in rollback | reference) left_out+=("${img}  ([${groups[$i]}])"); continue ;; esac
 		listed[$p]=$i
-		if [[ -z "${rendered[$p]:-}" ]]; then
-			[[ "$img" == ghcr.io/user187x/* ]] && left_out+=("${img}  (the chart does not run it)")
-			continue
-		fi
+		if [[ -z "${rendered[$p]:-}" ]]; then left_out+=("${img}  (the chart does not run it)"); continue; fi
 		wanted "$(name_of "$img")" || continue
 		sel+=("$i")
 	done
 	for r in "${!rendered[@]}"; do
+		[[ "$r" == user187x/* ]] || continue
 		wanted "$(name_of "$r")" || continue
 		[[ -n "${listed[$r]:-}" ]] ||
 			errors+=("the chart runs REGISTRY/${r}, which images.txt does not list (outside [rollback]/[reference]): add it there and build its archive")
@@ -199,7 +198,7 @@ build_release() {
 	fi
 	((${#sel[@]})) || die "no image selected${ONLY:+ (ONLY=${ONLY})}"
 
-	# the public ones among them (INSTALL.md lists them: what a registry needs before push-images.sh --ours-only)
+	# the public images the chart runs: your registry must have them (INSTALL.md lists them)
 	local -a public=()
 	local -A pub_src=()
 	for i in "${!images[@]}"; do
@@ -213,7 +212,7 @@ build_release() {
 	# the plan
 	local total=0 need=0 k parts how
 	echo "coder-fork ${version} (chart coder-airgapped ${version}, Coder ${coder_version}) -> ${out}"
-	echo "the images the chart runs (ours and public; with high availability and its own prerequisites):"
+	echo "images of ours the chart runs (with high availability and its own prerequisites too):"
 	for k in "${!sel[@]}"; do
 		total=$((total + size[k]))
 		case "${mode[$k]}" in
@@ -228,7 +227,7 @@ build_release() {
 		echo "left out (ours, not in the release):"; printf '  %s\n' "${left_out[@]}"
 	fi
 	if ((${#public[@]})); then
-		echo "of which public (pushed too, unless push-images.sh --ours-only):"
+		echo "public images the chart runs (not in the release; your registry must have them):"
 		printf '%s\n' "${public[@]}" | sed 's/\t/  <- /; s/^/  /'
 	fi
 	((!plan)) || { echo "plan only: nothing written"; return 0; }

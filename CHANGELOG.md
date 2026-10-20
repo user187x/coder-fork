@@ -2,12 +2,17 @@
 
 ## 1.45.0 – 2026-10-20
 
-Coder `2.0.0-platform.104` (fork `ad1866e1c`). **The one-step install** (the owner's goal): on any air-gapped cluster,
-push the release's images, then one `helm install` with one values file, under any release name and in any namespace.
+Coder `2.0.0-platform.104` (fork `ad1866e1c`). **The one-step install** (the owner's goal): on any air-gapped cluster
+whose registry holds the public images, push the release's images, then one `helm install` with one values file,
+under any release name and in any namespace.
 
-* **The release carries every image the chart can run:** ours and the 9 public ones, 15 images, 6.0 GiB.
-  * `push-images.sh` pushes them all to where the chart pulls them; `--ours-only` skips the public ones for a
-    registry that already holds them.
+* **The release carries our images only** (the owner's choice): carrying the 9 public ones too failed the CVE gate
+  with 1,386 findings their projects have fixed upstream (29 critical; about half in Go libraries inside their
+  binaries), none in ours. So the gate covers what is ours, and `INSTALL.md` step 1 lists every public image the chart
+  runs - with high availability and its bundled prerequisites too - at the path and tested digest your registry
+  must hold it; their CVEs are their projects'.
+  * `push-images.sh` pushes ours to where the chart pulls them (`--ours-only` stays, for a release folder with
+    public archives added by hand).
   * The release folder now ships `values.example.yaml`: every input of the install in one file.
 * **The chart can bring its own prerequisites** (`global.bundled`, off by default; on in `values.example.yaml`):
   * **Traefik 41.4.0 with the Gateway API v1.6.0 CRDs.** Its Gateway is in the release's namespace, on the chart's
