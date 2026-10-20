@@ -3,17 +3,19 @@
 # with its two themes (Classic, Serenade), noVNC's clipboard shared with the computer and one viewer at a time
 # resizing it, Chromium, Terminator,
 # Firefox, JetBrains Mono Nerd Font in every terminal (code-server's too) and Noto Color Emoji, tmux, command-line
-# tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc, code-server, FileBrowser Quantum) and saves it into the delivery bundle (helm-chart/images/custom/), replacing the
+# tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc, code-server, FileBrowser Quantum) and saves it into the delivery bundle (helm-chart/images/workspaces/, its images.txt section's folder), replacing the
 # previous one (needs internet). FileBrowser Quantum is a binary for linux-amd64, kept untracked at the repository's
 # root as filebrowser-quantum (or FILEBROWSER_QUANTUM=<file>); the Dockerfile checks its SHA-256 and version. Since
 # 1.9.2 it is the workspace's own build of 2.1.2 (version 2.1.2-coder.1, a FileBrowser update for symlinked folders:
-# gtsteffaniak/filebrowser v2.1.2 with its patches, built as its release is - static, frontend embedded, not packed).
-# Then update its [custom] line (tag, digest) in helm-chart/images.txt and
+# gtsteffaniak/filebrowser v2.1.2 with its patches, built as its release is - static, frontend embedded, not packed);
+# since 1.9.4 built with Go 1.27.3 and golang.org/x/net 0.60.0 (same source, version and flags; the Dockerfile checks
+# both in the binary). code-server's katex is replaced by the fixed 0.18.2, as basic-ftp and shell-quote are.
+# Then update its [workspaces] line (tag, digest) in helm-chart/images.txt and
 # coder-workspace.workspaceImage in helm-chart/coder-airgapped/values.yaml.
-#   ./build-workspace-image.sh [TAG]       default 1.9.3
+#   ./build-workspace-image.sh [TAG]       default 1.9.4
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"; top="$(dirname "$dev")"
-tag="${1:-1.9.3}"; img="ghcr.io/user187x/coder-workspace:${tag}"
+tag="${1:-1.9.4}"; img="ghcr.io/user187x/coder-workspace:${tag}"
 quantum="${FILEBROWSER_QUANTUM:-${top}/filebrowser-quantum}"
 [ -f "$quantum" ] || { echo "FileBrowser Quantum's binary is missing: $quantum (see the top of this script)" >&2; exit 1; }
 # the binary alone as a build context of its own (not the repository)

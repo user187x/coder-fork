@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The workspace's startup script (coder_agent.main in ../main.tf): the shell defaults, the cluster sign-in for admins,
-# the desktop and the apps (code-server, File Browser; in the AI template, ubuntu-opencode, Unsloth Studio and its
-# server too). A template made in Create new template may leave out the desktop or File Browser (its desktop and
-# file_browser variables). Runs at every start; each step is safe to repeat.
+# the desktop and the apps (code-server, File Browser). A template made in Create new template may leave out the
+# desktop or File Browser (its desktop and file_browser variables). Runs at every start; each step is safe to repeat.
 # Scripts of their own run beside it (each its coder_script in main.tf, in the workspace's Logs under its name): the
 # ubuntu-dataflow template's Apache NiFi and Apache Airflow (apache_nifi.sh, apache_airflow.sh), the Cloud Drive
 # (cloud-drive.sh: everything the workspace does with it), Lock Down and the certificate.
@@ -18,12 +17,10 @@ CLUSTER_ADMIN='${cluster_admin}' # true: the owner is an admin and the cluster s
 CLUSTER_KUBECONFIG='${cluster_kubeconfig}'
 CLUSTER_OIDC_ISSUER='${cluster_oidc_issuer}'
 CLUSTER_OIDC_CLIENT_ID='${cluster_oidc_client_id}'
-APP_SET='${app_set}'             # developer, dataflow or opencode (the AI template: Unsloth Studio below)
 CODE_SERVER_APP='${code_server}' # true: the code-server app (every template but ubuntu-dataflow)
 DESKTOP='${desktop}'             # true: the desktop (noVNC's Desktop app)
 DESKTOP_THEME='${desktop_theme}' # the Desktop theme parameter: serenade or classic (coder-desktop-theme)
 FILE_BROWSER='${file_browser}'   # true: File Browser
-AI_CONTEXT='${context_length}'   # the AI template's Context length parameter: the tokens OpenCode loads a model with
 START_DIR='${start_directory}'   # the Start folder parameter: where the terminal and File Browser open
 # Path-based apps are proxied under this prefix ("main" = the agent's name).
 APPS="/@$OWNER_NAME/$WORKSPACE_NAME.main/apps"
@@ -324,21 +321,6 @@ else
   --baseurl "$APPS/filebrowser" \
   >/tmp/filebrowser.log 2>&1 &
  log "File Browser: started in $START_DIR (log: /tmp/filebrowser.log)"
-fi
-
-# 4. Unsloth Studio (the AI template, ubuntu-opencode), on the AI workspace image, with no network: its home linked to
-# the image's install (its Python environments and llama.cpp are not copied into every home), its window on the
-# desktop, which starts its server on 127.0.0.1:8888 (OpenAI-compatible: OpenCode's provider, with the model OpenCode
-# loads at the Context length's tokens); it scans the model library (~/models) and the owner's Cloud Drive
-# (~/cloud-drive/models) for GGUF models. In the background, redirected: Unsloth takes up to a minute to answer, and a
-# background job holding the agent's output would keep this script from ending.
-if [ "$APP_SET" = opencode ]; then
- if command -v coder-unsloth-start >/dev/null; then
-  DISPLAY=:1 XAUTHORITY=/home/coder/.Xauthority setsid coder-unsloth-start </dev/null >/tmp/unsloth-start.log 2>&1 &
-  log "Unsloth: starting on the desktop, with its server on 127.0.0.1:8888 (log: /tmp/unsloth-start.log)"
- else
-  log "Unsloth Studio is not in this image (coder-unsloth-start): skipped"
- fi
 fi
 
 log "Startup done: the apps open once they answer their health checks"

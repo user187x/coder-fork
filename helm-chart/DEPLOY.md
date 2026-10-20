@@ -1,9 +1,14 @@
 # How to deploy Coder (air-gapped)
 
+**From a GitHub release** (one folder: our images, `push-images.sh` and the one chart; the public images already in
+your registry): `./push-images.sh $REGISTRY`, then [a single `helm install`](#a-single-helm-install) - its
+`INSTALL.md` has the steps. The rest of this page installs from the bundle built from this repository
+(`development/tools/build-bundle.sh`), which carries every image and the installers.
+
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.40.0-slim.tar.gz && cd coder-airgapped-1.40.0   # 1.40.0: only our images (see Step 1)
+tar -xzf coder-airgapped-<version>.tar.gz && cd coder-airgapped-<version>     # the bundle (development/tools/build-bundle.sh)
 ./make --deploy
 ```
 
@@ -171,8 +176,7 @@ helm logged in as for the install; `HELM_PUSH_ARGS="--ca-file ca.crt"` for a pri
 applies it and asks Argo CD to refresh; Coder restarts on the new image with no gap. The ubuntu-dataflow template
 (Apache NiFi and Airflow) runs on its own image, which the update does not carry: the helper turns that template off
 (`coder-workspace.dataflowTemplate.enabled: false`) unless you give it the image (`--dataflow keep` when it is in
-your registry, `--dataflow <image>` for another). The AI template (OpenCode on Unsloth) likewise: off unless you give
-it its image (`--ai keep` or `--ai <image>`). Back: restore the `.bak` file and apply it. The full bundle carries
+your registry, `--dataflow <image>` for another). Back: restore the `.bak` file and apply it. The full bundle carries
 the same helper (`argocd/update-application.sh`).
 
 ---
@@ -213,8 +217,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.40.0-slim.tar.gz
-cd coder-airgapped-1.40.0
+tar -xzf coder-airgapped-<version>.tar.gz
+cd coder-airgapped-<version>
 ./mirror-images.sh list
 ```
 
@@ -222,24 +226,24 @@ Every image should say `bundled` – they are all inside `images/`, one folder p
 user interface, `workspaces/`, `cloud-drive/`, ...: see `images/README.md`), so no internet is needed. The packaged
 charts are in `charts/`.
 
-Using the smaller **`-slim`** bundle (only our images – 1.40.0 ships only that one)? Then only ours say `bundled`:
+Using the smaller **`-slim`** bundle (only our images)? Then only ours say `bundled`:
 either run `./mirror-images.sh save` here on a machine with internet, or – if your registry already has the public
 images, under the same paths (`docker.io/library/python:3.13-alpine` as `$REGISTRY/library/python:3.13-alpine`, ...;
 `./mirror-images.sh list $REGISTRY` shows each target) – go on and use `ours` in Step 3.
 
 Downloaded the release **in parts** (`-charts.tar.gz` and the `-images-<part>.tar.gz` you need)? Unpack them all into
-one directory: they make the same `coder-airgapped-1.40.0` folder (`-ASSETS.txt` says which part holds what).
+one directory: they make the same `coder-airgapped-<version>` folder (`-ASSETS.txt` says which part holds what).
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.40.0` folder into the air-gapped network.
+Copy the whole `coder-airgapped-<version>` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.40.0
+cd coder-airgapped-<version>
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -442,9 +446,8 @@ background chosen from them is stored as its path and drawn from Coder. `helm-ch
 `~/isos` in each. Admins and template admins upload ISOs (or `.img`) or have the platform service fetch one from an
 address the cluster reaches; up to 20 GB each (`SAFE_ISO_MAX_GIB`). Personal ones go in each user's Cloud Drive.
 
-**The model library** (the same storage): language models in GGUF format for the AI workspaces, read-only at
-`~/models` in each, where Unsloth lists them. Uploaded or fetched like ISOs; up to 100 GB each
-(`SAFE_MODEL_MAX_GIB`). The AI workspaces also list each user's own, in their Cloud Drive's `models` folder.
+**The model library** (the same storage): language models in GGUF format, uploaded or fetched like ISOs; up to 100 GB
+each (`SAFE_MODEL_MAX_GIB`). No template of the chart mounts it (its volume: `coder-models`, read-only).
 
 Builds start from the workspace image in the builder's own registry in the cluster, so BuildKit needs no access
 to your registry. `./make --deploy` puts it there (on any cluster); after an Argo CD or plain Helm install, run
@@ -498,42 +501,6 @@ volume (`imageBuilder.enabled`) and the platform service's permission to manage 
 > `filebrowser-quantum` release binary, under the app's path, no sign-in of its own, no update check), tmux,
 > k9s/kubectl and the JetBrains Mono Nerd Font. Nothing is downloaded when a workspace starts (`coder-workspace:1.8.0`
 > and later).
-
-## AI workspaces: OpenCode on Unsloth
-
-One more template, on its own image (`ghcr.io/user187x/coder-workspace-ai`: the workspace image + Unsloth Studio and
-OpenCode 1.18.34; `coder-workspace.aiTemplates`, on by default):
-
-* **UBUNTU OPENCODE** (`ubuntu-opencode`): its **OpenCode** app opens the OpenCode agent in a terminal in the Start
-  folder, on the workspace's own Unsloth: `unsloth start opencode` loads the model loaded in Unsloth, else the first
-  GGUF model of the model library or of the Cloud Drive, at the template's **Context length** (32K tokens by default;
-  OpenCode needs at least 16K), gives OpenCode an API key of this Unsloth and starts it. code-server, and the desktop
-  with Unsloth Studio's window on it (chat with GGUF models, fine-tune on a GPU, datasets, exports; `unsloth` in the
-  terminal).
-
-It runs Unsloth's server on `127.0.0.1:8888` (its desktop app starts it; OpenAI-compatible at `/v1`, the workspace's
-own, behind its own API keys; Open Ports forwards it). The templates UBUNTU UNSLOTH (`ubuntu-unsloth`, which took over
-UBUNTU LM STUDIO) and UBUNTU OBSIDIAN (`ubuntu-obsidian`) are gone: the chart no longer pushes them, and on a
-deployment that has them they stay in Coder as they are until an admin deletes them (once their workspaces are gone).
-
-* **Models:** nothing comes with the bundle and nothing is downloaded: put GGUF files in the model library
-  (Templates > Images > Model library; every AI workspace has them at `~/models`) or in your own Cloud Drive's
-  `models` folder (`~/cloud-drive/models`); Unsloth scans both (`UNSLOTH_STUDIO_MODELS_DIRS`). A coding agent wants a
-  model with a tool-call chat template, 7B or more (e.g. Qwen2.5-Coder 7B Instruct, 4-bit: about 5 GB).
-* **Resources:** the template defaults to 4 CPU cores and 8 GB of memory (up to 16 cores and 32 GB). **GPUs** (0 by
-  default) asks for `nvidia.com/gpu` (nodes with the NVIDIA device plugin): Unsloth fine-tunes on them (CUDA 12.8,
-  Turing and newer) and llama.cpp's CUDA build runs models on them; without one, chat runs on the CPU (llama.cpp's CPU
-  backends) and fine-tuning is unavailable.
-* **No internet at run time:** Unsloth Studio is installed in the image (`/opt/unsloth`: its Python environments,
-  PyTorch, llama.cpp, Node), with its update check off and Hugging Face offline; each workspace's `~/.unsloth` links to
-  the install (under 1 MB per home) and keeps only its own data (chats, accounts, settings, outputs, exports).
-  OpenCode's update check, model catalogue, language-server downloads, sharing and default plugins are off.
-* **Licences:** Unsloth Studio is AGPL-3.0, OpenCode MIT: the image ships in bundles.
-* **Images:** `development/tools/build-ai-image.sh` builds the image (the `unsloth.AppImage` kept untracked at the
-  repository's root, and OpenCode's release, pinned by SHA-256; Unsloth's own installer, which the AppImage carries,
-  downloads its Python packages, llama.cpp and Node at build time) and checks it offline: the app and its server start,
-  a chat through Unsloth's API, OpenCode on it. `--cpu` builds a much smaller CPU-only image (the default carries CUDA
-  PyTorch: about 10 GB more).
 
 ## The model library's security scan (garak)
 
@@ -858,7 +825,7 @@ helm install cnpg prereqs/cloudnative-pg-0.29.0.tgz -n cnpg-system --create-name
   --set image.repository=$REGISTRY/cloudnative-pg/cloudnative-pg --set image.tag=1.30.0   # unless it is there already
 
 tr -d '\r\n' <oidc-client-secret.txt >client-secret.txt     # no newline in the secret
-helm install coder coder-airgapped-1.40.0.tgz -n coder --create-namespace -f my-values.yaml \
+helm install coder coder-airgapped-<version>.tgz -n coder --create-namespace -f my-values.yaml \
   --set secrets.tlsCa.create=true --set-file secrets.tlsCa.caCrt=ca.crt \
   --set secrets.wildcardTls.create=true \
   --set-file secrets.wildcardTls.tlsCrt=wildcard.crt --set-file secrets.wildcardTls.tlsKey=wildcard.key \

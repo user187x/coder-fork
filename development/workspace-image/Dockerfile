@@ -44,14 +44,16 @@
 # Build with ../tools/build-workspace-image.sh, which saves it into the delivery bundle.
 ARG BASE=codercom/enterprise-base:ubuntu
 ARG FILEBROWSER_QUANTUM_VERSION=2.1.2-coder.1
-ARG FILEBROWSER_QUANTUM_SHA256=d1b992b5d67afc5cc4089c8a6900af39c9a28d049a251639d34a5b6b02e3990b
+ARG FILEBROWSER_QUANTUM_SHA256=ebbcd406bc4f966c2fc47823402100fff2045b55bc4cc6c4c03e4bce3ba07df8
 
 # FileBrowser Quantum: its binary (the build context "quantum", from build-workspace-image.sh), checked, and unpacked
 # from UPX when it is packed (the same program; a scanner cannot read a packed one). Since 1.9.2 the workspace's own
 # build of 2.1.2 (version 2.1.2-coder.1), with a FileBrowser update for symlinked folders: a source may follow links
 # into folders it is told (symlinkTargets, opt-in), and a symlinked folder is listed as a folder - the Cloud Drives'
-# links open in place (scripts/filebrowser.sh in the template sets it).
-FROM docker.io/library/golang:1.27.2-trixie@sha256:47667934874913a449b96faa7ef4777fa285d9ec29126ee80ed61c45b7cccf0e AS filebrowser
+# links open in place (scripts/filebrowser.sh in the template sets it). Since 1.9.4 the same source, version and
+# build flags built with Go 1.27.3 and golang.org/x/net 0.60.0 (0.59.0 had five HTTP/2 denial-of-service findings,
+# CVE-2026-78669 and others); the check below reads both from the binary's Go build information.
+FROM docker.io/library/golang:1.27.3-trixie@sha256:1896654cfc5c2b5ad74c07f29cb36f5d2d1cbed42e3054070fbfe444e521e83c AS filebrowser
 ARG FILEBROWSER_QUANTUM_VERSION
 ARG FILEBROWSER_QUANTUM_SHA256
 COPY --from=quantum filebrowser-quantum /tmp/filebrowser-quantum
@@ -60,7 +62,10 @@ RUN echo "${FILEBROWSER_QUANTUM_SHA256}  /tmp/filebrowser-quantum" | sha256sum -
 	&& mkdir -p /out \
 	&& if upx -t -q /tmp/filebrowser-quantum >/dev/null 2>&1; then upx -d -q -o /out/filebrowser /tmp/filebrowser-quantum; \
 		else cp /tmp/filebrowser-quantum /out/filebrowser; fi \
-	&& /out/filebrowser version | grep -q "v${FILEBROWSER_QUANTUM_VERSION}"
+	&& /out/filebrowser version | grep -q "v${FILEBROWSER_QUANTUM_VERSION}" \
+	&& go version -m /out/filebrowser >/tmp/buildinfo \
+	&& grep -q '^/out/filebrowser: go1\.27\.3$' /tmp/buildinfo \
+	&& grep -Eq '^[[:space:]]dep[[:space:]]golang\.org/x/net[[:space:]]v0\.60\.0[[:space:]]' /tmp/buildinfo
 
 # picom with animations (Serenade): fdev31's animation-pr fork at its pinned commit, checked, built on the same Ubuntu.
 FROM docker.io/library/ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944 AS picom
@@ -163,7 +168,11 @@ RUN install -d /usr/share/coder-workspace \
 # and plugins out (no privileges to run them in a workspace pod; their Go builds carried known vulnerabilities; the
 # docker CLI stays, for a remote daemon); the base's /usr/bin/pebble out (no package owns it, nothing uses it).
 # iptables stays (Docker had pulled it in): Lock Down's Network mode runs it from this image (lockdown.sh).
-RUN apt-get update \
+# The build takes Ubuntu's phased updates too (an apt setting removed again in the last step): apt holds a phased
+# update back from an upgrade, and then leaves out what needs it - in October 2026 systemd 259.9's phasing made apt
+# drop xfce4-power-manager, udev and upower from the desktop's install.
+RUN echo 'APT::Get::Always-Include-Phased-Updates "true";' >/etc/apt/apt.conf.d/99-coder-workspace-build \
+	&& apt-get update \
 	&& apt-get -y full-upgrade \
 	&& apt-mark manual iptables >/dev/null \
 	&& apt-get purge -y docker-ce docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin \
@@ -340,6 +349,23 @@ RUN curl -fsSL -o /tmp/basic-ftp.tgz "https://registry.npmjs.org/basic-ftp/-/bas
 	&& tar -xzf /tmp/basic-ftp.tgz -C "$d" --strip-components=1 --no-same-owner \
 	&& rm -f /tmp/basic-ftp.tgz \
 	&& /usr/lib/code-server/lib/node -e 'const f = require(process.argv[1]); if (require(process.argv[1] + "/package.json").version !== process.argv[2] || typeof f.Client !== "function") process.exit(1); require("/usr/lib/code-server/node_modules/get-uri")' "$d" "${BASIC_FTP_VERSION}"
+# CVE-2026-103923 (low, GHSA-238p-pmpm-9mq7: an existing prototype pollution can bypass KaTeX's trust restrictions):
+# code-server 4.141.0, the newest, ships katex 0.16.22 among VS Code's modules (the workbench loads its
+# dist/katex.min.js and katex.min.css to render math in chat and other markdown). Replaced by 0.18.2, the fixed
+# release, checked by its npm SHA-512. 0.18's one breaking change prefixes KaTeX's internal CSS classes, which its own
+# stylesheet (replaced with it) matches; VS Code styles only .katex and .katex-display, and its sanitizer keeps any
+# class. The markdown preview's math (the markdown-math extension) bundles its own KaTeX. Drop this step once a
+# code-server release carries katex 0.18.2 or newer.
+ARG KATEX_VERSION=0.18.2
+ARG KATEX_SHA512=dec9ef7b8cb44974cc7aab8b8a6d453223ef2c6125c926a6d1b94de7141906a118de5389cf54e7b9a6a2ba09c1641a87ce54801a615360becc09090e46e2ca08
+RUN curl -fsSL -o /tmp/katex.tgz "https://registry.npmjs.org/katex/-/katex-${KATEX_VERSION}.tgz" \
+	&& echo "${KATEX_SHA512}  /tmp/katex.tgz" | sha512sum -c - \
+	&& d=/usr/lib/code-server/lib/vscode/node_modules/katex \
+	&& test -d "$d" && rm -rf "$d" && install -d "$d" \
+	&& tar -xzf /tmp/katex.tgz -C "$d" --strip-components=1 --no-same-owner \
+	&& rm -f /tmp/katex.tgz \
+	&& test -f "$d/dist/katex.min.js" && test -f "$d/dist/katex.min.css" \
+	&& /usr/lib/code-server/lib/node -e 'const k = require(process.argv[1]); if (require(process.argv[1] + "/package.json").version !== process.argv[2] || !k.renderToString("x^2", {throwOnError: true}).includes("katex")) process.exit(1)' "$d" "${KATEX_VERSION}"
 # code-server's terminal in the Nerd Font: the browser draws it, so code-server serves the font itself (its /_static
 # route: code-server/nerd-font.css and the font) and its page loads it; a built-in extension makes it the terminal's
 # default font (code-server/coder-workspace-defaults: only defaults, a user's own setting wins).
@@ -381,6 +407,7 @@ RUN apt-get update \
 COPY addons/addons.py /tmp/addons.py
 RUN python3 /tmp/addons.py "${BASE}" >/usr/share/coder-workspace/addons.json \
 	&& python3 -m json.tool /usr/share/coder-workspace/addons.json >/dev/null \
-	&& rm -f /tmp/addons.py /usr/share/coder-workspace/.base-packages /usr/share/coder-workspace/.base-manual
+	&& rm -f /tmp/addons.py /usr/share/coder-workspace/.base-packages /usr/share/coder-workspace/.base-manual \
+		/etc/apt/apt.conf.d/99-coder-workspace-build
 
 USER coder

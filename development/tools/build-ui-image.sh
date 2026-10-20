@@ -15,7 +15,7 @@ src="${top}/helm-chart/coder-airgapped/files/ui-updates"
 # The image store's baked pictures and their previews (development/image-store, image-store-thumbs.sh): in the image
 # at /image-store, a layer of their own under the code's, so a build of new code ships only the code's layer.
 store="${dev}/image-store"
-base="ghcr.io/user187x/coder-image-tools:1.1.0"
+base="ghcr.io/user187x/coder-image-tools:1.2.0"
 repo="ghcr.io/user187x/coder-ui-updates"
 
 # The code: every file of files/ui-updates but Python's bytecode; and the image store's files (the tag follows both).
@@ -69,7 +69,7 @@ top, img, image_id = sys.argv[1:]
 repo = img.rsplit(":", 1)[0]
 p = top + "/helm-chart/images.txt"
 s = open(p).read()
-line = "%-57s %s   coder-ui-updates (the platform service) and the Images builder's scans: its code (helm-chart/coder-airgapped/files/ui-updates, development/tools/build-ui-image.sh) on coder-image-tools 1.1.0 - the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl, copa (development/image-tools)" % (img, image_id)
+line = "%-57s %s   coder-ui-updates (the platform service) and the Images builder's scans: its code (helm-chart/coder-airgapped/files/ui-updates, development/tools/build-ui-image.sh) on coder-image-tools 1.2.0 - the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl, copa (development/image-tools)" % (img, image_id)
 pat = re.compile(r"^%s:\S+\s+sha256:\S+.*$" % re.escape(repo), re.M)
 if pat.search(s):
     s = pat.sub(line, s, count=1)

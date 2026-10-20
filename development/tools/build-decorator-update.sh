@@ -56,9 +56,6 @@ if [[ -n "$since" ]] && git -C "$top" rev-parse -q --verify "v${since}" >/dev/nu
 	dataflow_then=$(git -C "$top" show "v${since}:helm-chart/coder-airgapped/values.yaml" |
 		sed -n 's/^  dataflowImage:.*"\([^"]*\)".*/\1/p' | head -n1)
 fi
-# The AI template's image (coder-workspace.aiImage): not in the update either.
-ai=$(sed -n 's/^  aiImage:.*"\([^"]*\)".*/\1/p' "${chart}/values.yaml" | head -n1)
-[[ -n "$ai" ]] || { echo "ERROR: no coder-workspace.aiImage in ${chart}/values.yaml" >&2; exit 1; }
 dataflow_note=""
 if [[ -n "$dataflow_then" && "$dataflow_then" != "$dataflow" ]]; then
 	dataflow_note="
@@ -86,8 +83,6 @@ ${changed:-    (none listed)}
 This update carries Coder's. The ubuntu-dataflow template (DATAFLOW: Apache NiFi and Apache Airflow in the
 workspace) runs on ${dataflow}, which is not in it: the helper turns that template off
 (coder-workspace.dataflowTemplate.enabled: false) unless you give it the image (--dataflow).${dataflow_note}
-The AI template (UBUNTU OPENCODE: OpenCode on the workspace's Unsloth server) runs on ${ai}, not in it either: the
-helper turns it off (coder-workspace.aiTemplates.enabled: false) unless you give it the image (--ai).
 
 Install
 -------
@@ -103,12 +98,10 @@ in to your registry, as for the install - with its CA if it has a private one), 
   --push      docker load + push ${fork} to <registry>/user187x/coder-platform:${fork_tag}
               (registry = global.registry in your file, or --registry <harbor>/<project>), and helm push both
               charts to the Application's chart repository (its repoURL)
-  --apply     sets both sources' targetRevision to ${version} (and the dataflow and AI templates off), keeps your file as
+  --apply     sets both sources' targetRevision to ${version} (and the dataflow template off), keeps your file as
               <file>.<time>.bak, kubectl apply -f <file>, and asks Argo CD to refresh
   --dataflow keep | <image>   keep DATAFLOW on: its image is in your registry already
               (<registry>/${dataflow#*/}), or runs from <image>
-  --ai keep | <image>         keep the AI template on: its image is in your registry already
-              (<registry>/${ai#*/}), or runs from <image>
 
 Argo CD then syncs: Coder restarts on ${fork_tag} (the new pod first, no gap), the layer's
 services update, and the template pushes run (new template versions; workspaces show "Update" once they are older).

@@ -3,15 +3,18 @@
 # (../workspace-image-dataflow: the DEFAULT template's image + Apache NiFi + Apache Airflow), and checks that NiFi
 # and Airflow start and answer with no network at all. NiFi's archive is downloaded once (kept in
 # ../workspace-image-dataflow/nifi-<version>-bin.zip, not in git) and checked against Apache's SHA-512; Airflow is
-# pinned with Airflow's own constraints for the image's Python.
-#   ./build-dataflow-image.sh [TAG]       default 1.1.3
+# pinned with Airflow's own constraints for the image's Python (but for ../workspace-image-dataflow/airflow-overrides.txt),
+# and NiFi's libraries with fixed vulnerabilities replaced (../workspace-image-dataflow/patch-nifi-jars.py).
+#   ./build-dataflow-image.sh [--no-store] [TAG]   default 1.1.4; --no-store: build and check only, the bundle untouched
+#   BASE=<image> ./build-dataflow-image.sh ...      another base than the Dockerfile's (ARG BASE)
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; dev="$(dirname "$here")"
 ctx="${dev}/workspace-image-dataflow"
-tag="${1:-1.1.3}"; img="ghcr.io/user187x/coder-workspace-dataflow:${tag}"
+store=1; if [[ "${1:-}" == --no-store ]]; then store=0; shift; fi
+tag="${1:-1.1.4}"; img="ghcr.io/user187x/coder-workspace-dataflow:${tag}"
 nifi="$(sed -n 's/^ARG NIFI_VERSION=//p' "${ctx}/Dockerfile")"
 airflow="$(sed -n 's/^ARG AIRFLOW_VERSION=//p' "${ctx}/Dockerfile")"
-base="$(sed -n 's/^ARG BASE=//p' "${ctx}/Dockerfile")"
+base="${BASE:-$(sed -n 's/^ARG BASE=//p' "${ctx}/Dockerfile")}"
 py="$(docker run --rm --entrypoint python3 "$base" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 
 zip="${ctx}/nifi-${nifi}-bin.zip"
@@ -30,7 +33,7 @@ echo "nifi-${nifi}-bin.zip: SHA-512 verified"
 curl -fsL -o "${ctx}/airflow-constraints.txt" \
 	"https://raw.githubusercontent.com/apache/airflow/constraints-${airflow}/constraints-${py}.txt"
 
-docker build --platform linux/amd64 -t "$img" "$ctx"
+docker build --platform linux/amd64 --build-arg BASE="$base" -t "$img" "$ctx"
 
 # NiFi as the template starts it (a ~/.nifi of its own: conf, flows, logs; bin and lib from /opt/nifi; the NARs
 # unpacked in the image), sent the app's path and Coder's host as the cluster's Gateway sends them (the template's
@@ -73,5 +76,5 @@ docker run --rm --network none --hostname localhost --entrypoint bash "$img" -c 
 # digest) in helm-chart/images.txt and coder-workspace.dataflowImage in helm-chart/coder-airgapped/values.yaml.
 top="$(dirname "$dev")"
 # its archive in the bundle, in its section's folder of images.txt (replacing the previous tag's)
-"${top}/helm-chart/mirror-images.sh" store "$img"
-echo "built $img (NiFi ${nifi}, Airflow ${airflow}, Python ${py}); image ID $(docker image inspect --format '{{.Id}}' "$img")"
+if (( store )); then "${top}/helm-chart/mirror-images.sh" store "$img"; else echo "--no-store: not stored in the bundle"; fi
+echo "built $img on $base (NiFi ${nifi}, Airflow ${airflow}, Python ${py}); image ID $(docker image inspect --format '{{.Id}}' "$img")"

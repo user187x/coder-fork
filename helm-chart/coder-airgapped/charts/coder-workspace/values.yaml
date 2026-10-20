@@ -18,7 +18,7 @@ cliImage: "ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap"
 loginImage: "docker.io/library/python:3.13-alpine"
 
 # Container image of the workspace pods, substituted for "codercom/enterprise-base:ubuntu" in files/main.tf.
-workspaceImage: "ghcr.io/user187x/coder-workspace:1.9.3"
+workspaceImage: "ghcr.io/user187x/coder-workspace:1.9.4"
 # StorageClass of workspaces' home volumes ("" = the cluster's default; EKS may have none: e.g. gp3). New volumes only.
 storageClass: ""
 
@@ -47,18 +47,7 @@ dataflowTemplate:
   # Its web terminal: Ghostty's (the Ghostty app in the Terminal's place, drawn by Ghostty's emulator), or web.
   terminal: "ghostty"
 # Its image: the workspace image + NiFi, a Java runtime and Airflow.
-dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.1.3"
-# The AI template, on the AI image (development/workspace-image-ai: the workspace image + Unsloth Studio + OpenCode),
-# pushed by its own Job (<prefix>-push-template-opencode): ubuntu-opencode (the OpenCode agent, on the workspace's own
-# Unsloth server). It scans the model library's GGUF models (~/models) where the deployment has the Cloud Drive's
-# storage, and the owner's own (~/cloud-drive/models). Display name and icon as for template above.
-aiTemplates:
-  enabled: false
-  opencode:
-    name: "ubuntu-opencode"
-    displayName: "UBUNTU OPENCODE"
-    icon: "/__icons/opencode.svg"
-aiImage: "ghcr.io/user187x/coder-workspace-ai:2.0.0"
+dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.1.4"
 # Its NiFi under Coder's app path: each dataflow workspace gets an HTTPRoute of its own (files/main.tf, nifi_route) on
 # the Gateway in icons.gateway, to Coder's Service, setting the proxy headers NiFi reads; Coder's service account may
 # manage HTTPRoutes in the namespace, and read the cluster's CRDs (templates/nifi-routes-rbac.yaml), to create and

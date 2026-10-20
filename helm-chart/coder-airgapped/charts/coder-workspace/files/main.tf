@@ -56,17 +56,16 @@ variable "cluster_admin_roles" {
   default     = "owner"
 }
 
-# Which apps the workspace has: "developer" (default, DEFAULT: code-server), "dataflow" (ubuntu-dataflow:
-# Apache NiFi, Apache Airflow), or "opencode" (ubuntu-opencode, on the AI workspace image: the OpenCode agent,
-# code-server; the image's Unsloth serving its models). Everything else is the same. The chart pushes this template
-# once per set (templates/job.yaml).
+# Which apps the workspace has: "developer" (default, DEFAULT: code-server) or "dataflow" (ubuntu-dataflow:
+# Apache NiFi, Apache Airflow). Everything else is the same. The chart pushes this template once per set
+# (templates/job.yaml).
 variable "app_set" {
   type        = string
-  description = "developer (code-server), dataflow (Apache NiFi, Apache Airflow) or opencode (OpenCode on Unsloth)."
+  description = "developer (code-server) or dataflow (Apache NiFi, Apache Airflow)."
   default     = "developer"
   validation {
-    condition     = contains(["developer", "dataflow", "opencode"], var.app_set)
-    error_message = "app_set must be developer, dataflow or opencode."
+    condition     = contains(["developer", "dataflow"], var.app_set)
+    error_message = "app_set must be developer or dataflow."
   }
 }
 
@@ -158,9 +157,7 @@ variable "images_registry" {
 locals {
   dataflow = var.app_set == "dataflow"
   # Ghostty in place of the web terminal (terminal_app)
-  ghostty = var.terminal && var.terminal_app == "ghostty"
-  # The AI template (ubuntu-opencode): OpenCode's app, on the image's Unsloth server.
-  ai            = var.app_set == "opencode"
+  ghostty       = var.terminal && var.terminal_app == "ghostty"
   default_image = var.workspace_image != "" ? var.workspace_image : "codercom/enterprise-base:ubuntu"
   # The Workspace image parameter's choice (data.coder_parameter.workspace_image), where the template offers one:
   # "template" - the template's own image, whatever it is at each start (so a template update brings its new image);
@@ -266,10 +263,9 @@ data "coder_parameter" "cpu" {
   name         = "cpu"
   display_name = "CPU"
   description  = "The number of CPU cores"
-  # A language model on the CPU wants several.
-  default = local.ai ? "4" : "2"
-  icon    = "/icon/memory.svg"
-  mutable = true
+  default      = "2"
+  icon         = "/icon/memory.svg"
+  mutable      = true
   option {
     name  = "2 Cores"
     value = "2"
@@ -300,9 +296,8 @@ data "coder_parameter" "memory" {
   name         = "memory"
   display_name = "Memory"
   description  = "The amount of memory in GB"
-  # NiFi (a 1 GB Java heap) and Airflow beside the desktop need more than the developer apps; a language model needs
-  # its size and its context's (an 8B model at 4 bits: some 5 GB, and 1-4 GB more for a long context).
-  default = local.ai ? "8" : local.dataflow ? "6" : "2"
+  # NiFi (a 1 GB Java heap) and Airflow beside the desktop need more than the developer apps.
+  default = local.dataflow ? "6" : "2"
   icon    = "/__icons/memory.svg" # files/icons/memory.svg (a memory module), served by templates/icons.yaml
   mutable = true
   option {
@@ -394,47 +389,17 @@ data "coder_parameter" "desktop_theme" {
   }
 }
 
-# The AI template (ubuntu-opencode): how many tokens a model gets when OpenCode loads it in Unsloth (OpenCode's instructions alone take
-# some 10 000; the Unsloth app sets its own per model). More context takes more memory.
-data "coder_parameter" "context_length" {
-  count        = local.ai ? 1 : 0
-  name         = "context_length"
-  display_name = "Context length"
-  description  = "Tokens a model gets when OpenCode loads it in Unsloth (OpenCode needs at least 16K). More takes more memory."
-  default      = "32768"
-  icon         = "/__icons/unsloth.svg"
-  mutable      = true
-  option {
-    name  = "8K tokens"
-    value = "8192"
-  }
-  option {
-    name  = "16K tokens"
-    value = "16384"
-  }
-  option {
-    name  = "32K tokens"
-    value = "32768"
-  }
-  option {
-    name  = "64K tokens"
-    value = "65536"
-  }
-}
-
-# NVIDIA GPUs for the workspace (nvidia.com/gpu, from the cluster's NVIDIA device plugin). Only the AI template
-# (ubuntu-opencode) runs on them: Unsloth fine-tunes on them, and runs its models on them with llama.cpp's CUDA build;
-# the workspace waits for a node that has them free; none: the CPU (chat only; fine-tuning needs a GPU). Every other
-# template has the parameter too, disabled (styling), so the workspace's settings show the GPU switch greyed out: its
-# value is never used there (local.gpus).
+# NVIDIA GPUs for the workspace (nvidia.com/gpu, from the cluster's NVIDIA device plugin). Every template has the
+# parameter, disabled (styling), so the workspace's settings show the GPU switch greyed out: no template runs its
+# workspaces on GPUs, and its value is never used.
 data "coder_parameter" "gpus" {
   name         = "gpus"
   display_name = "GPUs"
-  description  = local.ai ? "NVIDIA GPUs for Unsloth: fine-tuning, and faster models (nodes with the NVIDIA device plugin). The workspace waits until a node has them free; 0: the CPU only (chat, no fine-tuning)." : "NVIDIA GPUs: not offered by this template (UBUNTU OPENCODE's workspaces run on them)."
+  description  = "NVIDIA GPUs: not offered by this template."
   default      = "0"
   icon         = "/icon/memory.svg"
   mutable      = true
-  styling      = jsonencode({ disabled = !local.ai })
+  styling      = jsonencode({ disabled = true })
   option {
     name  = "None (CPU)"
     value = "0"
@@ -451,11 +416,6 @@ data "coder_parameter" "gpus" {
     name  = "4 GPUs"
     value = "4"
   }
-}
-
-locals {
-  context_length = local.ai ? data.coder_parameter.context_length[0].value : ""
-  gpus           = local.ai ? tonumber(data.coder_parameter.gpus.value) : 0
 }
 
 provider "kubernetes" {
@@ -640,11 +600,7 @@ resource "coder_agent" "main" {
   }
 
   # Admins' terminals, k9s and apps find the cluster sign-in first, then their own ~/.kube/config.
-  # The AI template: the Context length OpenCode loads a model with (coder-opencode, in the AI workspace image).
-  env = merge(
-    local.cluster_admin ? { KUBECONFIG = "${local.cluster_kubeconfig}:/home/coder/.kube/config" } : {},
-    local.ai ? { CODER_AI_CONTEXT = local.context_length } : {},
-  )
+  env = local.cluster_admin ? { KUBECONFIG = "${local.cluster_kubeconfig}:/home/coder/.kube/config" } : {}
 
   startup_script = templatefile("${path.module}/scripts/startup.sh", {
     owner_name             = data.coder_workspace_owner.me.name
@@ -654,10 +610,8 @@ resource "coder_agent" "main" {
     cluster_kubeconfig     = local.cluster_kubeconfig
     cluster_oidc_issuer    = var.cluster_oidc_issuer
     cluster_oidc_client_id = var.cluster_oidc_client_id
-    app_set                = var.app_set
     code_server            = !local.dataflow
     start_directory        = data.coder_parameter.start_directory.value
-    context_length         = local.context_length
     desktop                = var.desktop
     desktop_theme          = var.desktop ? data.coder_parameter.desktop_theme[0].value : "classic"
     file_browser           = var.file_browser
@@ -817,19 +771,6 @@ resource "coder_app" "code-server" {
     interval  = 3
     threshold = 10
   }
-}
-
-# ubuntu-opencode: OpenCode, the AI coding agent, in a terminal in the Start folder, on the workspace's Unsloth
-# (coder-opencode: a model loaded at the Context length, an API key of it). Quitting it closes the terminal; it opens
-# again from the button.
-resource "coder_app" "opencode" {
-  count        = var.app_set == "opencode" ? 1 : 0
-  agent_id     = coder_agent.main.id
-  slug         = "opencode"
-  display_name = "OpenCode"
-  icon         = "/__icons/opencode.svg" # files/icons/opencode.svg, served by templates/icons.yaml
-  command      = "cd ${jsonencode(data.coder_parameter.start_directory.value)} 2>/dev/null; exec coder-opencode ${local.context_length}"
-  share        = "owner"
 }
 
 # Ghostty in place of the web terminal (terminal_app, the DATAFLOW template's): a terminal app, so it opens where and
@@ -1171,11 +1112,10 @@ resource "kubernetes_deployment_v1" "main" {
               "cpu"    = "250m"
               "memory" = "512Mi"
             }
-            # The AI template's GPUs (none: no such limit).
-            limits = merge({
+            limits = {
               "cpu"    = "${data.coder_parameter.cpu.value}"
               "memory" = "${data.coder_parameter.memory.value}Gi"
-            }, local.gpus > 0 ? { "nvidia.com/gpu" = tostring(local.gpus) } : {})
+            }
           }
           volume_mount {
             mount_path = "/home/coder"
@@ -1252,16 +1192,6 @@ resource "kubernetes_deployment_v1" "main" {
             }
           }
           # platform:end code-server-ha
-          # The AI template: the model library (Templates > Images), read-only: the same GGUF models in every AI
-          # workspace (Unsloth scans it).
-          dynamic "volume_mount" {
-            for_each = var.user_storage && local.ai ? [1] : []
-            content {
-              mount_path = "/home/coder/models"
-              name       = "models"
-              read_only  = true
-            }
-          }
         }
 
         volume {
@@ -1442,18 +1372,6 @@ resource "kubernetes_deployment_v1" "main" {
           }
         }
         # platform:end cloud-drive
-
-        # The model library: one read-only volume for every AI workspace (the platform service makes it).
-        dynamic "volume" {
-          for_each = var.user_storage && local.ai ? [1] : []
-          content {
-            name = "models"
-            persistent_volume_claim {
-              claim_name = "coder-models"
-              read_only  = true
-            }
-          }
-        }
 
         affinity {
           pod_anti_affinity {

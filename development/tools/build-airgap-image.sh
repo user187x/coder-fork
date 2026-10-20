@@ -15,7 +15,9 @@ docker image inspect "$base" >/dev/null 2>&1 || docker pull "$base" 2>/dev/null 
 	docker load -i "${HOME}/coder-airgapped-private/images/coder-platform-${base_tag}.tar.gz"
 rm -rf "${ctx}/template"; mkdir -p "${ctx}/template"
 cp "${top}"/helm-chart/coder-airgapped/charts/coder-workspace/files/*.tf "${ctx}/template/"
-tf=$(docker run --rm --entrypoint terraform "$base" version | sed -n 's/^Terraform v//p' | head -n1)
+# Terraform: built from source in the image (../airgap-image/Dockerfile), the newest 1.16 (Coder's provisioner accepts
+# up to 1.16.9), with a current Go
+tf=1.16.6
 docker build --build-arg BASE="$base" --build-arg TERRAFORM_VERSION="$tf" -t "$img" "$ctx"
 # its archive in the bundle, in its section's folder of images.txt (replacing the previous tag's)
 "${top}/helm-chart/mirror-images.sh" store "$img"

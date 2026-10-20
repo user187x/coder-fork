@@ -1,0 +1,83 @@
+# coder-fork @VERSION@ – install
+
+Coder @CODER_VERSION@ (the fork) for an air-gapped Kubernetes cluster. This folder holds only what runs Coder from
+the fork: the images of ours the chart runs and the chart, `coder-airgapped-@VERSION@.tgz`, which installs the whole
+platform with one `helm install`.
+
+| File | What it is |
+|---|---|
+| `coder-airgapped-@VERSION@.tgz` | The chart |
+| `images/` | @IMAGE_COUNT@ images of ours, `docker save` + gzip (@IMAGES_SIZE@); one over 1900 MiB is split into `<file>.part-00`, `-01`, ... (`cat` joins them) |
+| `push-images.sh` | Checks the files, then loads each image and pushes it to your registry (docker only) |
+| `IMAGES.txt` | Each image: its reference, file(s), size, config and manifest digests |
+| `values-eks-airgap.example.yaml` | The values to start `my-values.yaml` from |
+| `SHA256SUMS` | Every file here (`sha256sum -c SHA256SUMS`); `SHA256SUMS.joined`: the split archives, joined |
+| `CVE-REPORT.md` | The release's CVE scan (when it was built with one) |
+
+## Before you start
+
+The cluster needs these already:
+
+- **Kubernetes 1.27 or newer with amd64 (x86_64) nodes** – the images are amd64 only.
+- **Gateway API CRDs v1.6.0** (standard channel).
+- **Traefik v3** with the Gateway API provider and a Gateway `traefik/traefik-gateway` serving HTTPS for
+  `coder.<your-domain>` and `*.<your-domain>`, with Traefik's **`rewrite-body` local plugin** (the announcement
+  banner's middlewares use it; the source repository's `helm-chart/prereqs/traefik-*.reference-values.yaml` carries
+  it under `experimental.localPlugins`). Tested: @TRAEFIK@.
+- **The CloudNativePG operator.** Tested: @CNPG@.
+- **DNS** for `coder.<your-domain>` and `*.<your-domain>`.
+- **A container registry** (ECR, Harbor, ...) – `$REGISTRY` below, the chart's `global.registry` – that already holds
+  the **public images** the chart runs, under the same paths (the source host left out). This release carries none
+  of them:
+
+| In your registry | Pull it on a connected machine as (tested digest) |
+|---|---|
+@PUBLIC_IMAGES@
+
+Files: `ca.crt` (the CA that signed your HTTPS certificate), `wildcard.crt` / `wildcard.key` (the certificate for
+`*.<your-domain>`), and for OIDC sign-in (Keycloak) `keycloak-ca.crt` and the client secret.
+Tools: `docker`, `helm`, `kubectl` (and `aws` for ECR).
+
+## 1. Push the images
+
+```bash
+docker login $REGISTRY       # ECR: aws ecr get-login-password | docker login --username AWS --password-stdin $REGISTRY
+./push-images.sh $REGISTRY   # --dry-run first if you like; ECR=1 ./push-images.sh $REGISTRY creates the ECR repositories
+```
+
+It checks every file against `SHA256SUMS` first, then loads, tags and pushes each image as
+`$REGISTRY/user187x/<name>:<tag>`, and ends with a summary.
+
+## 2. Values
+
+```bash
+cp values-eks-airgap.example.yaml my-values.yaml    # change every CHANGE-ME (global.registry: $REGISTRY, the domain, ...)
+```
+
+## 3. Install
+
+```bash
+helm install coder coder-airgapped-@VERSION@.tgz -n coder --create-namespace -f my-values.yaml \
+  --set secrets.tlsCa.create=true --set-file secrets.tlsCa.caCrt=ca.crt \
+  --set secrets.wildcardTls.create=true \
+  --set-file secrets.wildcardTls.tlsCrt=wildcard.crt --set-file secrets.wildcardTls.tlsKey=wildcard.key \
+  --wait --timeout 20m
+```
+
+The namespace must be `coder` (the workspace template accepts no other). With OIDC sign-in (Keycloak), add these
+two lines; `client-secret.txt` holds the client secret with no trailing newline
+(`tr -d '\r\n' <secret.txt >client-secret.txt`):
+
+```bash
+  --set secrets.oidcCa.create=true --set-file secrets.oidcCa.caCrt=keycloak-ca.crt \
+  --set secrets.oidcClient.create=true --set-file secrets.oidcClient.clientSecret=client-secret.txt \
+```
+
+## 4. Sign in
+
+Open `https://coder.<your-domain>` and sign in as **`admin@admin.com`** / **`admin`** – then change the password at
+once (your avatar › Account › Security).
+
+The image builder (Templates › Images) builds on the workspace image in your registry: nothing more to set up.
+
+The next release: push its images, then `helm upgrade coder coder-airgapped-<next>.tgz -n coder` with the same options.

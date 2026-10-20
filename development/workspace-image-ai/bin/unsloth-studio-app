@@ -1,9 +1,0 @@
-#!/bin/sh
-# Unsloth Studio's desktop app (/opt/unsloth-app, the AppImage unpacked) in a workspace pod: WebKit without its
-# sandbox (a pod has no user namespaces) and without GPU compositing (the desktop is a VNC display); the local model
-# folders scanned (UNSLOTH_STUDIO_MODELS_DIRS: the model library and the Cloud Drive's models).
-export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 UNSLOTH_WEBKIT_DISABLE_COMPOSITING=1 WEBKIT_DISABLE_COMPOSITING_MODE=1
-export WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1
-UNSLOTH_STUDIO_MODELS_DIRS="${UNSLOTH_STUDIO_MODELS_DIRS:-$(coder-unsloth-models)}"
-export UNSLOTH_STUDIO_MODELS_DIRS
-exec /opt/unsloth-app/AppRun "$@"

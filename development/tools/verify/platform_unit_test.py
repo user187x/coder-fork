@@ -1692,7 +1692,7 @@ class PitRegistryTest(unittest.TestCase):
         self.reg = FakeRegistry()
         self.patch = mock.patch.object(ib, "REGISTRY", self.reg.addr)
         self.patch.start()
-        self.repo = "coder-images/base/ai"
+        self.repo = "coder-images/base/dataflow"
         cfg = self.reg.blob(self.repo, {"architecture": "amd64", "config": {"Env": ["PATH=/usr/bin", "LANG=C"]}})
         self.layer = self.reg.blob(self.repo, b"layer")
         self.manifest = {"schemaVersion": 2, "mediaType": self.V2,
@@ -1764,7 +1764,7 @@ class PitStopTest(unittest.TestCase):
             p.stop()
         self.dir.cleanup()
 
-    def scanned(self, ref="ghcr.io/user187x/coder-workspace-ai:2.0.0"):
+    def scanned(self, ref="ghcr.io/user187x/coder-workspace-dataflow:1.1.3"):
         image_id = ib.scanned_id(ref)
         ib.STORE.create(image_id, "", dict(ib.empty_spec(), scanned={"image": ref}), "alice")
         ib.STORE.set(image_id, status="ready", ref=ref, report=self.REPORT)
@@ -1774,15 +1774,15 @@ class PitStopTest(unittest.TestCase):
         image_id = self.scanned()
         target, build_id = ib.start_pit_stop(image_id, {"libraries": True, "level": "patch", "maxLevel": "major",
                                                         "laps": 3}, "alice")
-        self.assertEqual(target, "coder-workspace-ai-patched")
+        self.assertEqual(target, "coder-workspace-dataflow-patched")
         copy = ib.STORE.image(target)
         self.assertEqual((copy["imported"]["source"], copy["imported"]["from"], copy["imported"]["entry"]),
-                         ("copa", "ghcr.io/user187x/coder-workspace-ai:2.0.0", image_id))
+                         ("copa", "ghcr.io/user187x/coder-workspace-dataflow:1.1.3", image_id))
         st = ib.pit_state(build_id)
         # every finding with a fixed version (none chosen), the grade it came in with
         self.assertEqual(st["pairs"], [["CVE-1", "openssl"], ["CVE-2", "requests"]])
         self.assertEqual((st["source"], st["version"], st["before"]["grade"]),
-                         ("ghcr.io/user187x/coder-workspace-ai:2.0.0", 1, "D"))
+                         ("ghcr.io/user187x/coder-workspace-dataflow:1.1.3", 1, "D"))
         self.assertEqual([s_["key"] for s_ in json.loads(ib.STORE.build(build_id)["steps"])],
                          ["pit-in", "report", "patch", "rescan", "pit-out"])
         # both the scanned entry and the copy know their pit stop
@@ -1816,7 +1816,7 @@ class PitStopTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, why):
                 ib.start_pit_stop(image_id, bad, "alice")
         # a name taken by an image of another kind
-        ib.STORE.create("coder-workspace-ai-patched", "", ib.empty_spec(), "alice")
+        ib.STORE.create("coder-workspace-dataflow-patched", "", ib.empty_spec(), "alice")
         with self.assertRaisesRegex(ValueError, "not a patched copy"):
             ib.start_pit_stop(image_id, {}, "alice")
 
@@ -1878,8 +1878,9 @@ class PitStopTest(unittest.TestCase):
     def test_the_lap_reads_its_report_without_java_archives(self):
         # Copa does not patch them, and trivy would need its Java database for them (none: it stops on the first run)
         import io
-        plan = {"lap": 1, "source": "%s/coder-images/base/ai:2" % ib.REGISTRY, "target": "%s/coder-images/ai-patched:1"
-                % ib.REGISTRY, "libraries": True, "pairs": [], "report": None}
+        plan = {"lap": 1, "source": "%s/coder-images/base/dataflow:2" % ib.REGISTRY,
+                "target": "%s/coder-images/dataflow-patched:1" % ib.REGISTRY, "libraries": True, "pairs": [],
+                "report": None}
         runs = []
 
         def run(cmd, **kw):
@@ -1895,7 +1896,7 @@ class PitStopTest(unittest.TestCase):
         cmd = runs[0]
         self.assertEqual(cmd[:2], ["trivy", "image"])
         self.assertEqual([cmd[i + 1] for i, a in enumerate(cmd) if a == "--skip-files"], ["**/*.jar", "**/*.war", "**/*.ear"])
-        self.assertEqual((cmd[cmd.index("--pkg-types") + 1], cmd[-1]), ("os,library", "localhost:5000/coder-images/base/ai:2"))
+        self.assertEqual((cmd[cmd.index("--pkg-types") + 1], cmd[-1]), ("os,library", "localhost:5000/coder-images/base/dataflow:2"))
 
     def test_the_jobs_own_endpoints(self):
         import io

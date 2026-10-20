@@ -36,7 +36,6 @@ SOURCES = {
     "coder-ui-updates": ("helm-chart/coder-airgapped/files/ui-updates", "development/tools/build-ui-image.sh"),
     "coder-image-tools": ("development/image-tools", "development/tools/build-image-tools.sh"),
     "coder-workspace": ("development/workspace-image", "development/tools/build-workspace-image.sh"),
-    "coder-workspace-ai": ("development/workspace-image-ai", "development/tools/build-ai-image.sh"),
     "coder-workspace-dataflow": ("development/workspace-image-dataflow", "development/tools/build-dataflow-image.sh"),
     "coder-registry": ("development/registry-image", "development/tools/build-registry-image.sh"),
     "coder-minio": ("development/tools/build-minio-image.sh", "development/tools/build-minio-image.sh"),

@@ -178,34 +178,33 @@ def icon_checks(chart, default_render):
           is not None, "")
 
 
-def ai_checks(B, chart, default_render):
-    """The AI template (aiTemplates): on, one push Job on the AI image (app_set opencode), the Images view lists it, the
-    template knows the set and mounts the model library; off, no Job; the image is pinned. The templates removed
-    (Unsloth's, LM Studio's, Obsidian's) are gone for good."""
+def template_checks(B, chart, default_render):
+    """The workspace templates the chart pushes: DEFAULT and DATAFLOW only, each by its own Job and in the Images view;
+    the AI template (UBUNTU OPENCODE: OpenCode on Unsloth, its own image) is gone for good, as are the templates removed
+    before it (Unsloth's, LM Studio's, Obsidian's): no Job, no values, no app, no icon, no image."""
     import yaml
     docs = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d}
     jobs = {k[1]: "\n".join(c["args"][0] for c in d["spec"]["template"]["spec"]["containers"])
             for k, d in docs.items() if k[0] == "Job" and "push-template" in k[1]}
     vals = open(os.path.join(chart, "values.yaml")).read()
-    ai_image = re.search(r'^  aiImage:.*"([^"\n]+)"', vals, re.M).group(1)
-    oc = next((a for n, a in jobs.items() if n.endswith("-opencode")), "")
-    check("AI template: ubuntu-opencode pushed on %s" % ai_image,
-          'app_set="opencode"' in oc and 'workspace_image="%s"' % ai_image in oc, sorted(jobs))
-    check("AI template: no Unsloth or Obsidian template pushed",
-          not any(n.endswith(("-unsloth", "-lmstudio", "-obsidian")) for n in jobs), sorted(jobs))
+    sub_vals = open(os.path.join(chart, "charts", "coder-workspace", "values.yaml")).read()
+    check("templates: DEFAULT and DATAFLOW pushed (app_set developer, dataflow), no other - no AI, Unsloth, LM Studio "
+          "or Obsidian template",
+          sorted(n.rsplit("push-template", 1)[1] for n in jobs) == ["", "-dataflow"]
+          and sorted(re.findall(r'--variable app_set="(\w+)"', "\n".join(jobs.values()))) == ["dataflow", "developer"],
+          sorted(jobs))
     ui_env = {e["name"]: e.get("value") for c in docs[("Deployment", "coder-ui-updates")]["spec"]["template"]["spec"]["containers"]
               for e in c.get("env", [])}
     names = [t["name"] for t in json.loads(ui_env.get("BUILDER_TEMPLATES") or "[]")]
-    check("AI template: in the Images view's In use list, the removed ones not",
-          "ubuntu-opencode" in names and not {"ubuntu-unsloth", "ubuntu-obsidian"} & set(names), names)
-    rc, off, err = run(["helm", "template", "coder", chart, "--namespace", "coder",
-                        "--set", "coder-workspace.aiTemplates.enabled=false"])
-    check("AI template: off - no push Job", rc == 0 and "push-template-opencode" not in off, err.strip()[-200:])
+    check("templates: the Images view's In use list has DEFAULT and DATAFLOW, no AI template",
+          names == ["default", "ubuntu-dataflow"], names)
+    check("values: no AI template (coder-workspace.aiTemplates, aiImage) in either chart's values",
+          not re.search(r"aiTemplates|aiImage|opencode|coder-workspace-ai", vals + sub_vals, re.I), "")
     tf = open(os.path.join(chart, "charts", "coder-workspace", "files", "main.tf")).read()
     startup = open(os.path.join(chart, "charts", "coder-workspace", "files", "scripts", "startup.sh")).read()
-    check("AI template: main.tf knows opencode, mounts the model library, OpenCode's app on Unsloth",
-          '"developer", "dataflow", "opencode"]' in tf and 'claim_name = "coder-models"' in tf
-          and 'slug         = "opencode"' in tf and "exec coder-opencode" in tf and "coder-unsloth-start" in startup
+    check("main.tf: app_set developer or dataflow only - no OpenCode app, Unsloth, Context length or model library mount",
+          'contains(["developer", "dataflow"], var.app_set)' in tf and not re.search(r"\blocal\.ai\b", tf)
+          and not re.search(r"opencode|unsloth|context_length|coder-models", tf + startup, re.I)
           and "lmstudio" not in tf and "LM Studio" not in tf + startup, "")
     check("main.tf: no Obsidian app set, code-server everywhere but dataflow",
           "obsidian" not in (tf + startup).lower() and "local.dataflow ? 0 : 1" in tf, "")
@@ -248,13 +247,13 @@ def ai_checks(B, chart, default_render):
     check("model scanner: a plug-in - no image pinned or bundled (Model library > Import scanner)",
           scanner.get("image") == "" and scanner.get("enabled") is True
           and "coder-garak" not in open(os.path.join(B, "images.txt")).read(), scanner.get("image"))
-    # Every template has the GPU parameter (the workspace settings' GPU switch), disabled by the template where its
-    # workspaces do not run on GPUs: only the AI template's value reaches the pod (local.gpus)
+    # Every template has the GPU parameter (the workspace settings' GPU switch), disabled (styling): no template runs
+    # its workspaces on GPUs, so its value never reaches the pod
     gpu_param = re.search(r'data "coder_parameter" "gpus" \{(.*?)\n\}', tf, re.S)
-    check("main.tf: the GPU parameter on every template, disabled (styling) but on the AI template",
+    check("main.tf: the GPU parameter on every template, disabled (styling); no pod asks for a GPU",
           gpu_param is not None and "count" not in gpu_param.group(1)
-          and "styling      = jsonencode({ disabled = !local.ai })" in gpu_param.group(1)
-          and "gpus           = local.ai ? tonumber(data.coder_parameter.gpus.value) : 0" in tf, "")
+          and "styling      = jsonencode({ disabled = true })" in gpu_param.group(1)
+          and '"nvidia.com/gpu"' not in tf and "local.gpus" not in tf, "")
     # The Images view's "Coder fork" tree reads what each image of ours holds from image-contents.json: it must be the
     # images images.txt pins (rebuilt with development/tools/image-contents.py after pinning a new one)
     contents = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -268,18 +267,15 @@ def ai_checks(B, chart, default_render):
           not re.search(r"count\s*=\s*try\(data\.coder_parameter|try\((jsondecode\()?data\.kubernetes_config_map_v1"
                         r"\.workspace_images|try\(local\.images_kept", tf), "")
     icons = os.path.join(chart, "charts", "coder-workspace", "files", "icons")
-    check("AI template: its icons (unsloth.svg for the context length, opencode.svg); none for the removed ones",
-          all(os.path.isfile(os.path.join(icons, f)) for f in ("unsloth.svg", "opencode.svg"))
-          and not any(os.path.exists(os.path.join(icons, f)) for f in ("obsidian.svg", "lmstudio.svg")), "")
-    build = os.path.join(B, "..", "development", "tools", "build-ai-image.sh")
-    if os.path.isfile(build):
-        b = open(build).read()
-        check("AI image: Unsloth's AppImage and OpenCode's download pinned by SHA-256",
-              re.search(r"^UNSLOTH_APPIMAGE_SHA256=[0-9a-f]{64}", b, re.M)
-              and re.search(r"^OPENCODE_SHA256=[0-9a-f]{64}", b, re.M), "")
+    check("template icons: none of the removed templates' (opencode, unsloth, obsidian, lmstudio)",
+          not any(os.path.exists(os.path.join(icons, f))
+                  for f in ("opencode.svg", "unsloth.svg", "obsidian.svg", "lmstudio.svg")), "")
+    dev = os.path.join(B, "..", "development")
     images_txt = open(os.path.join(B, "images.txt")).read()
-    check("workspace image listed in images.txt (%s)" % ai_image,
-          re.search(r"^%s\s+sha256:(?!0{64})[0-9a-f]{64}" % re.escape(ai_image), images_txt, re.M) is not None, "")
+    check("AI image: neither built (no build-ai-image.sh, no workspace-image-ai/) nor pinned in images.txt",
+          not os.path.exists(os.path.join(dev, "tools", "build-ai-image.sh"))
+          and not os.path.exists(os.path.join(dev, "workspace-image-ai", "Dockerfile"))
+          and "coder-workspace-ai" not in images_txt, "")
 
 
 def decorator_checks(B, chart, full_render):
@@ -380,8 +376,8 @@ def pit_checks(B, chart, default_render):
     ui = open(os.path.join(repo, "development/tools/build-ui-image.sh")).read()
     tag = re.search(r'tag="\$\{1:-([0-9.]+)\}"', tools)
     tag = tag.group(1) if tag else ""
-    check("pit stop: the tools image pins Copa's release by checksum and checks it runs",
-          re.search(r"copa_[0-9.]+_linux_amd64\.tar\.gz", tools) and re.search(r"\b[0-9a-f]{64}\b", tools)
+    check("pit stop: the tools image builds Copa from its release's source, pinned by checksum, and checks it runs",
+          re.search(r"copacetic/archive/refs/tags/v[0-9.]+\.tar\.gz\"\s*\\\s*\n\s*[0-9a-f]{64}\b", tools)
           and "copa --version" in tools, tag)
     check("pit stop: the platform service's image is built on that tools image, and its smoke test runs copa",
           tag and ("coder-image-tools:%s" % tag) in ui and "copa --version" in ui, tag)
@@ -397,7 +393,7 @@ def pit_checks(B, chart, default_render):
           and "COPA_EXPERIMENTAL" in ib, "")
     mk = open(os.path.join(B, "make")).read()
     check("pit stop: a minikube deploy seeds the workspace images into the builder's registry",
-          "seed-registry" in mk and "coder-workspace(-dataflow|-ai)?" in mk, "")
+          "seed-registry" in mk and "coder-workspace(-dataflow)?" in mk, "")
 
 
 def main():
@@ -484,7 +480,7 @@ def main():
     decorator_checks(B, chart, r)
     ha_checks(B, renders["high availability (values-ha.example.yaml)"], r)
     safe_checks(chart, r)
-    ai_checks(B, chart, r)
+    template_checks(B, chart, r)
     pit_checks(B, chart, r)
     icon_checks(chart, r)
     check("Coder starts without Keycloak's Secrets (optional)",
@@ -840,15 +836,11 @@ def main():
             ("/" + dataflow_image.split("/", 1)[1]) in out and "dataflowImage: " in out
         check("argocd/update-application.sh: --dataflow keep runs the layer chart's image (%s)" % dataflow_image, ok,
               (err or out).strip()[-300:] if not ok else "")
-        ai_image = re.search(r'^  aiImage:.*"([^"\n]+)"', open(os.path.join(chart, "values.yaml")).read(),
-                             re.M).group(1)
         rc, out, err = run(["bash", os.path.join(tmp, "update-application.sh"), "--app", app, "--dry-run"])
-        ok = rc == 0 and "aiTemplates.enabled: false" in out
         rc2, out2, err2 = run(["bash", os.path.join(tmp, "update-application.sh"), "--app", app, "--dry-run",
                                "--ai", "keep"])
-        ok = ok and rc2 == 0 and "aiTemplates.enabled: true" in out2 and \
-            ("/" + ai_image.split("/", 1)[1]) in out2 and "aiImage: " in out2
-        check("argocd/update-application.sh: the AI template off by default, --ai keep runs %s" % ai_image, ok,
+        ok = rc == 0 and "aiTemplates" not in out and rc2 != 0 and "unknown option: --ai" in err2
+        check("argocd/update-application.sh: no AI template (no --ai, no aiTemplates written)", ok,
               (err2 or out2 or err or out).strip()[-300:] if not ok else "")
     # the layer bundle's helper (Python): compiles, and answers --help
     rc, out, err = run([sys.executable, os.path.join(B, "layer-support"), "--help"])

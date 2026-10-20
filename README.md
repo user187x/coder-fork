@@ -9,10 +9,11 @@ your network.
 | | Current release: [**v1.40.0**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
 | Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.96-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 175 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
-| Workspace image | `ghcr.io/user187x/coder-workspace:1.9.3` (desktop with two themes, Chromium, Terminator, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
-| Platform service | `ghcr.io/user187x/coder-ui-updates` (its code on `coder-image-tools:1.1.0`: BuildKit helpers, trivy with its databases, Copa; and the image store's provided pictures, `development/image-store`) |
-| Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
-| Bundle | 22 images pinned by digest, in one folder per part (`images/ui/`: the user interface - Coder, the platform service, their databases; `workspaces/`, `cloud-drive/`, ...), and every chart packaged (`charts/`, a Helm repository); `-slim`: only our images; the same release in parts: `-charts` (no images) and `-images-<part>` per folder, together the bundle; `-layer`: the update for a cluster at the previous release, only what changed (often a few MB); `-decorator-update`: an Argo CD decorator install's update, the Coder image and both charts (~300 MB) |
+| Workspace image | `ghcr.io/user187x/coder-workspace:1.9.4` (desktop with two themes, Chromium, Terminator, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
+| Platform service | `ghcr.io/user187x/coder-ui-updates` (its code on `coder-image-tools:1.2.0`: BuildKit helpers, trivy with its databases, Copa; and the image store's provided pictures, `development/image-store`) |
+| Release | One folder: our six images (Coder, the platform service, the DEFAULT and DATAFLOW workspace images, MinIO, the image registry; split where over 2 GiB), `push-images.sh`, the one chart and `INSTALL.md`; scanned with no fixable CVE (`CVE-REPORT.md`). The public images come from your registry |
+| Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base (in the repository's bundle, not in a release) |
+| Bundle (built from the repository) | Every image pinned by digest, in one folder per part (`images/ui/`: the user interface - Coder, the platform service, their databases; `workspaces/`, `cloud-drive/`, ...), and every chart packaged (`charts/`, a Helm repository); `-slim`: only our images; the same release in parts: `-charts` (no images) and `-images-<part>` per folder, together the bundle; `-layer`: the update for a cluster at the previous release, only what changed (often a few MB); `-decorator-update`: an Argo CD decorator install's update, the Coder image and both charts (~300 MB) |
 
 **Contents:** [Quick start](#quick-start) · [Architecture](#architecture) · [Features](#features) ·
 [Security](#security) · [Testing and verification](#testing-and-verification) · [Build a release](#build-a-release) ·
@@ -23,22 +24,33 @@ your network.
 
 ## Quick start
 
-Download the release's parts, verify and join them, then install from inside the air-gapped network:
+The release is one folder (download every asset of the GitHub release into it): only our images - Coder, the
+platform service, the DEFAULT and DATAFLOW workspace images, MinIO, the image registry - and the one Helm chart.
+The public images (PostgreSQL, Python, BuildKit, the CSI driver, metrics-server; Traefik and CloudNativePG for the
+prerequisites) are expected in your registry under the same paths; `INSTALL.md` lists them with their digests.
 
 ```bash
-sha256sum -c coder-airgapped-1.40.0-slim.parts.sha256      # every part: OK
-cat coder-airgapped-1.40.0-slim.tar.gz.part-0* > coder-airgapped-1.40.0-slim.tar.gz
-sha256sum -c coder-airgapped-1.40.0-slim.tar.gz.sha256     # the bundle: OK
-
-tar -xzf coder-airgapped-1.40.0-slim.tar.gz && cd coder-airgapped-1.40.0
-./make --deploy
+sha256sum -c SHA256SUMS                                   # every file: OK
+./push-images.sh $REGISTRY                                # ours, as $REGISTRY/user187x/... (ECR=1 creates ECR repos)
+cp values-eks-airgap.example.yaml my-values.yaml          # set every CHANGE-ME
+helm install coder coder-airgapped-1.40.0.tgz -n coder --create-namespace -f my-values.yaml \
+  --set secrets.tlsCa.create=true --set-file secrets.tlsCa.caCrt=ca.crt \
+  --set secrets.wildcardTls.create=true \
+  --set-file secrets.wildcardTls.tlsCrt=wildcard.crt --set-file secrets.wildcardTls.tlsKey=wildcard.key \
+  --wait --timeout 20m
 ```
 
-**1.40.0 carries only our images** (the `-slim` bundle): the public ones (Traefik, CloudNativePG, PostgreSQL, Python,
-BuildKit, the CSI driver, metrics-server) come from your registry under the same paths - or run
-`./mirror-images.sh save` on a machine with internet first. The one chart, `coder-airgapped-1.40.0.tgz`, is also a
-release asset of its own: once the images are in your registry (`./mirror-images.sh push $REGISTRY ours`), a plain
-`helm install` of it installs everything ([DEPLOY.md](helm-chart/DEPLOY.md#a-single-helm-install)).
+[DEPLOY.md](helm-chart/DEPLOY.md#a-single-helm-install) has the prerequisites and the OIDC options. Every image in
+the release is scanned before it ships, with no fixable CVE left (`CVE-REPORT.md`; `build-release.sh --scan`).
+
+Building from this repository instead (Minikube, or a cluster your machine reaches) keeps the full tooling:
+`development/tools/build-bundle.sh` writes the bundle with every image (public ones too), and `./make --deploy` in it
+installs everything:
+
+```bash
+tar -xzf coder-airgapped-<version>.tar.gz && cd coder-airgapped-<version>
+./make --deploy
+```
 
 Or take only what you need: a release can also come in parts by content (`build-bundle.sh`; not 1.40.0) -
 `coder-airgapped-<version>-charts.tar.gz` (installers, chart, every chart packaged; no images) and one
@@ -82,7 +94,7 @@ tar -xzf coder-airgapped-<version>-decorator-update.tar.gz && cd coder-airgapped
 ```
 
 The ubuntu-dataflow template's image (Apache NiFi and Airflow) is not in it: the helper keeps that template off
-unless you give it the image (`--dataflow`); the AI template likewise (`--ai`). See [DEPLOY.md](helm-chart/DEPLOY.md#updating-an-argo-cd-install-the-decorator-update).
+unless you give it the image (`--dataflow`). See [DEPLOY.md](helm-chart/DEPLOY.md#updating-an-argo-cd-install-the-decorator-update).
 
 **Argo CD, with the customization layer as a decorator.** The bundle also installs as two charts in one Argo CD
 Application (`argocd/`):
@@ -292,10 +304,8 @@ The full feature list, with where each piece lives and how it is tested, is
   Variables, Permissions, Parameters) with one save bar. **New workspace** (a template's Create workspace) too: the
   same Resources and Environment cards, General (name, owner, preset), External authentication and Schedule, with
   Cancel and Create workspace in its bar.
-- **Three workspace templates:** DEFAULT (code-server), DATAFLOW (Apache NiFi, Apache Airflow, and Ghostty as its terminal) and the AI
-  workspace UBUNTU OPENCODE (the OpenCode agent on the workspace's own Unsloth Studio, its window on the desktop),
-  with a shared **model library** (GGUF, each model scanned with garak before workspaces have it, once the scanner
-  plug-in is imported) in Templates > Images; the same workspace otherwise; everything offline.
+- **Two workspace templates:** DEFAULT (code-server) and DATAFLOW (Apache NiFi, Apache Airflow, and Ghostty as its
+  terminal); the same workspace otherwise; everything offline.
 - **Health, monitoring and security posture** views; network and persistence maps.
 - **Banners:** classification banners (e.g. UNCLASSIFIED), and an announcement banner with:
   - its message on an LCD screen set into the banner, over a background image (uploaded or a preset; animated GIFs
@@ -501,6 +511,8 @@ cd development/tools/verify
 ```bash
 development/tools/build-workspace-image.sh             # the workspace image (offline checks, saved into the bundle)
 development/tools/build-airgap-image.sh 2.0.0-platform.31   # the fork's Coder image + Terraform provider mirror
+development/tools/build-release.sh --scan              # -> dist/coder-fork-<version>/: the release (our images + the
+                                                       #    chart), every image scanned: fails on a fixable CVE
 development/tools/build-bundle.sh                      # -> dist/coder-airgapped-<version>.tar.gz, -slim, the parts
                                                        #    (-charts, -images-<part>, -ASSETS.txt) and -layer
 development/tools/build-decorator-update.sh            # -> dist/coder-airgapped-<version>-decorator-update.tar.gz
@@ -508,10 +520,11 @@ development/tools/build-decorator-update.sh            # -> dist/coder-airgapped
 
 Image archives are not in git: `images.txt` pins every image by digest, and `build-bundle.sh` fetches the missing
 public ones (`mirror-images.sh save`). The Coder server is built from the fork (`scripts/build_platform_image.sh`
-there; see [`development/coder-fork/FORK.md`](development/coder-fork/FORK.md)). Releases are published on GitHub in
-pieces of under 2 GiB, each with SHA-256 files: an asset over that (the bundle, `-images-workspaces`) is split with
-`split -b 1900M -d <asset> <asset>.part-` and listed in `<asset-name>.parts.sha256` (`build-bundle.sh --parts` writes
-the bundles that way straight from tar, with no whole copy on disk; 1.40.0: `--no-full --no-split --no-layer --parts`).
+there; see [`development/coder-fork/FORK.md`](development/coder-fork/FORK.md)). A release on GitHub is
+the folder `build-release.sh` writes, its files as the assets (GitHub takes files under 2 GiB: an image archive over
+that comes in parts, `.part-NN`, checked one by one in `SHA256SUMS` and joined in `SHA256SUMS.joined`); it passes
+`--scan` first (with `--vex development/workspace-image/firefox.openvex.json`). `build-bundle.sh --parts` writes the
+bundles in parts the same way, straight from tar.
 `main` is always release-ready in both repositories.
 
 ## Following upstream and rolling back

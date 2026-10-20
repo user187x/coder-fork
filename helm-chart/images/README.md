@@ -8,7 +8,7 @@ public ones can be left out where your registry has them already.
 | Folder | What | Size | Pushed by default |
 |---|---|---:|---|
 | `ui/` | The user interface: Coder (the fork - the dashboard and its server), the platform service (coder-ui-updates) and the announcement service (coder-banner), what they run on, and their databases (2 of ours, 2 public) | 810 MB | yes |
-| `workspaces/` | The workspace templates' images (ours) | 8.6 GB | yes |
+| `workspaces/` | The workspace templates' images (ours) | 4.8 GB | yes |
 | `cloud-drive/` | The Cloud Drive: its storage (MinIO) and its CSI driver (1 of ours, 2 public) | 182 MB | yes |
 | `image-builder/` | Templates > Images: the build Jobs (BuildKit) and the registry built images are kept in (public) | 143 MB | yes |
 | `cluster/` | What the chart adds to the cluster: metrics-server, where it has none (public) | 22 MB | yes |
@@ -62,7 +62,6 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 |---|---|---:|---|
 | `ghcr.io_user187x_coder-workspace_1.9.3.tar.gz` | `ghcr.io/user187x/coder-workspace:1.9.3` | 1.6 GB | workspace pods (default: DEFAULT): enterprise-base + desktop (no light-locker) with its Classic and Serenade themes, noVNC's clipboard shared with the computer, Chromium (default), Terminator, Firefox, JetBrains Mono Nerd Font in every terminal (code-server's too) and Noto Color Emoji, tmux, CLI tools, k9s/kubectl/kubelogin, Python venv, default ~/.bashrc and desktop background (development/workspace-image) |
 | `ghcr.io_user187x_coder-workspace-dataflow_1.1.3.tar.gz` | `ghcr.io/user187x/coder-workspace-dataflow:1.1.3` | 3.2 GB | workspace pods (ubuntu-dataflow): the workspace image + Java 21, Apache NiFi 2.12.0 (NARs unpacked), Apache Airflow 3.3.2 (development/workspace-image-dataflow) |
-| `ghcr.io_user187x_coder-workspace-ai_2.0.0.tar.gz` | `ghcr.io/user187x/coder-workspace-ai:2.0.0` | 7.2 GB | workspace pods (ubuntu-opencode): the workspace image + Unsloth Studio (its server: PyTorch for CUDA, llama.cpp; AGPL-3.0) and OpenCode 1.18.34 (development/workspace-image-ai) |
 
 ### `cloud-drive/`
 

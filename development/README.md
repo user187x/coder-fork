@@ -17,7 +17,7 @@ Everything needed to keep developing the coder-airgapped deliverable, other than
 | Workspace template `default` (shown as DEFAULT) | `../helm-chart/coder-airgapped/charts/coder-workspace/files/*.tf`, its scripts in `files/scripts/` (format: `shfmt -i 1 -w files/scripts/*.sh`) |
 | Announcement banner | `../helm-chart/coder-airgapped/charts/coder-banner/` |
 | The Coder server itself (UI, API) | the fork, `~/workspace/coder` – see `coder-fork/FORK.md` |
-| Images that are shipped | `../helm-chart/images.txt` (+ `mirror-images.sh save`, or `tools/build-airgap-image.sh` / `tools/build-minio-image.sh` / `tools/build-ai-image.sh` for the custom ones) |
+| Images that are shipped | `../helm-chart/images.txt` (+ `mirror-images.sh save`, or `tools/build-airgap-image.sh` / `tools/build-minio-image.sh` for the custom ones) |
 
 After a change: bump `version` in `../helm-chart/coder-airgapped/Chart.yaml`, add a `../CHANGELOG.md` entry, build with
 `tools/build-bundle.sh`, test with `tools/airgap-e2e/`, commit, and tag `v<version>`.
@@ -39,7 +39,6 @@ minikube profile `coder` is the development cluster. Deploy (or redeploy) the wo
 | `tools/build-workspace-image.sh` | Build the workspace image (FileBrowser Quantum from the `filebrowser-quantum` release binary at the repository's root, pinned by SHA-256), check it, and save it into the bundle (`mirror-images.sh store`: `../helm-chart/images/workspaces/`) |
 | `tools/build-airgap-image.sh` | Build the `-airgap` image and save it into the bundle (`mirror-images.sh store`: `../helm-chart/images/ui/`, the rollback image `images/rollback/`) |
 | `tools/build-minio-image.sh` | The Cloud Drive's MinIO image `ghcr.io/user187x/coder-minio:<MinIO release>` (Chainguard's build, pinned by digest, retagged) into `../helm-chart/images/custom/` |
-| `tools/build-ai-image.sh` | The AI template's image `ghcr.io/user187x/coder-workspace-ai:<tag>` (`workspace-image-ai/`: the workspace image + Unsloth Studio, installed from the `unsloth.AppImage` at the repository's root by its own installer, + OpenCode, both pinned by SHA-256; `--cpu` for a CPU-only image), checked offline (the app and its server start, a chat through Unsloth's API, OpenCode on it) and saved into the bundle |
 | `tools/airgap-e2e/` | Fresh end-to-end test of DEPLOY.md on a kind cluster with egress blocked (`README.md` there) |
 | `tools/apply-platform-patch.py` | Applies the "platform patch" (templated values, `global.imagePullSecrets`, quoted checksums) to a vendored subchart |
 | `tools/render-diff.py` | Compare two `helm template` outputs object by object |

@@ -2,16 +2,46 @@
 
 ## 1.40.0 – 2026-10-20
 
-Coder `2.0.0-platform.96` (fork `c62a06cae`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
-AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
-is a plug-in now (`dist/plugins/`, not in the bundle).
+Coder `2.0.0-platform.97` (fork `1b6b14dbf`), platform service on `coder-image-tools:1.2.0`, workspace image
+`coder-workspace:1.9.4`, dataflow image `coder-workspace-dataflow:1.1.4`, image registry `coder-registry:3.1.2-1`; the
+model scanner `coder-garak:0.17.1-2` is a plug-in now (`dist/plugins/`, not in the bundle).
 
-* **The release carries only our images**: the slim bundle (`coder-airgapped-1.40.0-slim.tar.gz`, in parts) holds the
-  installers, the chart and the eight images of ours (Coder, the platform service, the three workspace images, MinIO,
-  the image registry, and the rollback Coder); no public image (Traefik, CloudNativePG and PostgreSQL, Python,
-  BuildKit, the CSI driver, metrics-server) - those come from your registry, under the same paths. And the one chart,
-  `coder-airgapped-1.40.0.tgz`, installs all of it with `helm install` (the Secrets from values, `secrets.*.create`).
-  `build-bundle.sh --no-full` builds such a release (no full tarball).
+* **A slim release: our images and one chart.** The release is one folder (`coder-fork-1.40.0`,
+  `development/tools/build-release.sh`): only the coder-fork images that run Coder - Coder, the platform service, the
+  DEFAULT and DATAFLOW workspace images, MinIO and the image registry; split where over 2 GiB - with `push-images.sh`
+  (verifies, loads and pushes them as `$REGISTRY/user187x/...`), `IMAGES.txt`, `SHA256SUMS`, `INSTALL.md` and the one
+  chart, `coder-airgapped-1.40.0.tgz`, which installs everything with a single `helm install` (the Secrets from
+  values, `secrets.*.create`; DEPLOY.md: A single `helm install`). No public image (NiFi and Airflow are inside the
+  dataflow image; PostgreSQL, Python, BuildKit, the CSI driver, metrics-server, Traefik and CloudNativePG come from your
+  registry, under the same paths), no rollback image. `build-release.sh --scan` is the release's CVE gate: trivy with
+  fresh vulnerability and Java databases on every image, failing on any finding with a fix (`CVE-REPORT.md`).
+  `build-bundle.sh` gained `--no-full` and `--parts` (tarballs written straight as parts of under 2 GiB).
+* **No fixable CVE in any image we ship** (trivy, 2026-10-20's databases):
+  * Coder (platform.97, 35 -> 0): Go 1.26.10, `golang.org/x/net` 0.60.0, `gomarkdown`, the OpenTelemetry exporters
+    1.46.0; Terraform 1.16.6 built from its source with Go 1.26.10 (Coder's provisioner takes up to 1.16.9); the Alpine
+    packages upgraded.
+  * The platform service (97 -> 0): `coder-image-tools:1.2.0` - trivy 0.76.0; copa 0.15.0, regctl 0.11.6 and shfmt
+    3.14.1 built from source with Go 1.27.3 (copa with trivy 0.72, containerd 2.3.7, grpc 1.83.2, x/net 0.60...); the
+    Alpine packages upgraded; pip removed (its vendored urllib3/setuptools/msgpack had no fixed pip; nothing runs it).
+  * The workspace image (1.9.4, 22 -> 0): File Browser 2.1.2-coder.1 rebuilt with Go 1.27.3 and x/net 0.60.0;
+    code-server's KaTeX 0.18.2; Firefox's 16 Ubuntu snap-transition advisories are false positives for Mozilla's
+    Firefox 158 (fixed in 98/113/138), declared `not_affected` in `development/workspace-image/firefox.openvex.json`
+    (pass it to trivy with `--vex`); the build takes Ubuntu's phased updates (systemd 259.9), which apt otherwise held
+    back, dropping packages.
+  * The dataflow image (1.1.4, on 1.9.4): NiFi 2.12.0's vulnerable jars replaced inside its NARs (and their WARs) and
+    `lib/bootstrap` before NiFi first unpacks them - Jackson 2.22.4 and 3.2.4, lz4-java 1.11.4, amqp-client 5.37.0,
+    Wire 6.4.7 (the AWS NAR's Glue Protobuf serde) - each from Maven Central, pinned by SHA-256, and checked for no old
+    jar left (`patch-nifi-jars.py`); every processor and service still loads (294 / 125 / 10). Airflow's venv takes
+    Mako 1.4.3, PyJWT 2.15.1 and urllib3 2.8.0 over its constraints (`airflow-overrides.txt`, `pip check` clean), and
+    its pip is removed after the install (pip's own vendored libraries have no fixed release).
+  * MinIO and the image registry: none to fix.
+* **The AI workspace template is removed**: UBUNTU OPENCODE (`ubuntu-opencode`, OpenCode on Unsloth Studio) and its
+  image `ghcr.io/user187x/coder-workspace-ai` are no longer built, pushed, bundled or listed in the Images view; gone
+  too: `coder-workspace.aiTemplates`/`aiImage`, `build-ai-image.sh`, `development/workspace-image-ai/` and the Argo CD
+  helper's `--ai`. DEFAULT and DATAFLOW are unchanged. A deployment that has the old template keeps it until an admin
+  deletes it.
+* **A template's Parameters card reads Dynamic parameters** (fork): on, as every template here uses them; the
+  deprecated compatibility mode ("Rich parameters") shows its warning only when a template is in it.
 
 * **Pit stop: Copa patches an image from the Fix image page** (service, fork, tools image), the page's first way in
   beside Dockerfile and Agent. [Copa (Copacetic)](https://github.com/project-copacetic/copacetic) v0.15.0 patches
