@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Coder `2.0.0-platform.99` (fork `f69299bdc`).
+
+* **Platform HA phase 1: the replica registry** (fork, `coderd/platformha`, Community code; chart
+  `global.platformHA.mode: registry`, off by default). Each Coder replica holds a lease in PostgreSQL (schema
+  `platform_ha`, not a Coder migration) under an epoch, renewed by compare-and-set every 3 s for 10 s. A replica that
+  cannot renew fences itself by a timer of its own a full renew interval before its lease can end - measured from the
+  renewal's start, every database call cut off by that deadline - and rejoins under a new epoch when the database
+  answers; one whose row was taken fences at once. It leaves the registry when it stops. Metrics
+  `coderd_platform_ha_{fenced,epoch,members,lease_renewals_total}`. Tested against PostgreSQL 25 times over under the
+  race detector: a replica fences with 297-301 ms of its lease left (the 300 ms interval of the test); live on the dev
+  cluster (one lease, its pod's name and IP, renewed; a restart leaves and rejoins under a higher epoch).
+* **The platform's logo is a baked picture of the image store**: `minecraft-cube.gif` (the Minecraft grass-block
+  cube, the logo set on the reference deployment) ships in every platform service image - 30 provided pictures now -
+  offered by every picture chooser; a static check keeps it there.
 * **Platform HA ([ADR-0001](docs/adr/0001-platform-ha.md), accepted): phase 0, the infrastructure part** (chart; all
   opt-in through `values-ha.example.yaml`, nothing changes by default but a budget for the code-server-replicator):
   * the database's **synchronous replication** (`database.synchronous`: a commit waits for one standby, so a failover

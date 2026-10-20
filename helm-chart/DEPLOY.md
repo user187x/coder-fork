@@ -674,7 +674,9 @@ agent's token (Coder's own registry of agents), an instance's relay with its ins
 Coder's control plane, without the Enterprise license: a replica registry with fencing, an active/standby mode, then
 active/active replicas with a mesh coordinator and DERP cells. It ships in phases; until its active/standby and
 active/active modes ship, what follows still applies to Coder's own replicas. The infrastructure part (synchronous
-replication, the pooler, the PodDisruptionBudgets) is in `values-ha.example.yaml` today.
+replication, the pooler, the PodDisruptionBudgets) is in `values-ha.example.yaml` today, and the replica registry is
+`global.platformHA.mode: registry`: each Coder replica's lease in PostgreSQL (schema `platform_ha`), fenced when it
+cannot renew (`coderd_platform_ha_*` metrics). Nothing else changes with it on.
 
 Coder can run as several replicas behind one address. Any replica serves any user and relays to any workspace, and
 when one stops, the others carry on. This is Coder's own high availability: the fork leaves it as it is. The chart

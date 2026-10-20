@@ -75,6 +75,17 @@ def ha_checks(B, ha_render, default_render):
     dflt = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d}
     ddb = dflt.get(("Cluster", "coder-db"), {}).get("spec", {})
     druri = dflt.get(("Secret", "coder-code-server-ha-relay"), {}).get("stringData", {}).get("uri", "")
+    def ha_env(objs):
+        dep = objs.get(("Deployment", "coder"), {})
+        env = (dep.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or [{}])[0].get("env") or []
+        return {e["name"]: e.get("value", e.get("valueFrom")) for e in env if e["name"].startswith("CODER_PLATFORM_HA_")}
+    denv = ha_env(dflt)
+    check("Platform HA (ADR-0001 phase 1): Coder gets its mode (off by default), cell, lease timings and its pod's name "
+          "and IP (Downward API)",
+          denv.get("CODER_PLATFORM_HA_MODE") == "off" and denv.get("CODER_PLATFORM_HA_CELL") == "a"
+          and denv.get("CODER_PLATFORM_HA_LEASE_TTL") == "10s" and denv.get("CODER_PLATFORM_HA_RENEW_INTERVAL") == "3s"
+          and denv.get("CODER_PLATFORM_HA_POD_NAME") == {"fieldRef": {"fieldPath": "metadata.name"}}
+          and denv.get("CODER_PLATFORM_HA_POD_IP") == {"fieldRef": {"fieldPath": "status.podIP"}}, denv)
     check("default: no synchronous replication, no pooler, the relays on -rw (as before)",
           not ddb.get("postgresql") and not ddb.get("certificates") and ("Pooler", "coder-db-pooler-rw") not in dflt
           and "@coder-db-rw.coder.svc:5432/" in druri, "")
@@ -659,6 +670,10 @@ def main():
     no_preview = [n for n in pics if not os.path.isfile(os.path.join(store_dir, "thumbs", n + ".webp"))]
     build_ui = open(os.path.join(repo_top, "development/tools/build-ui-image.sh")).read()
     svc = open(os.path.join(chart, "files/ui-updates/ui-service.py")).read()
+    # The platform's logo (the Minecraft grass-block cube) always ships among them: the owner's ask, 2026-10-20.
+    check("image store: the platform's logo, minecraft-cube.gif (the Minecraft grass-block cube), always among the "
+          "baked pictures, with its preview",
+          "minecraft-cube.gif" in pics and "minecraft-cube.gif" not in no_preview, pics[:3])
     check("image store: the provided pictures, each with its preview, baked into the platform service's image under "
           "its code, served publicly and listed for every chooser",
           len(pics) > 0 and not no_preview

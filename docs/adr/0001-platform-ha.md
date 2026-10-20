@@ -471,9 +471,13 @@ Both are small, write-light and indexed by `replica_id`. Nothing in `public` cha
 ## Action items
 
 1. [ ] Owner: approve this ADR and confirm the Compliance reading.
-2. [ ] Phase 0: values and templates for CloudNativePG (3 instances, sync, Pooler), Traefik, PDBs and spread. Add a
+2. [x] Phase 0: values and templates for CloudNativePG (3 instances, sync, Pooler), Traefik, PDBs and spread, and the
    `values-ha.example.yaml` update.
-3. [ ] Phase 1: `coderd/platformha/registry` with tests. Add the `platform_ha` schema bootstrap and metrics.
+3. [x] Phase 1: the replica registry (`coderd/platformha`): the `platform_ha` schema bootstrap, leases under epochs,
+   self-fencing by a deadline timer (measured from each renewal's start, every database call cut off by it; tested:
+   a replica fences with a full renew interval of its lease left - 297-301 ms of 300 over 25 runs), rejoin under a
+   new epoch, metrics; `global.platformHA.mode: registry`. The EndpointSlice membership watch moves to Phase 3,
+   where the mesh needs fast failure detection (the fork has no Kubernetes client yet).
 4. [ ] Phase 2: the leader-gated readiness mode. Add chart `platformHA.mode`, and live checks for the failover.
 5. [ ] Phase 3:
    - `meshcoord`, the `NewCoordinator` factory, `derpcell`, and the `DERPMap()` composition;
