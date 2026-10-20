@@ -3,7 +3,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "coder-workspace.prefix" . }}-terraform
-  namespace: {{ .Values.namespace | default "coder" }}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
 data:
   # The workspace template, files/main.tf, as pushed to Coder: the platform's base template too (its sections marked
   # "# platform:begin" - the certificate, Lock Down, the Cloud Drive, the metrics - are what Coder's template decorator
@@ -32,7 +32,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "coder-workspace.prefix" . }}-terraform-dataflow
-  namespace: {{ .Values.namespace | default "coder" }}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
 data:
   # The DATAFLOW template's own part (files/dataflow/), pushed beside the files above for that template only:
   # dataflow.tf (Apache NiFi and Apache Airflow, NiFi's route) and their scripts, which go in scripts/.

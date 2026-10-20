@@ -27,11 +27,11 @@ variable "home_storage_class" {
 
 variable "namespace" {
   type        = string
-  description = "The Kubernetes namespace to create workspaces in. Workspaces run only in the coder namespace."
+  description = "The Kubernetes namespace to create workspaces in: the platform's own (the template push sets it)."
   default     = "coder"
   validation {
-    condition     = var.namespace == "coder"
-    error_message = "Workspaces are created only in the coder namespace."
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", var.namespace))
+    error_message = "The namespace must be a Kubernetes namespace name (a DNS label)."
   }
 }
 

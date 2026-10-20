@@ -6,7 +6,7 @@ announcement banner and a full-featured workspace template, packaged as **one He
 every container image it needs**. Nothing is downloaded during the install, and nothing at run time reaches outside
 your network.
 
-| | Current release: [**v1.44.0**](https://github.com/user187x/coder-fork/releases/latest) |
+| | Current release: [**v1.45.0**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
 | Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.99-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 178 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.9.4` (desktop with two themes, Chromium, Terminator, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
@@ -24,21 +24,21 @@ your network.
 
 ## Quick start
 
-The release is one folder (download every asset of the GitHub release into it): only our images - Coder, the
-platform service, the DEFAULT and DATAFLOW workspace images, MinIO, the image registry - and the one Helm chart.
-The public images (PostgreSQL, Python, BuildKit, the CSI driver, metrics-server; Traefik and CloudNativePG for the
-prerequisites) are expected in your registry under the same paths; `INSTALL.md` lists them with their digests.
+The release is one folder (download every asset of the GitHub release into it): every image the chart can run -
+ours (Coder, the platform service, the DEFAULT and DATAFLOW workspace images, MinIO, the image registry) and the
+public ones (PostgreSQL, PgBouncer, Python, BuildKit, the CSI driver, metrics-server, Traefik, the CloudNativePG
+operator) - and the one Helm chart. On any air-gapped cluster, one push and one install:
 
 ```bash
 sha256sum -c SHA256SUMS                                   # every file: OK
-./push-images.sh $REGISTRY                                # ours, as $REGISTRY/user187x/... (ECR=1 creates ECR repos)
-cp values-eks-airgap.example.yaml my-values.yaml          # set every CHANGE-ME
-helm install coder coder-airgapped-1.44.0.tgz -n coder --create-namespace -f my-values.yaml \
-  --set secrets.tlsCa.create=true --set-file secrets.tlsCa.caCrt=ca.crt \
-  --set secrets.wildcardTls.create=true \
-  --set-file secrets.wildcardTls.tlsCrt=wildcard.crt --set-file secrets.wildcardTls.tlsKey=wildcard.key \
-  --wait --timeout 20m
+./push-images.sh $REGISTRY                                # every image, where the chart pulls it (--ours-only: ours alone)
+cp values.example.yaml values.yaml                        # set every CHANGE-ME (domain, registry)
+helm install coder-fork coder-airgapped-1.45.0.tgz -n coder-fork --create-namespace -f values.yaml
 ```
+
+The chart brings Traefik (with the Gateway API) and the CloudNativePG operator where the cluster has none
+(`global.bundled`), makes its CA and wildcard certificate unless you give yours (`secrets.generateTls`), and can teach
+the cluster's DNS the platform's names (`global.inClusterDNS`); `INSTALL.md` in the release has every option.
 
 [DEPLOY.md](helm-chart/DEPLOY.md#a-single-helm-install) has the prerequisites and the OIDC options. Every image in
 the release is scanned before it ships, with no fixable CVE left (`CVE-REPORT.md`; `build-release.sh --scan`).
@@ -477,8 +477,8 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **136/136** (1.44.0) |
-| Platform service unit tests | **153/153** (1.44.0) |
+| Static checks | **148/148** (1.45.0) |
+| Platform service unit tests | **156/156** (1.45.0) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Argo CD decorator install (`./make --argocd`; kind, egress blocked, Gateway API v1.6.0, Argo CD 3.5.2) | decorated: Synced / Healthy in ~3 min, **7/7**; layer off: **7/7** (upstream Coder, data kept); layer back: **7/7**, every volume the same (1.38.0) |
 | A real Harbor 2.15.2 with a private CA (`harbor-setup.sh`; installing machine: docker-in-docker, no images) | `./make --push-images`: CA trusted, project created, 11 images (all from the bundle) and 5 charts, all checked; a single-chart Argo CD install (robot account, Harbor's CA) migrated to the decorated one by `./make --argocd` in place: **23/23** objects kept, **7/7** (1.39.0) |

@@ -11,7 +11,7 @@ global:
   domain: example.com                                     # CHANGE-ME: Coder at https://coder.example.com, apps at *.example.com
   coderHost: ""                                           # "" = coder.<domain>
   wildcardHost: ""                                        # "" = *.<domain>
-  registry: 123456789012.dkr.ecr.us-east-1.amazonaws.com  # CHANGE-ME: where ./mirror-images.sh push put the images
+  registry: 123456789012.dkr.ecr.us-east-1.amazonaws.com  # CHANGE-ME: where push-images.sh (release) or ./mirror-images.sh push (bundle) put the images
   imagePullSecrets: []                                    # EKS + ECR: none (node role)
   gateway:
     name: traefik-gateway

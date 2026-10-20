@@ -6,7 +6,7 @@ workspace: HTTPRoutes in this namespace, and reading the cluster's CRDs, where T
 the HTTPRoute's type before it plans (definitions only, no custom resources).
 */ -}}
 {{- if .Values.dataflowTemplate.enabled }}
-{{- $ns := .Values.namespace | default "coder" }}
+{{- $ns := .Values.namespace | default .Release.Namespace }}
 {{- $name := printf "%s-nifi-routes" (include "coder-workspace.prefix" .) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

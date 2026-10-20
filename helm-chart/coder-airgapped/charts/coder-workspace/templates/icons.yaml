@@ -11,7 +11,7 @@ text only. The platform service mounts the whole ConfigMap as a folder, so each 
 serves the extensions in ui-service.py's TEMPLATE_ICON_TYPES (chart_checks.py checks every icon here against them).
 The mount is optional: a ConfigMap that fails to render or apply leaves EVERY /__icons/ icon a 404.
 */ -}}
-{{- $ns := .Values.namespace | default "coder" }}
+{{- $ns := .Values.namespace | default .Release.Namespace }}
 {{- $name := printf "%s-icons" (include "coder-workspace.prefix" .) }}
 {{- $host := .Values.icons.host | default (trimPrefix "https://" .Values.coder.url) }}
 apiVersion: v1

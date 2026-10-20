@@ -6,7 +6,7 @@ provisioner, which runs as Coder's service account, reads the ConfigMap the plat
 keep) when a workspace's parameters are shown or it starts.
 */ -}}
 {{- if .Values.imagesRegistry }}
-{{- $ns := .Values.namespace | default "coder" }}
+{{- $ns := .Values.namespace | default .Release.Namespace }}
 {{- $name := printf "%s-workspace-images" (include "coder-workspace.prefix" .) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

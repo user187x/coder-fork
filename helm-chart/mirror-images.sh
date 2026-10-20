@@ -163,7 +163,8 @@ decorator_charts() {
 		python3 - "$d/Chart.yaml" "$part" <<'PY' || return 1
 import re, sys
 path, part = sys.argv[1], sys.argv[2]
-drop = {"base": {"coder-workspace"}, "layer": {"coder"}}[part]
+# the bundled prerequisites (Traefik, the CloudNativePG operator) go with Coder, in the base
+drop = {"base": {"coder-workspace"}, "layer": {"coder", "traefik", "cloudnative-pg"}}[part]
 desc = {
     "base": "Plain Coder for air-gapped Kubernetes, the base of the coder-airgapped Argo CD decorator install: the "
             "upstream Coder chart 2.37.3 running upstream Coder (main at the fork's base, with a Terraform provider "
@@ -203,7 +204,7 @@ for line in s.split("\n"):
     out.append(line)
 open(path, "w").write("\n".join(out))
 PY
-		if [[ "$part" == base ]]; then rm -rf "$d/charts/coder-workspace"; else rm -rf "$d/charts/coder"; fi
+		if [[ "$part" == base ]]; then rm -rf "$d/charts/coder-workspace"; else rm -rf "$d/charts/coder" "$d/charts/traefik" "$d/charts/cloudnative-pg"; fi
 		helm package "$d" -d "$out" | sed -n 's/.*saved it to: //p' || return 1
 	done
 	rm -rf "$tmp"

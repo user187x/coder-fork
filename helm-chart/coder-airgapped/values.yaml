@@ -1,6 +1,6 @@
 # coder-airgapped. The defaults follow the reference cluster (captured 2026-10-09) except where CHANGELOG.md says
 # otherwise (e.g. public image sources, the default admin, a blank banner).
-# Install into namespace "coder" with release name "coder" (the workspace template refuses any other namespace).
+# Any release name, any namespace: e.g. helm install coder-fork <chart> -n coder-fork --create-namespace -f values.yaml.
 #
 # For another cluster set `global:` (domain, registry, OIDC, secret names, first user, gateway) - from -f my-values.yaml
 # or from an Argo CD Application (../argocd/coder-airgapped-application.yaml). String values anywhere below may hold
@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.103 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.104 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.103-airgap
+      tag: 2.0.0-platform.104-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -63,7 +63,20 @@ global:
   # Gateway API Gateway with an HTTPS listener for coder.<domain> and *.<domain>.
   gateway:
     name: traefik-gateway
-    namespace: traefik
+    namespace: ""                # "" = this namespace with global.bundled.traefik, else traefik
+  # The prerequisites the chart installs itself - for one `helm install` on a bare cluster. Leave them off where the
+  # cluster has its own (a second CloudNativePG operator would fight the first one over the database).
+  bundled:
+    traefik: false               # Traefik + the Gateway API CRDs; its Gateway here, on secrets.wildcardTls (values `traefik:`)
+    cloudnativePG: false         # the CloudNativePG operator + its CRDs (values `cloudnative-pg:`)
+  # A cluster with no DNS for the platform's names (minikube, kind, bare metal): true adds rewrite rules for Coder's
+  # host and the wildcard host to the cluster's CoreDNS (kube-system/coredns), pointing at the Gateway's Service, so
+  # pods reach Coder by its URL (workspace agents, Coder's own tailnet); helm uninstall takes them out. Leave it off
+  # where the domain resolves in the cluster.
+  inClusterDNS:
+    enabled: false
+    target: ""                   # "" = the bundled Traefik's Service (bundled.traefik), else traefik.traefik.svc.<clusterDomain>
+    clusterDomain: cluster.local
   oidc:
     issuerUrl: ""              # "" = https://keycloak.<domain>/realms/master
     clientId: coder
@@ -135,6 +148,39 @@ coder:
       repo: '{{ include "platform.coderImage" (list . "repo") }}'
       tag: '{{ include "platform.coderImage" (list . "tag") }}'
       pullSecrets: []
+    # Coder waits for its database first: on a fresh install CloudNativePG is still creating it, and Coder would give
+    # up after its retries and restart once. Its host and port come from the database's app Secret (whose absence
+    # holds the pod back too); the read-write Service takes connections once the primary is up.
+    initContainers:
+      - name: wait-for-database
+        image: '{{ include "platform.image" (list . "docker.io/library/python:3.13-alpine") }}'
+        command:
+          - python3
+          - -c
+          - |
+            import os, socket, time
+            host, port = os.environ["DB_HOST"], int(os.environ["DB_PORT"])
+            while True:
+                try:
+                    socket.create_connection((host, port), 3).close()
+                    break
+                except OSError as e:
+                    print("waiting for the database at %s:%d: %s" % (host, port, e), flush=True)
+                    time.sleep(3)
+        env:
+          - name: DB_HOST
+            valueFrom: {secretKeyRef: {name: '{{ .Values.global.database.name }}-app', key: host}}
+          - name: DB_PORT
+            valueFrom: {secretKeyRef: {name: '{{ .Values.global.database.name }}-app', key: port}}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+        resources:
+          requests: {cpu: 10m, memory: 16Mi}
+          limits: {memory: 64Mi}
     # Coder's replicas. More than one is Coder's high availability: the replicas find each other through the database,
     # relay workspace connections to each other (the chart gives each its pod IP as CODER_DERP_SERVER_RELAY_URL and
     # CODER_CLUSTER_HOST; they reach each other on TCP 8080 and 6222), and any one of them serves any user. It needs a
@@ -268,7 +314,7 @@ coder:
       wildcardHost: '{{ include "platform.wildcardHost" . }}'
       parentRefs:
       - name: '{{ .Values.global.gateway.name }}'
-        namespace: '{{ .Values.global.gateway.namespace }}'
+        namespace: '{{ include "platform.gatewayNamespace" . }}'
         kind: Gateway
         group: gateway.networking.k8s.io
 
@@ -348,6 +394,10 @@ secrets:
     create: false
     tlsCrt: ""
     tlsKey: ""
+  # No CA and wildcard certificate of yours (tlsCa.caCrt, wildcardTls.tlsCrt/tlsKey empty)? true: the chart makes a CA
+  # and a certificate for the domain, Coder's host and the wildcard host, once, and keeps them (a test install; tell
+  # browsers to trust the CA: kubectl get secret <tlsCa> -o jsonpath='{.data.ca\.crt}' | base64 -d).
+  generateTls: false
 
 # ---------------------------------------------------------------------------------------------------------------
 # First user. On a fresh database nothing else creates it (Coder does not read CODER_BOOTSTRAP_INITIAL_USER_*).
@@ -488,14 +538,14 @@ uiUpdates:
   # (+ its database) and regctl (development/image-tools), which the Images view lints, formats and scans with -
   # tagged with the code's hash (development/tools/build-ui-image.sh builds and pins it). The chart carries no code:
   # Helm keeps each release in a Secret of at most 1 MiB.
-  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-ff9f9084d1ad") }}'
+  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-648d05aac648") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'
   accessUrl: '{{ include "platform.accessUrl" . }}'
   gateway:
     name: '{{ .Values.global.gateway.name }}'
-    namespace: '{{ .Values.global.gateway.namespace }}'
+    namespace: '{{ include "platform.gatewayNamespace" . }}'
   adminRoles: owner
   # Image the Monitoring view's temporary PostgreSQL and CNPG checks use.
   pgImage: '{{ include "platform.image" (list . "ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie") }}'
@@ -516,7 +566,7 @@ uiUpdates:
   argocd:
     enabled: true
     namespace: argocd
-    app: coder
+    app: '{{ .Release.Name }}'                 # the Application named after the release
   # Default logo / avatar ConfigMaps (binaryData), created by ../install.sh from ../defaults/ (kept out of the
   # chart: Helm's release record is limited to 1 MiB). Optional mounts: missing ConfigMaps are fine.
   defaults:
@@ -588,4 +638,60 @@ coder-workspace:
       port: 80
     gateway:
       name: '{{ .Values.global.gateway.name }}'
-      namespace: '{{ .Values.global.gateway.namespace }}'
+      namespace: '{{ include "platform.gatewayNamespace" . }}'
+
+# ---------------------------------------------------------------------------------------------------------------
+# The bundled prerequisites (global.bundled): Traefik and the CloudNativePG operator, for one `helm install` on a bare
+# cluster. Off by default; values for their own charts (vendored in charts/). Leave them off where the cluster runs its
+# own Traefik/Gateway or CloudNativePG.
+# ---------------------------------------------------------------------------------------------------------------
+traefik:
+  image:
+    registry: '{{ include "platform.registryHost" (list . "docker.io") }}'
+    repository: traefik
+    tag: v3.7.12
+  # The Gateway the chart's routes attach to (global.gateway.name), in this namespace: HTTP and HTTPS for every host,
+  # on the chart's own wildcard certificate (secrets.wildcardTls - yours, or the one secrets.generateTls makes).
+  gateway:
+    enabled: true
+    name: traefik-gateway
+    listeners:
+      web:
+        port: 8000
+        protocol: HTTP
+        namespacePolicy: {from: All}
+      websecure:
+        port: 8443
+        protocol: HTTPS
+        namespacePolicy: {from: All}
+        certificateRefs:
+          - kind: Secret
+            name: '{{ .Values.global.secretNames.wildcardTls }}'
+  gatewayClass:
+    enabled: true
+    name: traefik
+  # the Gateway API only: the chart uses no Traefik CRD (IngressRoute, Middleware - nothing rewrites a response) and no
+  # Ingress, so neither provider runs and the chart ships no traefik.io CRDs
+  providers:
+    kubernetesGateway:
+      enabled: true
+    kubernetesCRD:
+      enabled: false
+    kubernetesIngress:
+      enabled: false
+  # no IngressClass: it would claim to be the cluster's default
+  ingressClass:
+    enabled: false
+  # How users reach it: LoadBalancer (the cloud's), or NodePort on a cluster without one (minikube, bare metal) - the
+  # HTTPS port is then service.nodePorts / `kubectl get svc`. Pin the NodePorts with ports.websecure.nodePort.
+  service:
+    type: LoadBalancer
+
+cloudnative-pg:
+  image:
+    repository: '{{ include "platform.registryHost" (list . "ghcr.io") }}/cloudnative-pg/cloudnative-pg'
+    tag: "1.30.0"
+  # its CRDs come from its crds/ (Helm installs them first); the database is made once its webhook answers (the
+  # database hook, templates/database-apply.yaml)
+  crds:
+    create: false

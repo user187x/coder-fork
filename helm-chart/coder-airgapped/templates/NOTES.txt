@@ -12,7 +12,3 @@ Database:        kubectl -n {{ .Release.Namespace }} get cluster {{ .Values.data
 Templates:       pushed by hook Jobs, which are deleted once they succeed: the templates are listed in Coder
                  (Templates). A push that failed is kept for an hour: kubectl -n {{ .Release.Namespace }} get jobs, then
                  kubectl -n {{ .Release.Namespace }} logs job/<its name> ({{ index .Values "coder-workspace" "namePrefix" | default .Release.Name }}-push-template...)
-{{- if or (eq .Release.Namespace "coder" | not) }}
-
-WARNING: the workspace template only accepts namespace "coder"; this release is in {{ .Release.Namespace }}.
-{{- end }}

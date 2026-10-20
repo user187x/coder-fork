@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.45.0 – 2026-10-20
+
+Coder `2.0.0-platform.104` (fork `ad1866e1c`). **The one-step install** (the owner's goal): on any air-gapped cluster,
+push the release's images, then one `helm install` with one values file, under any release name and in any namespace.
+
+* **The release carries every image the chart can run:** ours and the 9 public ones, 15 images, 6.0 GiB.
+  * `push-images.sh` pushes them all to where the chart pulls them; `--ours-only` skips the public ones for a
+    registry that already holds them.
+  * The release folder now ships `values.example.yaml`: every input of the install in one file.
+* **The chart can bring its own prerequisites** (`global.bundled`, off by default; on in `values.example.yaml`):
+  * **Traefik 41.4.0 with the Gateway API v1.6.0 CRDs.** Its Gateway is in the release's namespace, on the chart's
+    own wildcard certificate. It runs the Gateway API provider only (no Traefik CRDs, no Ingress).
+  * **The CloudNativePG operator 0.29.0** and its CRDs.
+  * **How the CRDs ship:** both charts are vendored with the platform patch, so their images follow
+    `global.registry`. Their CRDs are in `crds/`, with the schemas' documentation strings taken out: Helm keeps the
+    whole chart in its release Secret (1 MiB), and the packaged chart is about 290 KB.
+  * **The database with the chart's own operator** is created by a Job that retries until the operator's webhook
+    answers. Helm would otherwise create it before the webhook is up and fail the install. Uninstall removes it
+    first (a pre-delete hook).
+  * **Existing installs are unchanged:** without `global.bundled`, the database renders as before (checked
+    byte for byte).
+* **Certificates:** `secrets.generateTls` makes a CA and the wildcard certificate when none are given. They are made
+  once and kept across upgrades.
+* **In-cluster DNS** (`global.inClusterDNS`, off by default) is for a cluster that does not resolve the domain. A Job
+  adds anchored rewrite rules for Coder's host and the wildcard host to CoreDNS, pointing at the Gateway, and
+  uninstall takes them out. Workspace agents and Coder itself then reach Coder by its URL.
+* **Any namespace, any release name:**
+  * The workspace template takes any namespace (a DNS label), where it took only `coder`.
+  * The workspace subchart defaults to the release's namespace.
+  * The platform service recognises Coder's pods by the release's own name.
+  * The Keycloak and Argo CD views' Roles are made only where those namespaces exist.
+* **Proven end to end** (`development/tools/onestep-e2e/run.sh`) on a bare 2-node kind cluster with all non-private
+  egress blocked and nothing preloaded:
+  * `push-images.sh` to a site registry, then exactly `helm install coder-fork ... -n coder-fork --create-namespace
+    -f values.yaml`;
+  * `helm install` returned in 75 s, and the database was up at 70 s;
+  * no restarts, and every image came from the site registry;
+  * HTTPS through Traefik's NodePort was trusted by the chart's own CA;
+  * the owner signed in, both templates were pushed, and a DEFAULT workspace's agent connected in 110 s.
+  * **14/14**, and the same after an uninstall (133 s, the DNS rules and the database removed) and a reinstall.
+* **Reinstalling no longer leaves every workspace Pending** (found on the VM): the Cloud Drive's volumes, kept
+  (Retain) from the earlier install, are adopted by the new install's claims. A volume still bound to a live claim
+  elsewhere is not taken.
+* **Coder waits for its database** (an init container), so a fresh install no longer restarts it once.
+* **The radial menu's hub** shows the pointed-at item's icon above its name, centred.
+* **Checks:** 148 static (12 for the one-step install, among them the bundled CRDs and the chart's size), 156 unit.
+
 ## 1.44.0 – 2026-10-20
 
 Coder `2.0.0-platform.103` (fork `365fa0db2`): **the open-source (AGPL) build of Coder** (Platform HA phase 3, step 1;

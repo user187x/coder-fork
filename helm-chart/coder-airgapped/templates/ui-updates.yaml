@@ -83,6 +83,7 @@ spec:
             # Lock Down > Freeze of a stopped workspace: the image that copies its home volume (the snapshot)
             - {name: LOCKDOWN_COPY_IMAGE, value: {{ tpl (index $.Values "coder-workspace" "workspaceImage") $ | quote }}}
             - {name: CODER_DEPLOYMENT, value: coder}
+            - {name: CODER_RELEASE, value: {{ .Release.Name | quote }}}
             - {name: ATTACHED, value: "false"}
             - {name: KEYCLOAK_NAMESPACE, value: {{ ternary $ui.keycloak.namespace "" $ui.keycloak.enabled | quote }}}
             - {name: KEYCLOAK_ADMIN_SECRET, value: {{ ternary $ui.keycloak.adminSecret "" $ui.keycloak.enabled | quote }}}

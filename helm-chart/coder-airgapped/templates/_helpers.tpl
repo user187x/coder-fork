@@ -39,6 +39,15 @@ these too). All derive from .Values.global; see values.yaml > global.
 {{ .Values.global.coderHost | default (printf "coder.%s" .Values.global.domain) }}
 {{- end -}}
 
+{{- /* The Gateway the routes attach to: global.gateway.namespace, or this namespace when the chart brings Traefik
+     itself (global.bundled.traefik), else "traefik". */ -}}
+{{- define "platform.gatewayNamespace" -}}
+{{- $g := .Values.global -}}
+{{- if $g.gateway.namespace -}}{{ $g.gateway.namespace }}
+{{- else if ($g.bundled | default dict).traefik -}}{{ .Release.Namespace }}
+{{- else -}}traefik{{- end -}}
+{{- end -}}
+
 {{- define "platform.wildcardHost" -}}
 {{- /* A single-label domain ("vm", "lab") cannot take the default "*.<domain>": browsers treat an unknown top-level
      name as a public suffix, so they refuse a wildcard certificate and cookies directly under it (subdomain apps and

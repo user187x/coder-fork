@@ -16,7 +16,11 @@ so one set of `global:` values (set from the umbrella chart or an Argo CD Applic
     only (label coder-airgapped/ha-role=active) and the preStop hands the active lease over (/handover, in place of
     upstream's sleep: the Service follows the label, not the pod's endings); any other mode renders exactly upstream's.
 
-Usage: apply-platform-patch.py CHART_DIR PREFIX PULL_SECRETS_PATH [--extra-env] [--coder-ha] [--suffix platform.1]
+  * --platform-templates-only: only the values that use the platform's own templates (.Values.global, "platform."
+    helpers) are rendered - for a chart whose values hold templates of its own (Traefik's Host(`{{ normalize .Name }}`)).
+
+Usage: apply-platform-patch.py CHART_DIR PREFIX PULL_SECRETS_PATH [--extra-env] [--coder-ha] [--platform-templates-only]
+                                [--suffix platform.1]
   PULL_SECRETS_PATH  dotted path of the chart's pull-secret list, e.g. coder.image.pullSecrets or imagePullSecrets
 """
 import argparse, os, re, sys
@@ -25,7 +29,7 @@ WALK = r'''{{- define "%(p)s.platform.walk" -}}
 {{- $node := index . 0 -}}{{- $ctx := index . 1 -}}
 {{- if kindIs "map" $node -}}
 {{- range $k, $v := $node -}}
-{{- if and (kindIs "string" $v) (contains "{{" $v) -}}
+{{- if and (kindIs "string" $v) %(cond)s -}}
 {{- $_ := set $node $k (tpl $v $ctx) -}}
 {{- else if or (kindIs "map" $v) (kindIs "slice" $v) -}}
 {{- include "%(p)s.platform.walk" (list $v $ctx) -}}
@@ -44,7 +48,7 @@ WALK = r'''{{- define "%(p)s.platform.walk" -}}
 ENTRY = r'''{{- define "%(p)s.platform.values" -}}
 {{- range $k, $v := .Values -}}
 {{- if ne $k "global" -}}
-{{- if and (kindIs "string" $v) (contains "{{" $v) -}}
+{{- if and (kindIs "string" $v) %(cond)s -}}
 {{- $_ := set $.Values $k (tpl $v $) -}}
 {{- else if or (kindIs "map" $v) (kindIs "slice" $v) -}}
 {{- include "%(p)s.platform.walk" (list $v $) -}}
@@ -118,12 +122,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("chart"); ap.add_argument("prefix"); ap.add_argument("pull_secrets")
     ap.add_argument("--extra-env", action="store_true"); ap.add_argument("--coder-ha", action="store_true")
+    ap.add_argument("--platform-templates-only", action="store_true")
     ap.add_argument("--suffix", default="platform.1")
     a = ap.parse_args()
     parts = a.pull_secrets.split(".")
     ps = ".Values." + a.pull_secrets
     ps_parent = ".Values" + ("." + ".".join(parts[:-1]) if len(parts) > 1 else "")
-    d = dict(p=a.prefix, ps=ps, ps_parent=ps_parent, ps_key=parts[-1], suffix=a.suffix,
+    cond = ('(and (contains "{{" $v) (or (contains ".Values.global" $v) (contains "\\"platform." $v)))'
+            if a.platform_templates_only else '(contains "{{" $v)')
+    d = dict(p=a.prefix, ps=ps, ps_parent=ps_parent, ps_key=parts[-1], suffix=a.suffix, cond=cond,
              extra=EXTRA_ENV if a.extra_env else "",
              extra_doc="\nAlso appends coder.extraEnv (not an upstream value) to coder.env." if a.extra_env else "")
     tdir = os.path.join(a.chart, "templates")

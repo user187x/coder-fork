@@ -169,10 +169,11 @@ rules:
     verbs: [get, list]
   {{- if eq (toString ($.Values.global.userStorage | default dict).enabled) "true" }}
   # The safe: every account's PersistentVolume coder-safe-<id> (static, its S3 prefix; Retain), and its source's
-  # (coder-drive-src-<id>); replaced when what it mounts changes (encryption, another backend), once unused.
+  # (coder-drive-src-<id>); replaced when what it mounts changes (encryption, another backend), once unused; one kept
+  # (Retain) from an earlier install adopted by this install's claim (patch: its claimRef).
   - apiGroups: [""]
     resources: [persistentvolumes]
-    verbs: [get, list, create, delete]
+    verbs: [get, list, create, delete, patch]
   {{- end }}
   # The Settings menu's network graph: each node's traffic counters from its kubelet's /stats/summary, read on the
   # kubelet's port as metrics-server does (nodes/stats; not nodes/proxy, which reaches far more).
@@ -212,7 +213,14 @@ roleRef:
   name: coder-ui-updates-{{ $ns }}
 subjects:
   - {kind: ServiceAccount, name: coder-ui-updates, namespace: {{ $ns }}}
-{{- if $ui.keycloak.enabled }}
+{{- /* The Keycloak and Argo CD views' Roles live in those namespaces: only where they exist (a cluster without
+     them installs as well; `helm template`, which sees no cluster, renders them as configured). */ -}}
+{{- $live := lookup "v1" "Namespace" "" "kube-system" }}
+{{- $hasNs := dict }}
+{{- range $n := list $ui.keycloak.namespace $ui.argocd.namespace }}
+{{- $_ := set $hasNs $n (or (not $live) (lookup "v1" "Namespace" "" $n)) }}
+{{- end }}
+{{- if and $ui.keycloak.enabled (index $hasNs $ui.keycloak.namespace) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -244,7 +252,7 @@ roleRef:
 subjects:
   - {kind: ServiceAccount, name: coder-ui-updates, namespace: {{ $ns }}}
 {{- end }}
-{{- if $ui.argocd.enabled }}
+{{- if and $ui.argocd.enabled (index $hasNs $ui.argocd.namespace) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

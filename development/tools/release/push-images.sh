@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Pushes this release's images into your registry, on the far side of the air gap. Needs bash, docker and coreutils
 # (the aws CLI too for ECR=1); no internet. It reads IMAGES.txt and SHA256SUMS next to it, from any directory.
-#   ./push-images.sh REGISTRY [--dry-run] [--rm] [NAME...]
+#   ./push-images.sh REGISTRY [--dry-run] [--rm] [--ours-only] [NAME...]
 # REGISTRY: host[:port][/prefix], the chart's global.registry - e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com or
 # harbor.example.com/coder. Each image goes to REGISTRY/<its path without the source host>, where the chart pulls it:
-#   ghcr.io/user187x/coder-platform:T -> REGISTRY/user187x/coder-platform:T
+#   ghcr.io/user187x/coder-platform:T -> REGISTRY/user187x/coder-platform:T, docker.io/traefik:T -> REGISTRY/traefik:T
 # First every file is checked against SHA256SUMS (nothing is pushed if one does not match). Then per image: its
 # archive streamed into docker load (the parts of a split one joined with cat on the way, no temporary file), tagged,
 # and pushed (3 tries: a registry on slow storage can time out on a large layer; pushed layers are not sent twice).
 # Ends with a summary; exits non-zero if any image failed.
 #   --dry-run   check the files and print what it would do (no docker command)
 #   --rm        after each push remove the loaded image and its new tag (a push host with little disk)
+#   --ours-only only the fork's images (ghcr.io/user187x/...): your registry already holds the public ones, at the
+#               paths INSTALL.md lists
 #   NAME...     only these images, by name (e.g. coder-platform coder-workspace); default: all of IMAGES.txt
 #   ECR=1 ./push-images.sh ...   create missing ECR repositories first (region from REGISTRY)
 # Log in first: docker login REGISTRY
@@ -19,11 +21,12 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() { sed -n '2,/^set /p' "$0" | sed '$d' >&2; exit 2; }
-reg="" dry=0 rm_after=0 names=()
+reg="" dry=0 rm_after=0 ours_only=0 names=()
 while (($#)); do
 	case "$1" in
 	--dry-run) dry=1 ;;
 	--rm) rm_after=1 ;;
+	--ours-only) ours_only=1 ;;
 	-h | --help) usage ;;
 	-*) echo "unknown option: $1" >&2; usage ;;
 	*) if [[ -z "$reg" ]]; then reg="$1"; else names+=("$1"); fi ;;
@@ -52,6 +55,7 @@ imgs=() files=() sizes=() configs=() manifests=()
 while read -r img fs size cfg man _; do
 	[[ -z "$img" || "$img" == \#* ]] && continue
 	if ((${#names[@]})) && [[ " ${names[*]} " != *" $(name_of "$img") "* ]]; then continue; fi
+	if ((ours_only)) && [[ "$img" != ghcr.io/user187x/* ]]; then continue; fi
 	imgs+=("$img") files+=("$fs") sizes+=("$size") configs+=("$cfg") manifests+=("$man")
 done <"${here}/IMAGES.txt"
 for n in "${names[@]}"; do

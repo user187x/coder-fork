@@ -936,6 +936,32 @@ def remove_volume(name):
     raise RuntimeError("the volume %s is still there" % name)
 
 
+def adopt_volume(name, pv, who=""):
+    """A volume kept (Retain) from an earlier install - in this namespace or another, its claim deleted with it -
+    stays Released with that claim's reference, and this install's claim of the same name would never bind (every
+    workspace waiting on it). Pre-bind it to this install's claim. A volume bound to a claim that still exists
+    elsewhere is not taken."""
+    ref = (pv.get("spec") or {}).get("claimRef") or {}
+    if not ref or (ref.get("namespace") == NAMESPACE and ref.get("name") == name and not ref.get("uid")):
+        return False
+    phase = (pv.get("status") or {}).get("phase")
+    if phase == "Bound":
+        if ref.get("namespace") != NAMESPACE or ref.get("name") != name:
+            return False  # another claim's, alive
+        status, claim = KUBE.call("GET", "/api/v1/namespaces/%s/persistentvolumeclaims/%s" % (NAMESPACE, name))
+        if status == 200 and ((claim or {}).get("metadata") or {}).get("uid") == ref.get("uid"):
+            return False  # bound to this install's claim: as it should be
+    elif phase not in ("Released", "Available"):
+        return False
+    status, out = KUBE.call("PATCH", "/api/v1/persistentvolumes/" + name,
+                            {"spec": {"claimRef": {"namespace": NAMESPACE, "name": name, "uid": None,
+                                                   "resourceVersion": None}}}, "application/merge-patch+json")
+    if status != 200:
+        raise RuntimeError("adopt the volume %s: HTTP %s %s" % (name, status, str(out)[:200]))
+    LOG(event="safe-volume", user=who, adopted=name, was="%s/%s" % (ref.get("namespace"), ref.get("name")), phase=phase)
+    return True
+
+
 def ensure_volume(user_id, username="", objects=None, in_use=None):
     """Makes the account's volume and claim (or the given pair) where missing, and replaces them when they name another
     bucket (the backend changed) and nothing uses them; True when both are in place."""
@@ -949,6 +975,8 @@ def ensure_volume(user_id, username="", objects=None, in_use=None):
         remove_volume(name)
         LOG(event="safe-volume", user=username or user_id, replaced=have[0], now=pv["spec"]["csi"]["volumeHandle"],
             secret=volume_signature(pv)[1])
+    if status == 200 and isinstance(cur, dict) and have == volume_signature(pv):
+        adopt_volume(name, cur, username or user_id)
     made = []
     for get_path, post_path, obj in (
             ("/api/v1/persistentvolumes/" + name, "/api/v1/persistentvolumes", pv),

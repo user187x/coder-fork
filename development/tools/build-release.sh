@@ -1,27 +1,26 @@
 #!/usr/bin/env bash
-# Builds the release as a plain directory, dist/coder-fork-<version>/ (<version>: the chart's): only what runs Coder
-# from the fork - the images of ours the chart runs, and the one chart. Every file is under 2 GiB, so the folder's
-# files can be the assets of a GitHub release as they are.
+# Builds the release as a plain directory, dist/coder-fork-<version>/ (<version>: the chart's): every image the chart
+# can run - ours and the public ones - and the one chart, for one push and one helm install on any air-gapped cluster.
+# Every file is under 2 GiB, so the folder's files can be the assets of a GitHub release as they are.
 #   coder-airgapped-<version>.tgz    the chart (helm lint and a render first; packaged from a copy without __pycache__):
 #                                    one helm install installs the whole platform (INSTALL.md)
 #   <name>_<tag>.tar.gz              each image (docker save | gzip, from helm-chart/images: hard-linked when on the same
 #                                    file system, else copied); one over SPLIT_SIZE in parts <file>.part-00, -01, ...
 #                                    (streamed by split, no extra whole copy; cat joins them)
-#   push-images.sh                   the far side: ./push-images.sh REGISTRY [--dry-run] - checks SHA256SUMS, then docker
-#                                    load / tag / push each image as REGISTRY/user187x/<name>:<tag> (release/push-images.sh)
+#   push-images.sh                   the far side: ./push-images.sh REGISTRY [--dry-run] [--ours-only] - checks SHA256SUMS,
+#                                    then docker load / tag / push each image as REGISTRY/<its path without the source
+#                                    host> (release/push-images.sh)
 #   IMAGES.txt                       per image: its reference, file(s), size, config digest, manifest digest
-#   INSTALL.md                       prerequisites (with the public images the chart runs, which your registry must have),
-#                                    push, the one helm install, the first sign-in (release/INSTALL.md.in)
-#   values-eks-airgap.example.yaml   the values to start from; values-ha.example.yaml, high availability on top
-#   gateway-api-*.yaml, traefik-*.tgz, traefik-*-values.yaml, cloudnative-pg-*.tgz
-#                                    the prerequisites (helm-chart/prereqs; INSTALL.md step 0)
+#   INSTALL.md                       push, values, the one helm install, sign-in, uninstall (release/INSTALL.md.in)
+#   values.example.yaml              the one values file to start from; values-ha.example.yaml, high availability on top
 #   SHA256SUMS                       every file in the folder, parts one by one (sha256sum -c SHA256SUMS works as is)
 #   SHA256SUMS.joined                the split archives as joined (<file>.tar.gz), when any is split
 #   CVE-REPORT.md                    with --scan / --scan-only
-# The images: those of images.txt that are ours (ghcr.io/user187x/...), outside its [rollback] and [reference]
-# sections, and in `helm template --set global.registry=REGISTRY.invalid` (matched on path:tag). An image of ours the
-# chart renders without an archive (or not in images.txt) is an error; those of ours it does not render are listed as
-# left out. Each archive is checked against its folder's SHA256SUMS on the way.
+# The images: those of images.txt (ours and public), outside its [rollback] and [reference] sections, that the chart
+# renders under `--set global.registry=REGISTRY.invalid` - by default, and with high availability and its own
+# prerequisites (global.bundled) - matched on path:tag. An image the chart renders without an archive (or not in
+# images.txt) is an error; those of ours it does not render are listed as left out. Each archive is checked against
+# its folder's SHA256SUMS on the way.
 #
 #   ./build-release.sh [--out DIR] [--plan] [--scan [--vex FILE]... [--no-db-update]]
 #   ./build-release.sh --scan-only [--out DIR] [--vex FILE]... [--no-db-update]
@@ -118,6 +117,12 @@ build_release() {
 	echo "render ok"
 	helm template coder "$chart" -n coder --set global.registry=REGISTRY.invalid >"$tmp/render.yaml" 2>"$tmp/render.log" ||
 		{ cat "$tmp/render.log" >&2; die "helm template --set global.registry=REGISTRY.invalid failed"; }
+	# every image the chart can run: also with high availability and with its own prerequisites (Traefik, the
+	# CloudNativePG operator: global.bundled) - the release carries them all, public ones too
+	helm template coder "$chart" -n coder --set global.registry=REGISTRY.invalid -f "${bundle}/values-ha.example.yaml" \
+		--set global.bundled.traefik=true --set global.bundled.cloudnativePG=true --set secrets.generateTls=true \
+		>>"$tmp/render.yaml" 2>"$tmp/render.log" ||
+		{ cat "$tmp/render.log" >&2; die "helm template with values-ha.example.yaml and global.bundled failed"; }
 	# every image reference under the registry: path:tag (a trailing \ of an escaped string is not part of it)
 	grep -oE 'REGISTRY\.invalid/[A-Za-z0-9._/-]+(:[A-Za-z0-9_.-]+)?(@sha256:[0-9a-f]{64})?' "$tmp/render.yaml" |
 		sed 's|^REGISTRY\.invalid/||' | sort -u >"$tmp/rendered" || true
@@ -142,21 +147,25 @@ build_release() {
 		groups+=("$g") images+=("$a") digests+=("$b")
 	done <"${bundle}/images.txt"
 
-	# ours, outside [rollback]/[reference], rendered by the chart
+	# every image of images.txt the chart runs (ours and public), outside [rollback]/[reference]
 	local -a sel=() left_out=() errors=()
 	local -A listed=()
 	local i img p
 	for i in "${!images[@]}"; do
 		img=${images[$i]} p=$(path_of "${images[$i]}")
-		[[ "$img" == ghcr.io/user187x/* ]] || continue
-		case "${groups[$i]}" in rollback | reference) left_out+=("${img}  ([${groups[$i]}])"); continue ;; esac
+		case "${groups[$i]}" in rollback | reference)
+			[[ "$img" == ghcr.io/user187x/* ]] && left_out+=("${img}  ([${groups[$i]}])")
+			continue ;;
+		esac
 		listed[$p]=$i
-		if [[ -z "${rendered[$p]:-}" ]]; then left_out+=("${img}  (the chart does not run it)"); continue; fi
+		if [[ -z "${rendered[$p]:-}" ]]; then
+			[[ "$img" == ghcr.io/user187x/* ]] && left_out+=("${img}  (the chart does not run it)")
+			continue
+		fi
 		wanted "$(name_of "$img")" || continue
 		sel+=("$i")
 	done
 	for r in "${!rendered[@]}"; do
-		[[ "$r" == user187x/* ]] || continue
 		wanted "$(name_of "$r")" || continue
 		[[ -n "${listed[$r]:-}" ]] ||
 			errors+=("the chart runs REGISTRY/${r}, which images.txt does not list (outside [rollback]/[reference]): add it there and build its archive")
@@ -190,7 +199,7 @@ build_release() {
 	fi
 	((${#sel[@]})) || die "no image selected${ONLY:+ (ONLY=${ONLY})}"
 
-	# the public images the chart runs: your registry must have them (INSTALL.md lists them)
+	# the public ones among them (INSTALL.md lists them: what a registry needs before push-images.sh --ours-only)
 	local -a public=()
 	local -A pub_src=()
 	for i in "${!images[@]}"; do
@@ -201,22 +210,10 @@ build_release() {
 		[[ -n "${rendered[$r]:-}" && "$r" != user187x/* ]] || continue
 		public+=("${r}	${pub_src[$r]:-(not in images.txt)}")
 	done <"$tmp/rendered"
-	# and the ones only high availability runs (values-ha.example.yaml: the database's pooler, ...)
-	local -a public_ha=()
-	if [[ -f "${bundle}/values-ha.example.yaml" ]]; then
-		helm template coder "$chart" -n coder -f "${bundle}/values-ha.example.yaml" --set global.registry=REGISTRY.invalid \
-			>"$tmp/render-ha.yaml" 2>"$tmp/render.log" || { cat "$tmp/render.log" >&2; die "helm template with values-ha.example.yaml failed"; }
-		while read -r r; do
-			[[ -z "${rendered[$r]:-}" && "$r" != user187x/* && "${r##*/}" == *:* && "$r" != *@* ]] || continue
-			public_ha+=("${r}	${pub_src[$r]:-(not in images.txt)}")
-		done < <(grep -oE 'REGISTRY\.invalid/[A-Za-z0-9._/-]+(:[A-Za-z0-9_.-]+)?(@sha256:[0-9a-f]{64})?' "$tmp/render-ha.yaml" |
-			sed 's|^REGISTRY\.invalid/||' | sort -u)
-	fi
-
 	# the plan
 	local total=0 need=0 k parts how
 	echo "coder-fork ${version} (chart coder-airgapped ${version}, Coder ${coder_version}) -> ${out}"
-	echo "images of ours the chart runs:"
+	echo "the images the chart runs (ours and public; with high availability and its own prerequisites):"
 	for k in "${!sel[@]}"; do
 		total=$((total + size[k]))
 		case "${mode[$k]}" in
@@ -231,12 +228,8 @@ build_release() {
 		echo "left out (ours, not in the release):"; printf '  %s\n' "${left_out[@]}"
 	fi
 	if ((${#public[@]})); then
-		echo "public images the chart runs (not in the release; your registry must have them):"
+		echo "of which public (pushed too, unless push-images.sh --ours-only):"
 		printf '%s\n' "${public[@]}" | sed 's/\t/  <- /; s/^/  /'
-	fi
-	if ((${#public_ha[@]})); then
-		echo "and with high availability (values-ha.example.yaml):"
-		printf '%s\n' "${public_ha[@]}" | sed 's/\t/  <- /; s/^/  /'
 	fi
 	((!plan)) || { echo "plan only: nothing written"; return 0; }
 
@@ -304,9 +297,9 @@ build_release() {
 	find "$chart_copy" -name __pycache__ -type d -prune -exec rm -rf {} +
 	helm package "$chart_copy" -d "$stage" >/dev/null 2>"$tmp/package.log" || { cat "$tmp/package.log" >&2; die "helm package failed"; }
 	[[ -f "$stage/coder-airgapped-${version}.tgz" ]] || die "helm package wrote no coder-airgapped-${version}.tgz"
-	cp "${bundle}/values-eks-airgap.example.yaml" "${bundle}/values-ha.example.yaml" "$stage/"
-	# the prerequisites, so a release folder installs on its own (INSTALL.md step 0)
-	cp "${bundle}"/prereqs/{gateway-api-v1.6.0-standard-install.yaml,traefik-41.4.0.tgz,traefik-41.4.0.reference-values.yaml,traefik-41.4.0.ha-values.yaml,cloudnative-pg-0.29.0.tgz} "$stage/"
+	# the one values file to start from (every input of the one-step install) and the high-availability overlay; the
+	# prerequisites (Traefik, the Gateway API CRDs, CloudNativePG) are in the chart (global.bundled)
+	cp "${bundle}/values.example.yaml" "${bundle}/values-ha.example.yaml" "$stage/"
 	install -m 0755 "${templates}/push-images.sh" "$stage/push-images.sh"
 
 	# INSTALL.md from its template
@@ -317,9 +310,6 @@ build_release() {
 		case "$line" in
 		@PUBLIC_IMAGES@)
 			((${#public[@]} == 0)) || printf '%s\n' "${public[@]}" | awk -F'\t' '{printf "| `$REGISTRY/%s` | `%s` |\n", $1, $2}' ;;
-		@PUBLIC_IMAGES_HA@)
-			if ((${#public_ha[@]} == 0)); then echo "| (none more) | |"; else
-				printf '%s\n' "${public_ha[@]}" | awk -F'\t' '{printf "| `$REGISTRY/%s` | `%s` |\n", $1, $2}'; fi ;;
 		*)
 			line=${line//@VERSION@/$version}; line=${line//@CODER_VERSION@/$coder_version}
 			line=${line//@IMAGE_COUNT@/${#sel[@]}}; line=${line//@IMAGES_SIZE@/$(human "$total")}

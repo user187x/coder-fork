@@ -1418,6 +1418,38 @@ class SafeTest(unittest.TestCase):
         self.safe = load("safe", "safe.py")
         self.safe.LOG = lambda **kw: None
 
+    def test_a_kept_volume_from_an_earlier_install_is_adopted(self):
+        # a reinstall (the namespace deleted, the Retain volumes kept): Released with the old claim's uid - pre-bound to
+        # this install's claim; a volume bound to another namespace's live claim, or to this one's, is left alone
+        ns = self.safe.NAMESPACE
+        calls = []
+
+        class Kube:
+            def __init__(self, claims):
+                self.claims = claims
+
+            def call(self, method, path, body=None, patch_type=None):
+                calls.append((method, path, body))
+                if method == "GET":
+                    uid = self.claims.get(path.rsplit("/", 1)[1])
+                    return (200, {"metadata": {"uid": uid}}) if uid else (404, None)
+                return 200, {}
+
+        def pv(phase, ref):
+            return {"spec": {"claimRef": ref}, "status": {"phase": phase}}
+
+        self.safe.KUBE = Kube({})
+        self.assertTrue(self.safe.adopt_volume("coder-isos", pv("Released", {"namespace": ns, "name": "coder-isos", "uid": "old"})))
+        self.assertEqual(calls[-1][2]["spec"]["claimRef"], {"namespace": ns, "name": "coder-isos", "uid": None, "resourceVersion": None})
+        self.assertTrue(self.safe.adopt_volume("coder-isos", pv("Released", {"namespace": "coder", "name": "coder-isos", "uid": "x"}))
+                        or ns == "coder")
+        n = len(calls)
+        self.assertFalse(self.safe.adopt_volume("coder-isos", pv("Bound", {"namespace": "elsewhere", "name": "coder-isos", "uid": "y"})))
+        self.safe.KUBE = Kube({"coder-isos": "mine"})
+        self.assertFalse(self.safe.adopt_volume("coder-isos", pv("Bound", {"namespace": ns, "name": "coder-isos", "uid": "mine"})))
+        self.assertFalse(self.safe.adopt_volume("coder-isos", pv("Available", {"namespace": ns, "name": "coder-isos"})))
+        self.assertEqual([c for c in calls[n:] if c[0] == "PATCH"], [], "nothing patched for a volume in use or already ours")
+
     def test_paths_stay_inside_the_safe(self):
         c = self.safe.clean_path
         self.assertEqual(c("/docs/a b.txt/"), "docs/a b.txt")
@@ -2864,6 +2896,71 @@ class UninstallHookTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(h.run(), 0)
         self.assertIn("uninstall goes on", out.getvalue())
+
+
+def load_hook(name, env):
+    path = os.path.normpath(os.path.join(SRC, "../../files/hooks/%s" % name))
+    base = {"NAMESPACE": "cf", "KUBERNETES_SERVICE_HOST": "k", "KUBERNETES_SERVICE_PORT": "443"}
+    with mock.patch.dict(os.environ, dict(base, **env)), mock.patch("ssl.create_default_context"):
+        spec = importlib.util.spec_from_file_location(name[:-3], path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    return mod
+
+
+class InClusterDNSTest(unittest.TestCase):
+    """global.inClusterDNS (files/hooks/coredns_rewrite.py): this release's rules at the top of CoreDNS's ".:53"
+    block, replacing its earlier ones and never touching another's; removed on uninstall."""
+
+    COREFILE = ".:53 {\n    errors\n    rewrite name regex ^x\\.other\\.?$ y answer auto # coder-airgapped other/rel\n    kubernetes cluster.local\n}\n"
+
+    def test_rules_in_and_out(self):
+        h = load_hook("coredns_rewrite.py", {"RELEASE": "coder-fork", "RULES": "rewrite name regex ^coder\\.vm\\.?$ t answer auto\nrewrite name regex ^(.+)\\.coder\\.vm\\.?$ t answer auto"})
+        once = h.edit(self.COREFILE, h.RULES)
+        lines = once.split("\n")
+        self.assertEqual(lines[0], ".:53 {")
+        self.assertTrue(lines[1].endswith("# coder-airgapped cf/coder-fork") and "^coder\\.vm" in lines[1])
+        self.assertTrue(lines[2].endswith("# coder-airgapped cf/coder-fork"))
+        self.assertIn("# coder-airgapped other/rel", once, "another release's rule stays")
+        self.assertEqual(h.edit(once, h.RULES), once, "applying twice changes nothing")
+        self.assertEqual(h.edit(once, []), self.COREFILE, "remove: back as it was")
+        with self.assertRaises(RuntimeError):
+            h.edit("example.org {\n}\n", h.RULES)
+
+
+class DatabaseJobTest(unittest.TestCase):
+    """The database when the chart brings CloudNativePG (files/hooks/apply_database.py): applied once the operator's
+    webhook answers (retried until then), the Cluster before the pooler; deleted on uninstall, the pooler first."""
+
+    def test_apply_retries_until_the_webhook_answers(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        for n, kind in (("cluster.json", "Cluster"), ("pooler.json", "Pooler")):
+            open(os.path.join(d, n), "w").write(json.dumps({"kind": kind, "metadata": {"name": "coder-db" + ("" if kind == "Cluster" else "-pooler-rw")}}))
+        h = load_hook("apply_database.py", {"MANIFESTS": d, "TIMEOUT": "600"})
+        answers = iter([(500, "failed calling webhook"), (0, "connection refused"), (200, "{}"), (201, "{}")])
+        calls = []
+
+        def call(method, path, body=None, content_type="application/json"):
+            calls.append((method, path.split("?")[0].rsplit("/", 2)[-2:]))
+            return next(answers)
+
+        slept = []
+        with mock.patch.object(h, "call", side_effect=call), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(h.apply(sleep=slept.append), 0)
+        self.assertEqual([c[1] for c in calls], [["clusters", "coder-db"]] * 3 + [["poolers", "coder-db-pooler-rw"]])
+        self.assertEqual(slept, [2, 4])
+
+        gets = iter([200, 404, 404, 404])  # round 1: the pooler still there; round 2: both gone
+        dcalls = []
+
+        def dcall(method, path, body=None, content_type="application/json"):
+            dcalls.append((method, path.rsplit("/", 1)[-1]))
+            return (next(gets), "") if method == "GET" else (200, "")
+
+        with mock.patch.object(h, "call", side_effect=dcall), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(h.delete(sleep=lambda s: None), 0)
+        self.assertEqual(dcalls[:2], [("DELETE", "coder-db-pooler-rw"), ("DELETE", "coder-db")])
 
 
 class CodeServerHATest(unittest.TestCase):

@@ -177,6 +177,8 @@ CODER_ACCESS_URL = os.environ.get("CODER_ACCESS_URL", "").rstrip(
 )  # what browsers use
 CODER_NAMESPACE = os.environ.get("CODER_NAMESPACE", "coder")
 CODER_DEPLOYMENT = os.environ.get("CODER_DEPLOYMENT", "coder")
+# The Helm release Coder belongs to (its pods' app.kubernetes.io/instance): the release's own name, "coder" or not.
+CODER_RELEASE = os.environ.get("CODER_RELEASE", CODER_DEPLOYMENT)
 BANNER_URL = os.environ.get("BANNER_URL", "http://coder").rstrip("/")
 ADMIN_ROLES = {
     r.strip() for r in os.environ.get("ADMIN_ROLES", "owner").split(",") if r.strip()
@@ -4150,7 +4152,7 @@ def coder_role(pod):
         return "workspace"
     if labels.get("cnpg.io/cluster"):
         return "database"
-    if labels.get("app.kubernetes.io/instance") == CODER_DEPLOYMENT and labels.get(
+    if labels.get("app.kubernetes.io/instance") == CODER_RELEASE and labels.get(
         "app.kubernetes.io/name"
     ) in ("coder", None):
         return "coder"

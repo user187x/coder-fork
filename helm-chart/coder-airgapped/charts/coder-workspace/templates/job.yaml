@@ -21,7 +21,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "coder-workspace.prefix" $ }}-push-template{{ $j.suffix }}
-  namespace: {{ $.Values.namespace | default "coder" }}
+  namespace: {{ $.Values.namespace | default $.Release.Namespace }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     # Removed once it has pushed the template; a failed run stays for its logs until the next install, or an hour.
@@ -200,7 +200,7 @@ spec:
                 {{- with $j.image }}
                 --variable workspace_image="{{ . }}" \
                 {{- end }}
-                --variable namespace="{{ $.Values.namespace | default "coder" }}" \
+                --variable namespace="{{ $.Values.namespace | default $.Release.Namespace }}" \
                 {{- if $j.dataflow }}
                 --variable terminal_app="{{ $j.template.terminal | default "web" }}" \
                 {{- if eq ($j.template.terminal | default "web") "ghostty" }}

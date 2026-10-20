@@ -5,7 +5,7 @@ provisioner, which runs as Coder's service account, reads the ConfigMap the plat
 the workspaces shared with others, which mount no Cloud Drive; each account's source workspace) when a workspace starts.
 */ -}}
 {{- with (.Values.global.userStorage | default dict) }}{{ if eq (toString .enabled) "true" }}
-{{- $ns := $.Values.namespace | default "coder" }}
+{{- $ns := $.Values.namespace | default $.Release.Namespace }}
 {{- $name := printf "%s-cloud-drive" (include "coder-workspace.prefix" $) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

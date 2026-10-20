@@ -1,5 +1,5 @@
-# Workspaces, the template push and every resource of this chart live here. The template accepts only "coder".
-namespace: "coder"
+# Workspaces, the template push and every resource of this chart live here ("" = the release's namespace).
+namespace: ""
 
 # Prefix of every object name (<prefix>-terraform, <prefix>-icons, <prefix>-push-template). Empty = the release name.
 namePrefix: ""

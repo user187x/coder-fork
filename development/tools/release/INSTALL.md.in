@@ -1,138 +1,108 @@
 # coder-fork @VERSION@ – install
 
-Coder @CODER_VERSION@ (the fork) for an air-gapped Kubernetes cluster. This folder holds only what runs Coder from
-the fork: the images of ours the chart runs and the chart, `coder-airgapped-@VERSION@.tgz`, which installs the whole
-platform with one `helm install`.
+Coder @CODER_VERSION@ (the fork's open-source build) for an air-gapped Kubernetes cluster, in one step: push this
+folder's images, then one `helm install` with one values file. The chart `coder-airgapped-@VERSION@.tgz` installs the
+whole platform, and on a bare cluster also its prerequisites (Traefik with the Gateway API, the CloudNativePG operator).
 
 | File | What it is |
 |---|---|
 | `coder-airgapped-@VERSION@.tgz` | The chart |
-| `<name>_<tag>.tar.gz` | @IMAGE_COUNT@ images of ours, `docker save` + gzip (@IMAGES_SIZE@); one over 1900 MiB is split into `<file>.part-00`, `-01`, ... (`cat` joins them) |
-| `push-images.sh` | Checks the files, then loads each image and pushes it to your registry (docker only) |
+| `<name>_<tag>.tar.gz` | @IMAGE_COUNT@ images, ours and the public ones the chart runs, `docker save` + gzip (@IMAGES_SIZE@); one over 1900 MiB is split into `<file>.part-00`, `-01`, ... (`cat` joins them) |
+| `push-images.sh` | Checks the files, then loads each image and pushes it to your registry, where the chart pulls it (docker only) |
 | `IMAGES.txt` | Each image: its reference, file(s), size, config and manifest digests |
-| `values-eks-airgap.example.yaml` | The values to start `my-values.yaml` from |
+| `values.example.yaml` | The values to start `values.yaml` from: every input of the install |
 | `values-ha.example.yaml` | High availability, on top of your values |
-| `gateway-api-v1.6.0-standard-install.yaml`, `traefik-41.4.0.tgz`, `traefik-41.4.0.reference-values.yaml`, `traefik-41.4.0.ha-values.yaml`, `cloudnative-pg-0.29.0.tgz` | The prerequisites (step 0) |
 | `SHA256SUMS` | Every file here (`sha256sum -c SHA256SUMS`); `SHA256SUMS.joined`: the split archives, joined |
-| `CVE-REPORT.md` | The release's CVE scan (when it was built with one) |
+| `CVE-REPORT.md` | The release's CVE scan |
 
 ## Before you start
 
-The cluster needs these already:
-
 - **Kubernetes 1.27 or newer with amd64 (x86_64) nodes** – the images are amd64 only.
-- **DNS** for `coder.<your-domain>` and `*.<your-domain>` – from your users' machines **and from inside the cluster**:
-  workspace agents and the chart's Jobs (the first user, the template pushes) reach Coder at
-  `https://coder.<your-domain>`, and without it they fail quietly. A cluster with no such DNS (minikube, kind) can
-  have CoreDNS answer it with the Gateway: in `kubectl -n kube-system edit configmap coredns`, add to the `.:53` block
-  `rewrite name regex ^(.+)\.<your-domain>\.?$ traefik.traefik.svc.cluster.local answer auto` (anchored, the domain's
-  dots escaped), then `kubectl -n kube-system rollout restart deploy/coredns`.
-- **Your certificate:** `ca.crt` (the CA that signed it) and `wildcard.crt` / `wildcard.key` for `*.<your-domain>`.
-- **A container registry** (ECR, Harbor, ...) – `$REGISTRY` below, the chart's `global.registry` – that already holds
-  the **public images** the chart runs, under the same paths (the source host left out). This release carries none of
-  them (nor the prerequisites' two images, step 0). No registry - a single minikube node without internet? Load every
-  image into the node instead (`docker load`, then `minikube image load`): ours from this folder, the public ones
-  saved on a connected machine by the digests below, plus the prerequisites'
-  (`ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0`, `docker.io/traefik:v3.7.12`), and set `global.registry: ""`. A
-  minikube started offline needs its own images staged too: kicbase, the preload, and its storage addon's
-  (storage-provisioner-rancher: rancher/local-path-provisioner and busybox).
-- **A domain of one label** (`vm`, `lab`): browsers refuse a wildcard certificate and cookies directly under it, so set
-  `global.wildcardHost` to a name below Coder's, e.g. `*.coder.vm`, with the certificate to match (the chart stops
-  with this advice otherwise).
+- **A container registry** the nodes pull from (ECR, Harbor, a plain registry ...) – `$REGISTRY` below, the
+  chart's `global.registry`. Log in to it from where you run `push-images.sh` (`docker login $REGISTRY`; ECR:
+  `aws ecr get-login-password | docker login --username AWS --password-stdin $REGISTRY`).
+- **A domain** for the platform: Coder at `coder.<domain>`, workspace apps at `*.<domain>`. Your users' machines must
+  resolve both to the Gateway (Traefik's Service). A domain of one label (`vm`, `lab`) needs
+  `global.wildcardHost: "*.coder.<domain>"`: browsers refuse a wildcard certificate and cookies directly under it.
+- **Optional:** your own CA and wildcard certificate (else the chart makes them), Keycloak (OIDC) for your users'
+  sign-in (else the first owner signs in with a password).
 
-| In your registry | Pull it on a connected machine as (tested digest) |
-|---|---|
-@PUBLIC_IMAGES@
-
-High availability (`values-ha.example.yaml`: the database's synchronous standby and PgBouncer pooler, and more
-replicas) also runs:
-
-| In your registry | Pull it on a connected machine as (tested digest) |
-|---|---|
-@PUBLIC_IMAGES_HA@
-
-Files: `ca.crt` (the CA that signed your HTTPS certificate), `wildcard.crt` / `wildcard.key` (the certificate for
-`*.<your-domain>`), and for OIDC sign-in (Keycloak) `keycloak-ca.crt` and the client secret.
-Tools: `docker`, `helm`, `kubectl` (and `aws` for ECR).
-
-## 0. The prerequisites (this folder carries them)
-
-```bash
-kubectl apply --server-side -f gateway-api-v1.6.0-standard-install.yaml          # Gateway API CRDs v1.6.0
-kubectl create namespace traefik
-kubectl -n traefik create secret tls coder-airgapped-tls --cert=wildcard.crt --key=wildcard.key
-helm upgrade --install traefik traefik-41.4.0.tgz -n traefik --wait \
-  -f traefik-41.4.0.reference-values.yaml \
-  --set image.registry=$REGISTRY                   # its image from your registry ($REGISTRY/traefik:v3.7.12)
-helm upgrade --install cnpg cloudnative-pg-0.29.0.tgz -n cnpg-system --create-namespace --wait \
-  --set image.repository=$REGISTRY/cloudnative-pg/cloudnative-pg --set image.tag=1.30.0
-```
-
-Traefik's reference values carry the Gateway `traefik/traefik-gateway` (HTTPS with the `coder-airgapped-tls`
-Secret); it is stock Traefik (nothing rewrites a response). For high availability add
-`-f traefik-41.4.0.ha-values.yaml`. Skip any of these the cluster already has. Tested: @TRAEFIK@, CloudNativePG
-@CNPG@.
+Tools: `docker`, `helm`, `kubectl`.
 
 ## 1. Push the images
 
 ```bash
-docker login $REGISTRY       # ECR: aws ecr get-login-password | docker login --username AWS --password-stdin $REGISTRY
-./push-images.sh $REGISTRY   # --dry-run first if you like; ECR=1 ./push-images.sh $REGISTRY creates the ECR repositories
+./push-images.sh $REGISTRY     # --dry-run first if you like; ECR=1 creates missing ECR repositories
 ```
 
-It checks every file against `SHA256SUMS` first, then loads, tags and pushes each image as
-`$REGISTRY/user187x/<name>:<tag>`, and ends with a summary.
+It checks every file against `SHA256SUMS`, then loads, tags and pushes each image to `$REGISTRY/<its path without
+the source registry>` (e.g. `ghcr.io/user187x/coder-platform:T` → `$REGISTRY/user187x/coder-platform:T`,
+`docker.io/traefik:v3.7.12` → `$REGISTRY/traefik:v3.7.12`) - where the chart pulls it - and ends with a summary.
+
+Your registry already holds the public images? `./push-images.sh --ours-only $REGISTRY` pushes ours alone; the
+public ones must then be at these paths:
+
+| In your registry | The public image (tested digest) |
+|---|---|
+@PUBLIC_IMAGES@
 
 ## 2. Values
 
 ```bash
-cp values-eks-airgap.example.yaml my-values.yaml    # change every CHANGE-ME (global.registry: $REGISTRY, the domain, ...)
+cp values.example.yaml values.yaml    # change every CHANGE-ME: global.domain, global.registry ($REGISTRY)
 ```
 
-Kubelets with self-signed serving certificates (minikube, kind, kubeadm's defaults) need
-`metricsServer: {kubeletInsecureTLS: true}`, else metrics-server cannot read them. For high availability pass
-`-f values-ha.example.yaml` after your values (one Coder serves, a standby takes over; the database's synchronous
-standby and pooler).
+Every input of the install is in this one file:
+
+- **The prerequisites** (`global.bundled`): the chart installs @TRAEFIK@ with the Gateway API v1.6.0 CRDs and
+  CloudNativePG @CNPG@. Set either to `false` where the cluster already runs it - a second CloudNativePG operator
+  would fight the first one over the database; with your own Traefik, also set `global.gateway` to your Gateway.
+- **Certificates:** `secrets.generateTls: true` makes a CA and a certificate for the domain, Coder's host and the
+  wildcard host (once; upgrades keep them). Your users' browsers must trust that CA:
+  `kubectl -n <namespace> get secret tls-ca -o jsonpath='{.data.ca\.crt}' | base64 -d >ca.crt`. Or give yours:
+  `generateTls: false`, `secrets.tlsCa.create: true` with `caCrt`, `secrets.wildcardTls.create: true` with
+  `tlsCrt`/`tlsKey` (PEM, inline with `|`).
+- **How users reach it:** `traefik.service.type: LoadBalancer` (a cloud's) or `NodePort` (bare metal, minikube,
+  kind: `https://coder.<domain>:<the websecure NodePort>`).
+- **In-cluster DNS:** pods (workspace agents, Coder's own tailnet) reach Coder by its URL. Where the cluster's DNS
+  does not resolve your domain (minikube, kind, bare metal), set `global.inClusterDNS.enabled: true`: the chart adds
+  rewrite rules for Coder's host and the wildcard host to the cluster's CoreDNS (and takes them out on uninstall).
+- **Kubelets with self-signed certificates** (minikube, kind, kubeadm's defaults): `metricsServer.kubeletInsecureTLS:
+  true`, else metrics-server cannot read them.
+- **Keycloak (OIDC):** `global.oidc.issuerUrl`, `secrets.oidcClient` (create + the client secret) and, when another CA
+  signed Keycloak's certificate, `secrets.oidcCa`. An issuer Coder cannot reach leaves password sign-in only.
+- **High availability:** add `-f values-ha.example.yaml` after `values.yaml` (one Coder serves, a standby takes over;
+  the database's synchronous standby and pooler; Traefik on two replicas).
 
 ## 3. Install
 
 ```bash
-helm install coder coder-airgapped-@VERSION@.tgz -n coder --create-namespace -f my-values.yaml \
-  --set secrets.tlsCa.create=true --set-file secrets.tlsCa.caCrt=ca.crt \
-  --set secrets.wildcardTls.create=true \
-  --set-file secrets.wildcardTls.tlsCrt=wildcard.crt --set-file secrets.wildcardTls.tlsKey=wildcard.key \
-  --wait --timeout 20m
+helm install coder-fork coder-airgapped-@VERSION@.tgz -n coder-fork --create-namespace -f values.yaml
 ```
 
-The namespace must be `coder` (the workspace template accepts no other). With OIDC sign-in (Keycloak), add these
-two lines; `client-secret.txt` holds the client secret with no trailing newline
-(`tr -d '\r\n' <secret.txt >client-secret.txt`):
-
-```bash
-  --set secrets.oidcCa.create=true --set-file secrets.oidcCa.caCrt=keycloak-ca.crt \
-  --set secrets.oidcClient.create=true --set-file secrets.oidcClient.clientSecret=client-secret.txt \
-```
+Any release name and namespace. The install returns at once; the platform comes up in a few minutes (watch
+`kubectl -n coder-fork get pods`): the database is created as soon as the CloudNativePG operator answers, then Coder
+starts, its first owner is made and the workspace templates are pushed.
 
 ## 4. Sign in
 
-Open `https://coder.<your-domain>` and sign in as **`admin@admin.com`** / **`admin`** – then change the password at
-once (your avatar › Account › Security).
+Open `https://coder.<domain>` and sign in as the first owner: `global.firstUser.email` with its password (yours, or
+the random one: `kubectl -n coder-fork get secret coder-init-auth -o jsonpath='{.data.password}' | base64 -d`) -
+then change it (your avatar › Account › Security).
 
-The image builder (Templates › Images) builds on the workspace image in your registry: nothing more to set up.
-The dashboard's default logo and avatar (which the source repository's `install.sh` makes from its `defaults/`) are
-optional: without them it shows Coder's, and an admin sets the platform's in Admin Settings › Appearance (the image
-store offers the platform's logo, `minecraft-cube.gif`).
-
-The next release: push its images, then `helm upgrade coder coder-airgapped-<next>.tgz -n coder` with the same options.
+The next release: push its images, then `helm upgrade coder-fork coder-airgapped-<next>.tgz -n coder-fork -f
+values.yaml`. (CRDs: Helm installs the bundled prerequisites' CRDs once and never upgrades them; a release that needs
+newer ones says so.)
 
 ## 5. Uninstall
 
 ```bash
-helm uninstall coder -n coder --wait       # first: its hook stops the workspaces that mount a Cloud Drive
-kubectl delete namespace coder             # then the rest (the database, the volumes, Coder's workspaces)
+helm uninstall coder-fork -n coder-fork --wait    # first: its hooks stop the workspaces that mount a Cloud Drive,
+                                                  # remove the database and the CoreDNS rules
+kubectl delete namespace coder-fork               # then the rest (the volumes, Coder's workspaces)
 ```
 
 In this order. Uninstalling first lets a hook stop every workspace that mounts a Cloud Drive while the Cloud Drive's
 CSI driver can still unmount it. Deleting the namespace straight away removes the driver too, and those workspace
-pods never finish terminating. If that happened: `kubectl -n coder delete pod <pod> --grace-period=0 --force`, and
-on its node `umount -l` the pod's leftover `fuse` mounts.
+pods never finish terminating. If that happened: `kubectl -n coder-fork delete pod <pod> --grace-period=0 --force`,
+and on its node `umount -l` the pod's leftover `fuse` mounts.

@@ -180,9 +180,97 @@ def install_checks(B, chart, default_render):
           rc != 0 and '"*.coder.vm"' in err and rc2 == 0, err.strip()[-160:])
     mk = open(os.path.join(B, "minikube-support")).read()
     doc = open(os.path.join(os.path.dirname(B), "development", "tools", "release", "INSTALL.md.in")).read()
-    check("CoreDNS: the rewrite is anchored to the domain (make and INSTALL.md)",
+    check("CoreDNS: the rewrite is anchored to the domain (make; INSTALL.md points to global.inClusterDNS, whose rules "
+          "the one-step checks look at)",
           "rewrite name regex ^(.+)" in mk and "rewrite name regex (.*)" not in mk
-          and "rewrite name regex ^(.+)\\.<your-domain>\\.?$" in doc, "")
+          and "global.inClusterDNS.enabled: true" in doc, "")
+
+
+def one_step_checks(B, chart):
+    """The one-step install (the owner's goal, 2026-10-20): push the release's images, then one `helm install` with
+    one values file, any release name, any namespace - the chart bringing its prerequisites on a bare cluster."""
+    import yaml
+    repo = os.path.dirname(B)
+    rc, out, err = run(["helm", "template", "coder-fork", chart, "-n", "cf", "-f", os.path.join(B, "values.example.yaml"),
+                        "--set", "global.inClusterDNS.enabled=true", "--set", "global.registry=reg.example/x"])
+    check("one step: values.example.yaml renders (release coder-fork, namespace cf)", rc == 0, err.strip()[-200:])
+    docs = [d for d in yaml.safe_load_all(out) if d] if rc == 0 else []
+    by = {(d["kind"], d["metadata"]["name"]): d for d in docs}
+    gw = by.get(("Gateway", "traefik-gateway"), {})
+    refs = [c.get("name") for l in gw.get("spec", {}).get("listeners", []) for c in (l.get("tls") or {}).get("certificateRefs", [])]
+    check("one step: its own Traefik, the Gateway in the release's namespace on the chart's wildcard certificate",
+          ("Deployment", "coder-fork-traefik") in by and gw.get("metadata", {}).get("namespace") == "cf" and refs == ["tls-wild-cert"],
+          {"gateway ns": gw.get("metadata", {}).get("namespace"), "refs": refs})
+    routes = [r for r in docs if r["kind"] == "HTTPRoute"]
+    check("one step: every route attaches to that Gateway", routes and all(
+        all(pr.get("namespace") == "cf" for pr in r["spec"].get("parentRefs", [])) for r in routes), len(routes))
+    cm = by.get(("ConfigMap", "coder-db-manifests"), {}).get("data", {})
+    jobs = sorted(n for k, n in by if k == "Job" and n.startswith("coder-db-"))
+    check("one step: its own CloudNativePG; the database applied by a Job once the operator answers (not a Helm object)",
+          ("Deployment", "coder-fork-cloudnative-pg") in by and not any(k in ("Cluster", "Pooler") for k, _ in by)
+          and "cluster.json" in cm and len(jobs) == 2 and "coder-db-delete" in jobs, jobs)
+    tls = by.get(("Secret", "tls-wild-cert"), {}).get("stringData", {})
+    ca = by.get(("Secret", "tls-ca"), {}).get("stringData", {})
+    check("one step: no certificate given, the chart makes a CA and the wildcard certificate (secrets.generateTls)",
+          "BEGIN CERTIFICATE" in tls.get("tls.crt", "") and "PRIVATE KEY" in tls.get("tls.key", "")
+          and "BEGIN CERTIFICATE" in ca.get("ca.crt", ""), "")
+    dns = next((d for k, d in by.items() if k[0] == "Job" and k[1].startswith("coder-dns-") and k[1] != "coder-dns-remove"), {})
+    rules = {e["name"]: e.get("value") for e in (dns.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or [{}])[0].get("env", [])}.get("RULES", "")
+    check("one step: in-cluster DNS - CoreDNS rules anchored to Coder's host and the wildcard host, to the Gateway",
+          "rewrite name regex ^coder\\.example\\.com\\.?$ coder-fork-traefik.cf.svc.cluster.local answer auto" in rules
+          and "rewrite name regex ^(.+)\\.example\\.com\\.?$ coder-fork-traefik.cf.svc.cluster.local" in rules
+          and ("Job", "coder-dns-remove") in by, rules)
+    push = [d for d in docs if d["kind"] == "Job" and "push-template" in d["metadata"]["name"]]
+    check("one step: the workspace templates are pushed with the release's namespace",
+          push and out.count('--variable namespace="cf"') == len(push) and 'namespace="coder"' not in out, len(push))
+    stray = sorted({(d["metadata"].get("namespace"), d["kind"]) for d in docs if d["metadata"].get("namespace") not in (None, "cf")})
+    check("one step: nothing lands in another namespace (no coder, no keycloak/argocd with them off; only the DNS "
+          "Role in kube-system)", stray == [("kube-system", "Role"), ("kube-system", "RoleBinding")], stray)
+
+    def pod_images(d):
+        spec = d.get("spec", {})
+        spec = spec.get("jobTemplate", {}).get("spec", spec)
+        t = spec.get("template", {}).get("spec", {})
+        return [c.get("image") for c in (t.get("containers") or []) + (t.get("initContainers") or [])]
+    images = sorted({i for d in docs for i in pod_images(d) if i})
+    check("one step: every image comes from global.registry", images and all(i.startswith("reg.example/x/") for i in images),
+          [i for i in images if not i.startswith("reg.example/x/")])
+    tf = open(os.path.join(chart, "charts", "coder-workspace", "files", "main.tf")).read()
+    check("one step: the workspace template takes any namespace (a DNS label), not only coder",
+          'var.namespace == "coder"' not in tf and 'regex("^[a-z0-9]' in tf, "")
+    # default values: none of it (existing installs render as before)
+    rc, dout, _ = run(["helm", "template", "coder", chart, "-n", "coder"])
+    dk = {(d["kind"], d["metadata"]["name"]) for d in yaml.safe_load_all(dout) if d} if rc == 0 else set()
+    check("one step: off by default - no Traefik, no operator, the database a Helm object, no DNS change",
+          ("Cluster", "coder-db") in dk and not any(n.endswith(("-traefik", "-cloudnative-pg")) or n.startswith("coder-dns")
+                                                     for _, n in dk), "")
+    # the CRDs: only CRDs, the Gateway API v1.6.0 and CloudNativePG's, descriptions out; the chart fits a release Secret
+    def docs_left(o):  # a documentation string (a property named "description" is a schema, and stays)
+        if isinstance(o, dict):
+            return isinstance(o.get("description"), str) or any(docs_left(v) for v in o.values())
+        return isinstance(o, list) and any(docs_left(v) for v in o)
+    crds = {}
+    for f in glob.glob(os.path.join(chart, "charts", "*", "crds", "*.yaml")):
+        for d in yaml.safe_load_all(open(f)):
+            if d:
+                crds[d["metadata"]["name"]] = (d["kind"], docs_left(d["spec"]))
+    kinds = {k for k, _ in crds.values()}
+    check("one step: the bundled CRDs - the Gateway API's and CloudNativePG's only, CRDs only, descriptions taken out",
+          kinds == {"CustomResourceDefinition"} and not any(desc for _, desc in crds.values())
+          and "httproutes.gateway.networking.k8s.io" in crds and "clusters.postgresql.cnpg.io" in crds
+          and not any(n.endswith("traefik.io") for n in crds), sorted(kinds))
+    import tempfile, tarfile
+    tmp = tempfile.mkdtemp()
+    rc, pout, perr = run(["helm", "package", chart, "-d", tmp])
+    size = sum(os.path.getsize(os.path.join(tmp, f)) for f in os.listdir(tmp)) if rc == 0 else 0
+    check("one step: the packaged chart stays small enough for Helm's release Secret (1 MiB; < 450 KB packaged)",
+          0 < size < 450000, "%d bytes" % size)
+    install = open(os.path.join(repo, "development", "tools", "release", "INSTALL.md.in")).read()
+    release_sh = open(os.path.join(repo, "development", "tools", "build-release.sh")).read()
+    push_sh = open(os.path.join(repo, "development", "tools", "release", "push-images.sh")).read()
+    check("one step: the release ships values.example.yaml and pushes every image (--ours-only to skip public ones)",
+          'cp "${bundle}/values.example.yaml"' in release_sh and "--ours-only" in push_sh and "--ours-only" in install
+          and "helm install coder-fork coder-airgapped-@VERSION@.tgz" in install and "prereqs/" not in release_sh.split("# the one values file")[1][:400], "")
 
 
 def safe_checks(chart, default_render):
@@ -988,22 +1076,7 @@ def main():
         ok = rc == 0 and "aiTemplates" not in out and rc2 != 0 and "unknown option: --ai" in err2
         check("argocd/update-application.sh: no AI template (no --ai, no aiTemplates written)", ok,
               (err2 or out2 or err or out).strip()[-300:] if not ok else "")
-    # the release folder installs on its own: every prerequisite INSTALL.md names, build-release.sh copies, and the
-    # source has (a version bump in helm-chart/prereqs must update all three); the Traefik values' Secret is the
-    # one INSTALL.md and ./make create
-    install_in = open(os.path.join(os.path.dirname(B), "development", "tools", "release", "INSTALL.md.in")).read()
-    release_sh = open(os.path.join(os.path.dirname(B), "development", "tools", "build-release.sh")).read()
-    prereqs = sorted(os.listdir(os.path.join(B, "prereqs")))
-    copied = re.search(r'prereqs/\{([^}]+)\}', release_sh)
-    copied = sorted(copied.group(1).split(",")) if copied else []
-    named = sorted(set(re.findall(r'`((?:gateway-api|traefik|cloudnative-pg)-[^`]+)`', install_in)))
-    check("release: ships every prerequisite (helm-chart/prereqs = build-release.sh's copy = INSTALL.md's list)",
-          prereqs == copied == named, "prereqs %s, copied %s, INSTALL.md %s" % (prereqs, copied, named))
-    ref = open(os.path.join(B, "prereqs", "traefik-41.4.0.reference-values.yaml")).read() \
-        if "traefik-41.4.0.reference-values.yaml" in prereqs else ""
-    check("release: Traefik's reference values use the coder-airgapped-tls Secret (INSTALL.md step 0, ./make)",
-          "name: coder-airgapped-tls" in ref and "grey-marshall" not in ref
-          and "secret tls coder-airgapped-tls" in install_in, "")
+    one_step_checks(B, chart)
     # the layer bundle's helper (Python): compiles, and answers --help
     rc, out, err = run([sys.executable, os.path.join(B, "layer-support"), "--help"])
     check("layer-support: runs (--help)", rc == 0 and "layer-support build" in out, (err or "").strip()[-200:])
