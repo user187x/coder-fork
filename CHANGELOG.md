@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.90` (fork `e94a535e1`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.91` (fork `535dd8d6b`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
@@ -35,8 +35,15 @@ is a plug-in now (`dist/plugins/`, not in the bundle).
   it), **Apps** (a frame as wide as four apps on every row, its arrows inside, the side with more apps lit faintly),
   **Controls** (the update and restart button amber, the row's menu) and **Drive**: each row's Cloud Drive socket
   - a plug while it has the drive (amber until attached), an empty socket while not; a click plugs it in or pulls
-  it out, as dragging a cable does. Above it, the search and the Cloud Drive in one rounded bar (padded 10px, as
-  far as the Chats card floats above the page's bottom bar), with rows selected their bulk actions too.
+  it out, as dragging a cable does. Above it, the search and the Cloud Drive in one rounded bar without border lines
+  (padded 10px, as far as the Chats card floats above the page's bottom bar), with rows selected their bulk actions
+  too.
+* **The quick access wheel** (fork; `radial-menu.html`): Escape opens a wheel over any dashboard page - the page
+  behind it under a see-through Gaussian blur - with a wedge for each part: Workspaces, Templates, Images, Users,
+  Account, Chat (the chat console for admins, the Chats panel for the others), Announcement and HUD, each going
+  straight there. Pages a user may not open show dimmed ("Admins only"). Escape again or a click off the wheel
+  closes it; the arrow keys go round it and Enter opens. An Escape something else has a use for (a dialog, menu or
+  popover open, typing in a field or a terminal) stays theirs.
 * **The top bar** (fork): its controls rounder; the announcement banner rounder, its expand and close buttons both
   at its right; the HUD and the latency menu one split button (the HUD's link, then the latency and the menu's
   chevron) for admins; every dropdown's chevron smaller and fainter. **The bottom**: the Chats panel a floating
