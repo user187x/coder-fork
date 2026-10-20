@@ -243,6 +243,27 @@ def ensure_schema(db):
         db.query(stmt)
 
 
+def wait_for_schema(db, timeout=900, sleep=time.sleep):
+    """ensure_schema once the database takes connections: on a fresh install this starts before CloudNativePG's
+    primary does (refused, or "starting up"), and waiting here beats a crash loop's growing back-off."""
+    delay, waited = 2, 0
+    while True:
+        try:
+            return ensure_schema(db)
+        except (OSError, pgwire.PgError) as e:  # ConnectionError is an OSError
+            # not up yet (refused, SQLSTATE 57P03 cannot_connect_now, class 08), or the other replica creating
+            # the same objects this instant (CREATE ... IF NOT EXISTS races: 23505, 42P06, 42P07, 42710 - the
+            # statements are idempotent, so another round finds them); any other error is real
+            code = e.fields.get("C", "") if isinstance(e, pgwire.PgError) else ""
+            starting = not code or code[:3] in ("57P", "08") or code in ("23505", "42P06", "42P07", "42710")
+            if waited >= timeout or not starting:
+                raise
+            log(event="waiting for the database", error=str(e)[:200], waited=waited)
+            sleep(delay)
+            waited += delay
+            delay = min(delay * 2, 15)
+
+
 # ---------------------------------------------------------------------------------------------------- Kubernetes
 class Kube:
     """The in-cluster API (the pod's service account)."""
@@ -552,7 +573,7 @@ class Operator:
 
 def run_operator():
     db = pgwire.Pool(DB_URI, DB_CA, size=2)
-    ensure_schema(db)
+    wait_for_schema(db)
     lock = pgwire.Connection(DB_URI, cafile=DB_CA, application_name="code-server-replicator")
     # one operator of this cluster works at a time (a replica waits for the lock)
     while not lock.query("SELECT pg_try_advisory_lock(hashtext($1))", ["code-server-replicator:" + CLUSTER])[0][0] in (

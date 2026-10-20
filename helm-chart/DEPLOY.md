@@ -671,17 +671,27 @@ agent's token (Coder's own registry of agents), an instance's relay with its ins
 ## High availability
 
 **Platform HA** ([ADR-0001](../docs/adr/0001-platform-ha.md), accepted) is the platform's own high availability for
-Coder's control plane, without the Enterprise license: a replica registry with fencing, an active/standby mode, then
-active/active replicas with a mesh coordinator and DERP cells. It ships in phases; until its active/standby and
-active/active modes ship, what follows still applies to Coder's own replicas. The infrastructure part (synchronous
-replication, the pooler, the PodDisruptionBudgets) is in `values-ha.example.yaml` today, and the replica registry is
-`global.platformHA.mode: registry`: each Coder replica's lease in PostgreSQL (schema `platform_ha`), fenced when it
-cannot renew (`coderd_platform_ha_*` metrics). Nothing else changes with it on.
+Coder's control plane, without the Enterprise license. It ships in phases:
 
-Coder can run as several replicas behind one address. Any replica serves any user and relays to any workspace, and
-when one stops, the others carry on. This is Coder's own high availability: the fork leaves it as it is. The chart
-gives each replica what it needs to find the others: its pod IP as `CODER_DERP_SERVER_RELAY_URL` and
-`CODER_CLUSTER_HOST`. `values-ha.example.yaml` turns it on, on top of your values:
+- the infrastructure (synchronous replication, the pooler, the PodDisruptionBudgets);
+- the replica registry (`global.platformHA.mode: registry`): each Coder replica's lease in PostgreSQL (schema
+  `platform_ha`), fenced when it cannot renew (`coderd_platform_ha_*` metrics);
+- **active/standby** (`global.platformHA.mode: activeStandby`), which `values-ha.example.yaml` turns on;
+- active/active replicas with a mesh coordinator and DERP cells, in a later phase.
+
+In active/standby, one Coder replica serves and the others wait warm:
+
+- **Who serves.** The replica holding the lease `coder-active` runs Coder. Its pod is labeled
+  `coder-airgapped/ha-role=active`, and the coder Service selects only that label.
+- **What a standby does.** It joins the registry, answers its probes on port 2113 and watches the lease. It does not
+  start Coder until its turn, so an unlicensed deployment never runs two Coder replicas (Coder's Enterprise code
+  would report that as an error).
+- **When the active one fails.** A standby takes the lease once it lapses: back through Traefik after about 12 s.
+- **During a rolling update.** The leaving pod's preStop hands the lease over: its successor starts Coder and takes
+  traffic before the leader lets go. Users see about 2 s without Coder, because the old pod leaves the endpoints the
+  moment it is deleted.
+
+`values-ha.example.yaml` goes on top of your values:
 
 ```bash
 ./install.sh -f my-values.yaml -f values-ha.example.yaml ...    # Argo CD: the same keys in the valuesObject
@@ -689,7 +699,7 @@ gives each replica what it needs to find the others: its pod IP as `CODER_DERP_S
 
 | | Default | `values-ha.example.yaml` |
 |---|---|---|
-| Coder | 1 replica, 2 vCPU and 4 GiB | 3 replicas of 2 vCPU and 8 GiB (Coder's reference for up to 1,000 users), one per node, spread over the zones; a PodDisruptionBudget lets node drains take only one down at a time |
+| Coder | 1 replica, 2 vCPU and 4 GiB | 2 replicas in active/standby (`global.platformHA.mode: activeStandby`), 2 vCPU and 8 GiB each (Coder's reference for up to 1,000 users), one per node, spread over the zones; a PodDisruptionBudget lets node drains take only one down at a time (its preStop hands over) |
 | Database (CloudNativePG) | 2 instances | 3 instances, one per zone. The operator promotes a replica when the primary fails, and Coder follows, because it connects through the `-rw` Service. The operator makes the database's own PodDisruptionBudgets. **Synchronous replication** (`database.synchronous`): a commit waits for one standby, so a failover loses no committed transaction |
 | Database pooler | none | PgBouncer (`database.pooler`, a CloudNativePG Pooler, 2 pods, transaction mode) for code-server HA's relays, whose connections then stop counting against PostgreSQL's `max_connections`; Coder and the replicator keep connecting to `-rw`. Its image, `ghcr.io/cloudnative-pg/pgbouncer:1.25.1`, must be in your registry |
 | Banner | 1 replica | 2 replicas, with a PodDisruptionBudget |
@@ -698,27 +708,28 @@ gives each replica what it needs to find the others: its pod IP as `CODER_DERP_S
 
 **What it needs:**
 
-- [ ] **A Coder license with the `high_availability` feature** (Deployment › Licenses). Without it, Coder warns
-      "You have multiple replicas but high availability is an Enterprise feature", and users on one replica cannot
-      reach workspaces connected to another.
-- [ ] **Nodes for Coder in 3 zones of one region**, in a static node group (one the autoscaler never scales down, so
-      no replica is dropped with its connections), with room for a 4th replica during a rollout. Under 10 ms
-      between them and to the database. Never across regions.
-- [ ] **Coder's pods reach each other on TCP 8080** (relayed workspace connections) **and 6222** (the replicas'
-      message bus). EKS's node security group allows traffic between nodes by default. With NetworkPolicies in
-      `coder`, allow both ports between the pods labelled `app.kubernetes.io/name: coder`.
+- [ ] **Nodes for Coder in 2 or more zones of one region**, in a static node group (one the autoscaler never scales
+      down), with room for a 3rd replica during a rollout. Under 10 ms between them and to the database. Never
+      across regions.
+- [ ] **The kubelet reaches each Coder pod's health port, TCP 2113** (the probes and the preStop handover). With
+      NetworkPolicies in `coder`, allow it.
+- [ ] **Coder may read and label its own pods.** The chart adds the Role `coder-platform-ha` (pods: get, patch) for
+      Coder's service account.
 - [ ] **Traefik with 2 or more replicas**, so the Gateway isn't a single pod: pass
       `prereqs/traefik-41.4.0.ha-values.yaml` after the reference values (2 replicas on separate nodes, spread over the
       zones, a PodDisruptionBudget), behind a load balancer in all three zones.
 
-**Upgrades.** A rolling update replaces one replica at a time, and each new replica is ready before an old one stops.
-Connections through a stopping replica drop for a moment and reconnect to another. A new Coder version
+**Switching on.** Switching a running install to active/standby costs one Coder start of downtime: the Service moves
+to the `active` label before any pod carries it.
+
+**Upgrades.** A rolling update replaces one replica at a time: the standbys first, then the active one, which hands
+over to a new replica in its preStop. Connections through Coder drop for a moment and reconnect. A new Coder version
 (`global.coderImages.upstream` changes, so the fork's upstream base changes) can bring database migrations, and old
 replicas can hold the locks those migrations need. Before such an upgrade, scale Coder to one replica, then upgrade:
 
 - **Plain Helm:** run `kubectl -n coder scale deploy/coder --replicas=1`, then `./install.sh ...` (Helm restores the
-  3 replicas on the new version).
-- **Argo CD:** set `coder.coder.replicaCount: 1` and sync, update, then set it back to 3. A `kubectl scale` would be
+  2 replicas on the new version).
+- **Argo CD:** set `coder.coder.replicaCount: 1` and sync, update, then set it back to 2. A `kubectl scale` would be
   undone by Argo CD's self-heal.
 
 The fork adds no migrations of its own, so a new fork build on the same upstream base upgrades with a plain rolling
@@ -735,8 +746,8 @@ at a time, the primary last. Coder's database requests pause while the primary m
   stays down if that zone is lost.
 - **The image builder's registry** (`coder-image-registry`, ReadWriteOnce). While it is down, nodes cannot pull
   images built in Templates › Images that they don't already have.
-- **Workspaces.** Each is one pod (or VM) with its volume in one zone. Coder's high availability keeps the dashboard
-  and connections up, but it does not protect a workspace whose node or zone is lost.
+- **Workspaces.** Each is one pod (or VM) with its volume in one zone. Platform HA keeps the dashboard and
+  connections up, but it does not protect a workspace whose node or zone is lost.
 
 **Sizing and monitoring** (Coder's [scale guide](https://coder.com/docs/tutorials/best-practices/scale-coder)):
 
@@ -765,7 +776,7 @@ at a time, the primary last. Coder's database requests pause while the primary m
 | Login page doesn't load | DNS and the Gateway's HTTPS certificate for `coder.<your-domain>` |
 | `admin` / `admin` is refused | The admin's password was changed, or the database was not fresh: `kubectl -n coder logs job/coder-bootstrap-first-user` |
 | No workspace template in Coder | `kubectl -n coder logs job/coder-bootstrap-first-user` and `job/coder-workspace-push-template` |
-| "You have multiple replicas but …" in Coder | High availability needs a license with `high_availability`. Until one is added, set `coder.coder.replicaCount: 1` |
+| "You have multiple replicas but …" in Coder | More than one replica runs Coder: Coder's own high availability needs a license with `high_availability`. Without one, use Platform HA's `global.platformHA.mode: activeStandby` (one replica runs Coder; `values-ha.example.yaml`), or set `coder.coder.replicaCount: 1` |
 | An upgrade hangs with a `coder` pod Pending | High availability: Coder's nodes have no room for the rollout's extra replica (`kubectl -n coder describe pod`) |
 | A new workspace waits in `ContainerCreating` | The Cloud Drive: `kubectl -n coder get pvc coder-safe-<user id>` (made by the platform service), `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-csi` (FUSE and systemd on the node) |
 | The Cloud Drive says its storage cannot be reached (a red dot) | `kubectl -n coder get pods -l app.kubernetes.io/name=coder-user-storage-minio`, or your S3's endpoint and keys (`userStorage.s3`, or the one in its Settings) |

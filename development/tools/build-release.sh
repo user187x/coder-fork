@@ -12,7 +12,9 @@
 #   IMAGES.txt                       per image: its reference, file(s), size, config digest, manifest digest
 #   INSTALL.md                       prerequisites (with the public images the chart runs, which your registry must have),
 #                                    push, the one helm install, the first sign-in (release/INSTALL.md.in)
-#   values-eks-airgap.example.yaml   the values to start from
+#   values-eks-airgap.example.yaml   the values to start from; values-ha.example.yaml, high availability on top
+#   gateway-api-*.yaml, traefik-*.tgz, traefik-*-values.yaml, cloudnative-pg-*.tgz
+#                                    the prerequisites (helm-chart/prereqs; INSTALL.md step 0)
 #   SHA256SUMS                       every file in the folder, parts one by one (sha256sum -c SHA256SUMS works as is)
 #   SHA256SUMS.joined                the split archives as joined (<file>.tar.gz), when any is split
 #   CVE-REPORT.md                    with --scan / --scan-only
@@ -302,7 +304,9 @@ build_release() {
 	find "$chart_copy" -name __pycache__ -type d -prune -exec rm -rf {} +
 	helm package "$chart_copy" -d "$stage" >/dev/null 2>"$tmp/package.log" || { cat "$tmp/package.log" >&2; die "helm package failed"; }
 	[[ -f "$stage/coder-airgapped-${version}.tgz" ]] || die "helm package wrote no coder-airgapped-${version}.tgz"
-	cp "${bundle}/values-eks-airgap.example.yaml" "$stage/"
+	cp "${bundle}/values-eks-airgap.example.yaml" "${bundle}/values-ha.example.yaml" "$stage/"
+	# the prerequisites, so a release folder installs on its own (INSTALL.md step 0)
+	cp "${bundle}"/prereqs/{gateway-api-v1.6.0-standard-install.yaml,traefik-41.4.0.tgz,traefik-41.4.0.reference-values.yaml,traefik-41.4.0.ha-values.yaml,cloudnative-pg-0.29.0.tgz} "$stage/"
 	install -m 0755 "${templates}/push-images.sh" "$stage/push-images.sh"
 
 	# INSTALL.md from its template

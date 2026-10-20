@@ -129,8 +129,13 @@ ports:
 {{- if .Values.coder.readinessProbe.enabled }}
 readinessProbe:
   httpGet:
+    {{- if eq (include "coder.platformHAMode" .) "activeStandby" }}
+    path: /readyz
+    port: 2113
+    {{- else }}
     path: /healthz
     port: "http"
+    {{- end }}
     scheme: "HTTP"
   initialDelaySeconds: {{ .Values.coder.readinessProbe.initialDelaySeconds }}
   {{- if hasKey .Values.coder.readinessProbe "periodSeconds" }}
@@ -149,8 +154,13 @@ readinessProbe:
 {{- if .Values.coder.livenessProbe.enabled }}
 livenessProbe:
   httpGet:
+    {{- if eq (include "coder.platformHAMode" .) "activeStandby" }}
+    path: /livez
+    port: 2113
+    {{- else }}
     path: /healthz
     port: "http"
+    {{- end }}
     scheme: "HTTP"
   initialDelaySeconds: {{ .Values.coder.livenessProbe.initialDelaySeconds }}
   {{- if hasKey .Values.coder.livenessProbe "periodSeconds" }}
@@ -167,3 +177,7 @@ livenessProbe:
   {{- end }}
 {{- end }}
 {{- end }}
+
+{{- define "coder.platformHAMode" -}}
+{{- dig "platformHA" "mode" "off" (.Values.global | default dict) -}}
+{{- end -}}

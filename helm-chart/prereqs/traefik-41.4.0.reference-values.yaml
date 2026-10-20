@@ -74,7 +74,7 @@ gateway:
     https:
       certificateRefs:
       - kind: Secret
-        name: grey-marshall-tls
+        name: coder-airgapped-tls   # a kubernetes.io/tls Secret in the traefik namespace: the wildcard certificate
       namespacePolicy:
         from: All
       port: 8443

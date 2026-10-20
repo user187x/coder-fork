@@ -11,6 +11,8 @@ platform with one `helm install`.
 | `push-images.sh` | Checks the files, then loads each image and pushes it to your registry (docker only) |
 | `IMAGES.txt` | Each image: its reference, file(s), size, config and manifest digests |
 | `values-eks-airgap.example.yaml` | The values to start `my-values.yaml` from |
+| `values-ha.example.yaml` | High availability, on top of your values |
+| `gateway-api-v1.6.0-standard-install.yaml`, `traefik-41.4.0.tgz`, `traefik-41.4.0.reference-values.yaml`, `traefik-41.4.0.ha-values.yaml`, `cloudnative-pg-0.29.0.tgz` | The prerequisites (step 0) |
 | `SHA256SUMS` | Every file here (`sha256sum -c SHA256SUMS`); `SHA256SUMS.joined`: the split archives, joined |
 | `CVE-REPORT.md` | The release's CVE scan (when it was built with one) |
 
@@ -19,16 +21,19 @@ platform with one `helm install`.
 The cluster needs these already:
 
 - **Kubernetes 1.27 or newer with amd64 (x86_64) nodes** – the images are amd64 only.
-- **Gateway API CRDs v1.6.0** (standard channel).
-- **Traefik v3** with the Gateway API provider and a Gateway `traefik/traefik-gateway` serving HTTPS for
-  `coder.<your-domain>` and `*.<your-domain>`, with Traefik's **`rewrite-body` local plugin** (the announcement
-  banner's middlewares use it; the source repository's `helm-chart/prereqs/traefik-*.reference-values.yaml` carries
-  it under `experimental.localPlugins`). Tested: @TRAEFIK@.
-- **The CloudNativePG operator.** Tested: @CNPG@.
-- **DNS** for `coder.<your-domain>` and `*.<your-domain>`.
+- **DNS** for `coder.<your-domain>` and `*.<your-domain>` – from your users' machines **and from inside the
+  cluster**: workspace agents and the chart's Jobs (the first user, the template pushes) reach Coder at
+  `https://coder.<your-domain>`, and without it they fail quietly. A cluster with no such DNS (minikube, kind) can
+  have CoreDNS answer it with the Gateway: in `kubectl -n kube-system edit configmap coredns`, add to the `.:53`
+  block `rewrite name regex (.*)\.<your-domain> traefik.traefik.svc.cluster.local answer auto` (the domain's dots
+  escaped), then `kubectl -n kube-system rollout restart deploy/coredns`.
+- **Your certificate:** `ca.crt` (the CA that signed it) and `wildcard.crt` / `wildcard.key` for `*.<your-domain>`.
 - **A container registry** (ECR, Harbor, ...) – `$REGISTRY` below, the chart's `global.registry` – that already holds
   the **public images** the chart runs, under the same paths (the source host left out). This release carries none
-  of them:
+  of them (nor the prerequisites' two images, step 0). No registry - a single minikube node without internet? Load every image into the node instead (`docker
+  load`, then `minikube image load`): ours from this folder, the public ones saved on a connected machine by the
+  digests below, plus the prerequisites' (`ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0`, `docker.io/traefik:v3.7.12`),
+  and set `global.registry: ""`.
 
 | In your registry | Pull it on a connected machine as (tested digest) |
 |---|---|
@@ -45,6 +50,24 @@ Files: `ca.crt` (the CA that signed your HTTPS certificate), `wildcard.crt` / `w
 `*.<your-domain>`), and for OIDC sign-in (Keycloak) `keycloak-ca.crt` and the client secret.
 Tools: `docker`, `helm`, `kubectl` (and `aws` for ECR).
 
+## 0. The prerequisites (this folder carries them)
+
+```bash
+kubectl apply --server-side -f gateway-api-v1.6.0-standard-install.yaml          # Gateway API CRDs v1.6.0
+kubectl create namespace traefik
+kubectl -n traefik create secret tls coder-airgapped-tls --cert=wildcard.crt --key=wildcard.key
+helm upgrade --install traefik traefik-41.4.0.tgz -n traefik --wait \
+  -f traefik-41.4.0.reference-values.yaml \
+  --set image.registry=$REGISTRY                   # its image from your registry ($REGISTRY/traefik:v3.7.12)
+helm upgrade --install cnpg cloudnative-pg-0.29.0.tgz -n cnpg-system --create-namespace --wait \
+  --set image.repository=$REGISTRY/cloudnative-pg/cloudnative-pg --set image.tag=1.30.0
+```
+
+Traefik's reference values carry the Gateway `traefik/traefik-gateway` (HTTPS with the `coder-airgapped-tls`
+Secret) and the `rewrite-body` local plugin the announcement banner's middlewares use. For high availability add
+`-f traefik-41.4.0.ha-values.yaml`. Skip any of these the cluster already has. Tested: @TRAEFIK@, CloudNativePG
+@CNPG@.
+
 ## 1. Push the images
 
 ```bash
@@ -60,6 +83,11 @@ It checks every file against `SHA256SUMS` first, then loads, tags and pushes eac
 ```bash
 cp values-eks-airgap.example.yaml my-values.yaml    # change every CHANGE-ME (global.registry: $REGISTRY, the domain, ...)
 ```
+
+Kubelets with self-signed serving certificates (minikube, kind, kubeadm's defaults) need
+`metricsServer: {kubeletInsecureTLS: true}`, else metrics-server cannot read them. For high availability pass
+`-f values-ha.example.yaml` after your values (one Coder serves, a standby takes over; the database's synchronous
+standby and pooler).
 
 ## 3. Install
 
@@ -86,5 +114,8 @@ Open `https://coder.<your-domain>` and sign in as **`admin@admin.com`** / **`adm
 once (your avatar › Account › Security).
 
 The image builder (Templates › Images) builds on the workspace image in your registry: nothing more to set up.
+The dashboard's default logo and avatar (which the source repository's `install.sh` makes from its `defaults/`) are
+optional: without them it shows Coder's, and an admin sets the platform's in Admin Settings › Appearance (the image
+store offers the platform's logo, `minecraft-cube.gif`).
 
 The next release: push its images, then `helm upgrade coder coder-airgapped-<next>.tgz -n coder` with the same options.

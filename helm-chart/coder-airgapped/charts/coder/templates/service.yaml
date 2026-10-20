@@ -43,4 +43,7 @@ spec:
   {{- end }}
   selector:
     {{- include "coder.selectorLabels" . | nindent 4 }}
+    {{- if eq (include "coder.platformHAMode" .) "activeStandby" }}
+    coder-airgapped/ha-role: active
+    {{- end }}
 {{- end }}

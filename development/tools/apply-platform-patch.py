@@ -11,8 +11,12 @@ so one set of `global:` values (set from the umbrella chart or an Argo CD Applic
   * every template file (*.yaml, NOTES.txt) gets  {{- include "<prefix>.platform.values" . -}}  as its first line.
   * checksum/* annotations are quoted (an all-digit hash would otherwise be read as a number and rejected).
   * Chart.yaml's version gets a "-platform.N" suffix.
+  * --coder-ha (coder chart only): with global.platformHA.mode activeStandby (Platform HA), the probes go to the
+    replica's health port (2113: /readyz, /livez - a standby serves no Coder port), the Service selects the active pod
+    only (label coder-airgapped/ha-role=active) and the preStop hands the active lease over (/handover, in place of
+    upstream's sleep: the Service follows the label, not the pod's endings); any other mode renders exactly upstream's.
 
-Usage: apply-platform-patch.py CHART_DIR PREFIX PULL_SECRETS_PATH [--extra-env] [--suffix platform.1]
+Usage: apply-platform-patch.py CHART_DIR PREFIX PULL_SECRETS_PATH [--extra-env] [--coder-ha] [--suffix platform.1]
   PULL_SECRETS_PATH  dotted path of the chart's pull-secret list, e.g. coder.image.pullSecrets or imagePullSecrets
 """
 import argparse, os, re, sys
@@ -69,10 +73,52 @@ are harmless), then applies global.imagePullSecrets to %(ps)s when that is empty
 '''
 
 
+# Platform HA's activeStandby (global.platformHA.mode), for the coder chart: probes on the replica's health port (a
+# standby serves no Coder port), the Service on the active pod only, the preStop handover. Any other mode: upstream's.
+HA_MODE = """{{- define "coder.platformHAMode" -}}
+{{- dig "platformHA" "mode" "off" (.Values.global | default dict) -}}
+{{- end -}}
+"""
+
+
+def coder_ha(chart):
+    """The coder chart's probes, Service selector and preStop for activeStandby (idempotent; fails when upstream's text
+    moved)."""
+    def edit(path, old, new):
+        s = open(path).read()
+        if new in s:
+            return
+        if old not in s:
+            sys.exit("--coder-ha: expected text not found in %s:\n%s" % (path, old))
+        open(path, "w").write(s.replace(old, new, 1))
+
+    tpl = os.path.join(chart, "templates", "_coder.tpl")
+    if HA_MODE not in open(tpl).read():
+        open(tpl, "a").write("\n" + HA_MODE)
+    for probe, ha_path in (("readinessProbe", "/readyz"), ("livenessProbe", "/livez")):
+        edit(tpl, '%s:\n  httpGet:\n    path: /healthz\n    port: "http"\n' % probe,
+             '%s:\n  httpGet:\n'
+             '    {{- if eq (include "coder.platformHAMode" .) "activeStandby" }}\n'
+             '    path: %s\n    port: 2113\n'
+             '    {{- else }}\n    path: /healthz\n    port: "http"\n    {{- end }}\n' % (probe, ha_path))
+    edit(os.path.join(chart, "templates", "service.yaml"),
+         '  selector:\n    {{- include "coder.selectorLabels" . | nindent 4 }}\n',
+         '  selector:\n    {{- include "coder.selectorLabels" . | nindent 4 }}\n'
+         '    {{- if eq (include "coder.platformHAMode" .) "activeStandby" }}\n'
+         '    coder-airgapped/ha-role: active\n    {{- end }}\n')
+    edit(os.path.join(chart, "charts", "libcoder", "templates", "_coder.yaml"),
+         'lifecycle:\n  {{- toYaml .Values.coder.lifecycle | nindent 2 }}\n',
+         'lifecycle:\n'
+         '  {{- if eq (include "coder.platformHAMode" .) "activeStandby" }}\n'
+         '  preStop:\n    httpGet: {path: /handover, port: 2113}\n'
+         '  {{- else }}\n  {{- toYaml .Values.coder.lifecycle | nindent 2 }}\n  {{- end }}\n')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("chart"); ap.add_argument("prefix"); ap.add_argument("pull_secrets")
-    ap.add_argument("--extra-env", action="store_true"); ap.add_argument("--suffix", default="platform.1")
+    ap.add_argument("--extra-env", action="store_true"); ap.add_argument("--coder-ha", action="store_true")
+    ap.add_argument("--suffix", default="platform.1")
     a = ap.parse_args()
     parts = a.pull_secrets.split(".")
     ps = ".Values." + a.pull_secrets
@@ -101,6 +147,8 @@ def main():
     if n != 1:
         sys.exit("could not set the version in " + cp)
     open(cp, "w").write(s)
+    if a.coder_ha:
+        coder_ha(a.chart)
     print("patched", a.chart)
 
 

@@ -1,4 +1,5 @@
-# High availability: Coder on 3 replicas across 3 availability zones, its database on 3 instances (one per zone) with
+# High availability: Coder on 2 replicas in Platform HA's activeStandby (one serves, the other takes over: no license
+# needed - docs/adr/0001-platform-ha.md), across availability zones, its database on 3 instances (one per zone) with
 # synchronous replication and a PgBouncer pooler, the announcement banner and metrics-server on 2 each; every component
 # with more than one replica gets a PodDisruptionBudget. Pass it after your own values (it sets no list you set there:
 # Helm replaces lists):
@@ -6,22 +7,25 @@
 # With Argo CD, put the same keys in the Application's valuesObject.
 #
 # Needs (DEPLOY.md "High availability"):
-#   - a Coder license with the high_availability feature: without it, several replicas cannot reach each other's
-#     workspaces;
-#   - nodes for Coder in 3 zones of one region, with room for a 4th replica during a rollout, under 10 ms from each
-#     other and from the database;
-#   - TCP 8080 and 6222 open between Coder's pods (security groups, NetworkPolicies);
+#   - nodes for Coder in 2 or more zones of one region, with room for a 3rd replica during a rollout, under 10 ms from
+#     each other and from the database;
+#   - the kubelet reaching each Coder pod's health port, TCP 2113 (probes, the preStop handover; NetworkPolicies);
 #   - Traefik with 2 or more replicas (prereqs/traefik-41.4.0.ha-values.yaml);
 #   - the pooler's image in your registry: ghcr.io/cloudnative-pg/pgbouncer:1.25.1 (images.txt).
-# Platform HA (docs/adr/0001-platform-ha.md) will run Coder's replicas without the license; until its active/standby
-# and active/active modes ship, keep Coder at 1 replica unless you have that license.
+
+global:
+  platformHA:
+    # One Coder serves at a time (the pod labeled coder-airgapped/ha-role=active, which the Service selects); the
+    # standby takes over within about a lease (12 s measured) when it fails, and a rolling update hands over with
+    # about 2 s without Coder (the old pod leaves the endpoints when it is deleted).
+    mode: activeStandby
 
 coder:
   coder:
-    replicaCount: 3
+    replicaCount: 2
     # Each replica's size: Coder's reference for up to 1,000 users, 2 vCPU and 8 GiB (the chart's default has 4 GiB),
-    # requests equal to limits so a node under pressure never evicts a replica first. Each replica also runs 3
-    # provisioners (workspace builds), so 3 replicas build 9 workspaces at a time.
+    # requests equal to limits so a node under pressure never evicts a replica first. Only the active replica runs
+    # Coder and its 3 provisioners (workspace builds); the standby keeps its room so it can take over at once.
     resources:
       requests: {cpu: 2000m, memory: 8Gi}
       limits: {cpu: 2000m, memory: 8Gi}

@@ -48,8 +48,8 @@ def ha_checks(B, ha_render, default_render):
            "coder-db": docs.get(("Cluster", "coder-db"), {}).get("spec", {}).get("instances"),
            "coder-banner": docs.get(("Deployment", "coder-banner"), {}).get("spec", {}).get("replicas"),
            "budget": docs.get(("PodDisruptionBudget", "coder"), {}).get("spec")}
-    check("high availability: 3 Coder replicas (one down at a time), 3 database instances, 2 banners",
-          got == {"coder": 3, "coder-db": 3, "coder-banner": 2, "budget": {
+    check("high availability: 2 Coder replicas (one down at a time), 3 database instances, 2 banners",
+          got == {"coder": 2, "coder-db": 3, "coder-banner": 2, "budget": {
               "maxUnavailable": 1, "selector": {"matchLabels": {"app.kubernetes.io/name": "coder",
                                                                 "app.kubernetes.io/instance": "coder"}}}}, got)
     check("one Coder replica: no PodDisruptionBudget", ("PodDisruptionBudget", "coder") not in objects(default_render))
@@ -86,6 +86,33 @@ def ha_checks(B, ha_render, default_render):
           and denv.get("CODER_PLATFORM_HA_LEASE_TTL") == "10s" and denv.get("CODER_PLATFORM_HA_RENEW_INTERVAL") == "3s"
           and denv.get("CODER_PLATFORM_HA_POD_NAME") == {"fieldRef": {"fieldPath": "metadata.name"}}
           and denv.get("CODER_PLATFORM_HA_POD_IP") == {"fieldRef": {"fieldPath": "status.podIP"}}, denv)
+    # ADR-0001 phase 2: activeStandby - the Service on the active pod only, probes on the health port, the preStop
+    # hands over; any other mode renders upstream's
+    def coder_spec(objs):
+        dep = objs.get(("Deployment", "coder"), {})
+        c = (dep.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or [{}])[0]
+        svc = objs.get(("Service", "coder"), {}).get("spec", {}).get("selector", {})
+        return svc, (c.get("readinessProbe") or {}).get("httpGet"), (c.get("lifecycle") or {}).get("preStop")
+    hsvc, hprobe, hstop = coder_spec(docs)
+    henv = ha_env(docs)
+    check("high availability: activeStandby - the Service on the active pod only, readiness on the health port, the "
+          "preStop hands over, the handover timeout inside the grace period",
+          henv.get("CODER_PLATFORM_HA_MODE") == "activeStandby"
+          and hsvc.get("coder-airgapped/ha-role") == "active"
+          and hprobe == {"path": "/readyz", "port": 2113, "scheme": "HTTP"}
+          and hstop == {"httpGet": {"path": "/handover", "port": 2113}}
+          and henv.get("CODER_PLATFORM_HA_HANDOVER_TIMEOUT") == "40s", {"svc": hsvc, "probe": hprobe, "preStop": hstop})
+    hrole = docs.get(("Role", "coder-platform-ha"), {}).get("rules") or []
+    hbind = docs.get(("RoleBinding", "coder-platform-ha"), {})
+    check("high availability: activeStandby - Coder may read and label its own pods (its own Role, whatever "
+          "workspacePerms says)",
+          hrole == [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "patch"]}]
+          and [x.get("name") for x in hbind.get("subjects") or []] == ["coder"]
+          and ("Role", "coder-platform-ha") not in dflt, {"rules": hrole, "binding": hbind.get("subjects")})
+    dsvc, dprobe, dstop = coder_spec({(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d})
+    check("default: Coder's Service, probe and preStop exactly upstream's",
+          "coder-airgapped/ha-role" not in dsvc and dprobe == {"path": "/healthz", "port": "http", "scheme": "HTTP"}
+          and dstop == {"exec": {"command": ["/bin/sleep", "15"]}}, {"svc": dsvc, "probe": dprobe, "preStop": dstop})
     check("default: no synchronous replication, no pooler, the relays on -rw (as before)",
           not ddb.get("postgresql") and not ddb.get("certificates") and ("Pooler", "coder-db-pooler-rw") not in dflt
           and "@coder-db-rw.coder.svc:5432/" in druri, "")
@@ -940,6 +967,22 @@ def main():
         ok = rc == 0 and "aiTemplates" not in out and rc2 != 0 and "unknown option: --ai" in err2
         check("argocd/update-application.sh: no AI template (no --ai, no aiTemplates written)", ok,
               (err2 or out2 or err or out).strip()[-300:] if not ok else "")
+    # the release folder installs on its own: every prerequisite INSTALL.md names, build-release.sh copies, and the
+    # source has (a version bump in helm-chart/prereqs must update all three); the Traefik values' Secret is the
+    # one INSTALL.md and ./make create
+    install_in = open(os.path.join(os.path.dirname(B), "development", "tools", "release", "INSTALL.md.in")).read()
+    release_sh = open(os.path.join(os.path.dirname(B), "development", "tools", "build-release.sh")).read()
+    prereqs = sorted(os.listdir(os.path.join(B, "prereqs")))
+    copied = re.search(r'prereqs/\{([^}]+)\}', release_sh)
+    copied = sorted(copied.group(1).split(",")) if copied else []
+    named = sorted(set(re.findall(r'`((?:gateway-api|traefik|cloudnative-pg)-[^`]+)`', install_in)))
+    check("release: ships every prerequisite (helm-chart/prereqs = build-release.sh's copy = INSTALL.md's list)",
+          prereqs == copied == named, "prereqs %s, copied %s, INSTALL.md %s" % (prereqs, copied, named))
+    ref = open(os.path.join(B, "prereqs", "traefik-41.4.0.reference-values.yaml")).read() \
+        if "traefik-41.4.0.reference-values.yaml" in prereqs else ""
+    check("release: Traefik's reference values use the coder-airgapped-tls Secret (INSTALL.md step 0, ./make)",
+          "name: coder-airgapped-tls" in ref and "grey-marshall" not in ref
+          and "secret tls coder-airgapped-tls" in install_in, "")
     # the layer bundle's helper (Python): compiles, and answers --help
     rc, out, err = run([sys.executable, os.path.join(B, "layer-support"), "--help"])
     check("layer-support: runs (--help)", rc == 0 and "layer-support build" in out, (err or "").strip()[-200:])

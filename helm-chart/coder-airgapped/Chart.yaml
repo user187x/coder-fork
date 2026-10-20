@@ -7,8 +7,8 @@ description: >-
   the DEFAULT workspace template and its icon server. Every dependency is vendored in charts/,
   so the chart installs with no network access.
 type: application
-version: 1.41.0
-appVersion: "2.0.0-platform.99"
+version: 1.42.0
+appVersion: "2.0.0-platform.101"
 kubeVersion: ">=1.27.0-0"
 keywords:
   - coder

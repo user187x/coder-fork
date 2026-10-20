@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.42.0 – 2026-10-20
+
+Coder `2.0.0-platform.101` (fork `98c3d3f4c`); the workspace images as 1.41.0's (workspace 1.9.4, dataflow 1.1.4).
+
+* **Platform HA phase 2: active/standby Coder** (fork `coderd/platformha`, Community code; chart
+  `global.platformHA.mode: activeStandby` with `coder.coder.replicaCount` 2 or more, off by default;
+  `values-ha.example.yaml` turns it on).
+  * **One replica runs Coder; the others wait warm.** They don't start Coder until their turn, so an unlicensed
+    deployment never runs two Coder replicas and never reports the multiple-replicas entitlement error. The active
+    replica holds the lease `coder-active` (compare-and-set, fenced like the registry lease).
+  * **Routing:** the active pod is labeled `coder-airgapped/ha-role=active`, and the coder Service selects that
+    label. The active pod also has a higher `pod-deletion-cost`, so rolling updates remove the standbys first.
+  * **Health server** on port 2113: probes `/livez` and `/readyz` (a standby is ready, so rollouts never wait on it),
+    plus `/status`.
+  * **Rolling updates:** the preStop hook calls `/handover`, which only acts while the pod is terminating. The
+    successor starts Coder and takes traffic before the leader lets go.
+  * **Crashes:** a standby watching the lease takes it once it lapses. A replica that loses the lease any other way
+    exits and comes back as a standby.
+  * **RBAC:** Coder may read and label its own pods (Role `coder-platform-ha`).
+  * **Measured live:** a crash is back through Traefik after **12.3–12.8 s**; a rolling restart has **about 2 s**
+    without Coder (1.9–2.1 s; the old pod leaves the endpoints the moment it is deleted); no entitlement warning.
+  * **Tested:** a full uninstall and reinstall of the coder namespace, and sign-in with Keycloak.
+  * **Tests:** 9 against PostgreSQL, 20× under the race detector:
+    * a crash takeover;
+    * a handover with the successor serving before the leader lets go;
+    * a standby or successor leaving mid-rollout;
+    * the let-go lease kept for the successor;
+    * a void claim stopping Coder.
+  * Switching a running install to activeStandby costs one Coder start of downtime.
+* **The release folder installs on its own** (from a plain `helm install` on a fresh 2-node minikube):
+  * **Prerequisites shipped:** the Gateway API CRDs, Traefik's chart with its reference and HA values, and
+    CloudNativePG's chart, with INSTALL.md's new step 0. Traefik's values use the TLS Secret `coder-airgapped-tls`.
+  * **INSTALL.md covers:**
+    * in-cluster DNS (a CoreDNS rewrite);
+    * `metricsServer.kubeletInsecureTLS` for self-signed kubelets;
+    * the optional logo;
+    * loading images into a node without a registry.
+  * **Defaults:** the database's and the platform service's storage classes default to the cluster's (`""`). An
+    existing volume keeps its class.
+* **code-server HA's replicator waits for the database** on a fresh install instead of crash-looping: while it is
+  refused or starting up, and while the other replica creates the same schema at the same moment.
+* **The install NOTES** no longer point at template-push Jobs, which are deleted once they succeed.
+
 ## 1.41.0 – 2026-10-20
 
 Coder `2.0.0-platform.99` (fork `f69299bdc`); the workspace images as 1.40.1's (workspace 1.9.4, dataflow 1.1.4).

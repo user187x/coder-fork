@@ -372,7 +372,7 @@ Both are small, write-light and indexed by `replica_id`. Nothing in `public` cha
 | Dimension | Assessment |
 |---|---|
 | Complexity | Low: a lease and a readiness check; no coordinator or DERP changes |
-| Availability | Failover in about TTL + readiness, so 10–15 s |
+| Availability | Failover in about TTL + readiness, so 10–15 s (measured: 12.3–12.8 s; a rolling update about 2 s) |
 | Scalability | None beyond one replica |
 | Fit | **Adopted as Phase 2**: HA soon at low risk, and kept as a mode for small installs |
 
@@ -470,7 +470,7 @@ Both are small, write-light and indexed by `replica_id`. Nothing in `public` cha
 
 ## Action items
 
-1. [ ] Owner: approve this ADR and confirm the Compliance reading.
+1. [x] Owner: approve this ADR and confirm the Compliance reading (approved 2026-10-20).
 2. [x] Phase 0: values and templates for CloudNativePG (3 instances, sync, Pooler), Traefik, PDBs and spread, and the
    `values-ha.example.yaml` update.
 3. [x] Phase 1: the replica registry (`coderd/platformha`): the `platform_ha` schema bootstrap, leases under epochs,
@@ -478,7 +478,27 @@ Both are small, write-light and indexed by `replica_id`. Nothing in `public` cha
    a replica fences with a full renew interval of its lease left - 297-301 ms of 300 over 25 runs), rejoin under a
    new epoch, metrics; `global.platformHA.mode: registry`. The EndpointSlice membership watch moves to Phase 3,
    where the mesh needs fast failure detection (the fork has no Kubernetes client yet).
-4. [ ] Phase 2: the leader-gated readiness mode. Add chart `platformHA.mode`, and live checks for the failover.
+4. [x] Phase 2: `global.platformHA.mode: activeStandby` (Coder 2.0.0-platform.101). Built as a **warm** standby, not
+   leader-gated readiness: a standby does not start Coder at all until its turn. Two running Coder replicas would
+   both run background work, and the unlicensed Enterprise binary reports more than one replica as an entitlement
+   **error** ("You will be unable to connect to workspaces"), which we may not hide. The pieces:
+   - the active lease `coder-active` in `platform_ha.leases` (compare-and-set, fenced like the registry lease);
+   - the pod labeled `coder-airgapped/ha-role=active|standby`, the Service selecting `active`, and a higher
+     `pod-deletion-cost` on the active pod so rollouts remove standbys first;
+   - a health server on port 2113 (`/livez`, `/readyz`, `/status`, and `/handover` for the preStop hook);
+   - a handover in which the successor starts Coder and takes traffic before the leader lets go, with the let-go
+     lease reserved for it;
+   - a standby watching the lease every 250 ms, so neither a handover nor a takeover waits for a renewal round.
+
+   Measured live (one node; Coder starts in about 50 ms once its turn comes):
+   - a crash (the container killed, no preStop): back through Traefik after **12.3–12.8 s** (the 10 s lease);
+   - a rolling restart: **about 2 s** without Coder. The old pod leaves the endpoints the moment it is deleted,
+     and Traefik follows the new endpoint within about 1.5 s.
+
+   The rolling-update gap would close with a proactive handover to a newer-revision standby before the leader's
+   pod is deleted; that is left for later, and active/active (Phase 3) has none. A crashed leader's container,
+   restarted in place, can win the lapsed lease back as a fresh standby; preferring the longest-running ready
+   standby (anyone after one more lease) is the next refinement, so a crash-looping pod cannot keep retaking it.
 5. [ ] Phase 3:
    - `meshcoord`, the `NewCoordinator` factory, `derpcell`, and the `DERPMap()` composition;
    - drain;

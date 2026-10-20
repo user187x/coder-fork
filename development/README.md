@@ -54,7 +54,7 @@ Not in this repository: secrets, the database dump, the fork's git bundle and th
 ## Upgrading a vendored subchart
 
 Unpack the new upstream chart over `../helm-chart/coder-airgapped/charts/<name>/`, then
-`tools/apply-platform-patch.py <dir> coder coder.image.pullSecrets --extra-env` (banner:
+`tools/apply-platform-patch.py <dir> coder coder.image.pullSecrets --extra-env --coder-ha` (banner:
 `<dir> coder-banner imagePullSecrets`), and update the dependency version in the umbrella `Chart.yaml`. Compare
 with `tools/render-diff.py` against a render from before the upgrade.
 

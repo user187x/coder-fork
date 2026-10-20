@@ -92,7 +92,12 @@ resources:
       memory: 4096Mi
   {{- end }}
 lifecycle:
+  {{- if eq (include "coder.platformHAMode" .) "activeStandby" }}
+  preStop:
+    httpGet: {path: /handover, port: 2113}
+  {{- else }}
   {{- toYaml .Values.coder.lifecycle | nindent 2 }}
+  {{- end }}
 securityContext: {{ toYaml .Values.coder.securityContext | nindent 2 }}
 {{ include "coder.volumeMounts" . }}
 {{- end -}}

@@ -20,7 +20,12 @@ metadata:
     argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   accessModes: [ReadWriteOnce]
-  {{- with $ui.persistence.storageClass }}
+  {{- /* an existing claim keeps its storage class (it cannot change); a new one takes the value, empty: the default */}}
+  {{- $sc := $ui.persistence.storageClass }}
+  {{- with (lookup "v1" "PersistentVolumeClaim" $ns "coder-ui-updates-data") }}
+  {{- $sc = .spec.storageClassName | default $sc }}
+  {{- end }}
+  {{- with $sc }}
   storageClassName: {{ . }}
   {{- end }}
   resources:

@@ -2,7 +2,7 @@
 keep it fast under load, and keep the image builder honest offline. Imported as modules, nothing started.
 
   python3 -m unittest platform_unit_test.py"""
-import importlib.util, json, os, sys, threading, unittest, urllib.parse
+import contextlib, importlib.util, io, json, os, sys, threading, unittest, urllib.parse
 from unittest import mock
 
 SRC = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -2883,6 +2883,32 @@ class CodeServerHATest(unittest.TestCase):
         self.assertTrue(all("SECURITY DEFINER SET search_path" in x for x in st if "FUNCTION code_server_ha." in x
                             and x.startswith("CREATE")))
         self.assertIn("REVOKE ALL ON SCHEMA code_server_ha FROM PUBLIC;", st)
+
+    def test_it_waits_for_a_database_that_is_not_up_yet(self):
+        # a fresh install: refused, then "starting up", then the schema goes in - no crash loop
+        pg = self.c.pgwire
+        class DB:
+            def __init__(self, fails):
+                self.fails, self.statements = list(fails), 0
+            def query(self, stmt):
+                if self.fails:
+                    raise self.fails.pop(0)
+                self.statements += 1
+        slept = []
+        db = DB([ConnectionRefusedError(111, "refused"), pg.PgError({"C": "57P03", "M": "the database system is starting up"}),
+                 # both replicas create the schema at once: CREATE SCHEMA IF NOT EXISTS races
+                 pg.PgError({"C": "23505", "M": 'duplicate key value violates unique constraint "pg_namespace_nspname_index"'})])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.c.wait_for_schema(db, sleep=slept.append)
+        self.assertEqual(slept, [2, 4, 8])
+        self.assertEqual(db.statements, len(self.c.statements(self.c.SCHEMA) + self.c.statements(self.c.GRANTS)))
+        # a real error is not waited out
+        with self.assertRaises(pg.PgError):
+            self.c.wait_for_schema(DB([pg.PgError({"C": "42501", "M": "permission denied"})]), sleep=slept.append)
+        self.assertEqual(slept, [2, 4, 8])
+        # nor a database that never comes up
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(OSError):
+            self.c.wait_for_schema(DB([ConnectionRefusedError(111, "refused")] * 99), timeout=10, sleep=lambda s: None)
 
     def test_an_instance_pod(self):
         inst = {"workspace_id": "11111111-2222-3333-4444-555555555555", "image": "ws:1", "home_pvc": "coder-x-home",

@@ -194,7 +194,7 @@ traefik() { # [pinned ClusterIP]
 	if ((LAYER)) && ! carried prereqs/traefik-41.4.0.tgz; then
 		say "Traefik: chart 41.4.0 in place (checked); its certificate secret updated"; return 0
 	fi
-	sed 's/name: grey-marshall-tls/name: coder-airgapped-tls/' "${here}/prereqs/traefik-41.4.0.reference-values.yaml" >"$vals"
+	cp "${here}/prereqs/traefik-41.4.0.reference-values.yaml" "$vals"   # its TLS Secret: coder-airgapped-tls (made above)
 	if [[ -n "$pin" ]]; then
 		cur=$(kube -n traefik get svc traefik -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
 		if [[ -z "$cur" || "$cur" == "$pin" ]]; then args+=(--set "service.spec.clusterIP=$pin"); say "Traefik keeps $pin (what coder.${DOMAIN} already resolves to)"

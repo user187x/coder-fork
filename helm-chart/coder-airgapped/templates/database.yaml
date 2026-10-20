@@ -22,7 +22,12 @@ spec:
   primaryUpdateStrategy: {{ $db.primaryUpdateStrategy }}
   storage:
     size: {{ $db.storage.size }}
-    {{- with $db.storage.storageClass }}
+    {{- /* an existing Cluster keeps its storage class (it cannot change); a new one takes the value, empty: the default */}}
+    {{- $sc := $db.storage.storageClass }}
+    {{- with (lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace $db.name) }}
+    {{- $sc = .spec.storage.storageClass | default $sc }}
+    {{- end }}
+    {{- with $sc }}
     storageClass: {{ . }}
     {{- end }}
   {{- with $db.affinity }}
