@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.89` (fork `7b903b141`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.90` (fork `e94a535e1`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
@@ -16,7 +16,8 @@ is a plug-in now (`dist/plugins/`, not in the bundle).
   level further (patch, minor, major, up to the one chosen: as many laps as levels). pip refuses environments the
   distribution or uv manage (PEP 668), so for Python Copa patches a copy of the source whose configuration sets
   `PIP_BREAK_SYSTEM_PACKAGES=1` (the same layers; the Dockerfile fix uses `--break-system-packages` alike), taken out
-  of the patched image again. Node.js packages are left out: Copa patches them through a tooling image from Docker
+  of the patched image again (checked live: an image with old urllib3 and requests in Ubuntu's system Python, 12 of 12
+  findings fixed over three laps - patch, minor, major). Node.js packages are left out: Copa patches them through a tooling image from Docker
   Hub, and on the AI image that failed the whole patch. The page shows the pit lane (the car at its station, the
   laps with their grades, Copa's log, the pit time, Cancel) and the result (the grade before and after, the findings
   fixed, the reference workspaces pull); the Images list shows **In the pit · lap n/N**. Copa runs in a Job of the
@@ -34,7 +35,8 @@ is a plug-in now (`dist/plugins/`, not in the bundle).
   it), **Apps** (a frame as wide as four apps on every row, its arrows inside, the side with more apps lit faintly),
   **Controls** (the update and restart button amber, the row's menu) and **Drive**: each row's Cloud Drive socket
   - a plug while it has the drive (amber until attached), an empty socket while not; a click plugs it in or pulls
-  it out, as dragging a cable does.
+  it out, as dragging a cable does. Above it, the search and the Cloud Drive in one rounded bar (padded 10px, as
+  far as the Chats card floats above the page's bottom bar), with rows selected their bulk actions too.
 * **The top bar** (fork): its controls rounder; the announcement banner rounder, its expand and close buttons both
   at its right; the HUD and the latency menu one split button (the HUD's link, then the latency and the menu's
   chevron) for admins; every dropdown's chevron smaller and fainter. **The bottom**: the Chats panel a floating
