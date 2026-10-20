@@ -198,6 +198,7 @@ spec:
                 --directory "${WORKSPACE}" \
                 --message {{ $j.message | quote }} \
                 --variable app_set="{{ $j.appSet }}" \
+                --variable terminal_app="{{ $j.template.terminal | default "web" }}" \
                 {{- with $j.image }}
                 --variable workspace_image="{{ . }}" \
                 {{- end }}

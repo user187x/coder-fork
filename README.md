@@ -286,7 +286,7 @@ The full feature list, with where each piece lives and how it is tested, is
   Variables, Permissions, Parameters) with one save bar. **New workspace** (a template's Create workspace) too: the
   same Resources and Environment cards, General (name, owner, preset), External authentication and Schedule, with
   Cancel and Create workspace in its bar.
-- **Three workspace templates:** DEFAULT (code-server), DATAFLOW (Apache NiFi, Apache Airflow) and the AI
+- **Three workspace templates:** DEFAULT (code-server), DATAFLOW (Apache NiFi, Apache Airflow, and Ghostty as its terminal) and the AI
   workspace UBUNTU OPENCODE (the OpenCode agent on the workspace's own Unsloth Studio, its window on the desktop),
   with a shared **model library** (GGUF, each model scanned with garak before workspaces have it, once the scanner
   plug-in is imported) in Templates > Images; the same workspace otherwise; everything offline.

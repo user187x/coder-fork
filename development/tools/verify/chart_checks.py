@@ -580,6 +580,24 @@ def main():
                 if ref.strip() not in keys:
                     bad.append("%s: ${%s}" % (m.group(1), ref))
     check("template scripts: every ${...} is a variable main.tf passes (shell's written $${...})", not bad, bad[:5])
+    # Ghostty in place of the web terminal (the DATAFLOW template's): its push asks for it, the app's slug is the one
+    # the dashboard draws an agent's terminals with Ghostty for (site/src/modules/terminal/terminalConfig.ts), its icon
+    # is served, and the built-in terminal is off where it is on.
+    pushes = dict(re.findall(r'--variable app_set="(\w+)" \\\n\s*--variable terminal_app="(\w+)"', r))
+    fork_slug = ""
+    cfg_ts = os.path.join(os.path.expanduser(os.environ.get("CODER_FORK", "~/workspace/coder")),
+                          "site/src/modules/terminal/terminalConfig.ts")
+    if os.path.isfile(cfg_ts):
+        m = re.search(r'GHOSTTY_APP = "([^"]+)"', open(cfg_ts).read())
+        fork_slug = m.group(1) if m else ""
+    app = re.search(r'resource "coder_app" "ghostty" \{(.*?)\n\}', tf["main.tf"], re.S)
+    check("template: DATAFLOW's terminal is Ghostty (the Ghostty app in the Terminal's place), the others' Coder's own",
+          pushes.get("dataflow") == "ghostty" and pushes.get("developer") == "web" and app
+          and 'count        = local.ghostty ? 1 : 0' in app.group(1)
+          and re.search(r'slug\s*=\s*"%s"' % (fork_slug or "ghostty"), app.group(1))
+          and "web_terminal = var.terminal && !local.ghostty" in tf["main.tf"]
+          and os.path.isfile(os.path.join(chart, "charts/coder-workspace/files/icons/ghostty.png"))
+          and '"/__icons/ghostty.png"' in app.group(1), {"pushes": pushes, "fork slug": fork_slug})
     check("template: no script left inline in the .tf files (heredocs)", not any("<<" in t for t in tf.values()),
           [n for n, t in tf.items() if "<<" in t])
     if subprocess.run(["sh", "-c", "command -v shfmt"], capture_output=True).returncode == 0:

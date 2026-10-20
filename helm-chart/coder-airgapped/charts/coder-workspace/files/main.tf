@@ -90,6 +90,18 @@ variable "terminal" {
   default     = true
 }
 
+# The DATAFLOW template's: Ghostty in place of the web terminal - the Ghostty app where the Terminal was, opening the
+# same session in Coder's terminal page, drawn by Ghostty's terminal emulator (ghostty-web, in the dashboard).
+variable "terminal_app" {
+  type        = string
+  description = "The web terminal: web (Coder's own) or ghostty (Ghostty's, as the Ghostty app in its place)."
+  default     = "web"
+  validation {
+    condition     = contains(["web", "ghostty"], var.terminal_app)
+    error_message = "terminal_app: web or ghostty."
+  }
+}
+
 # The Gateway that serves Coder (the dataflow template's NiFi route attaches to it), and Coder's Service behind it.
 variable "gateway_name" {
   type        = string
@@ -145,6 +157,8 @@ variable "images_registry" {
 
 locals {
   dataflow = var.app_set == "dataflow"
+  # Ghostty in place of the web terminal (terminal_app)
+  ghostty = var.terminal && var.terminal_app == "ghostty"
   # The AI template (ubuntu-opencode): OpenCode's app, on the image's Unsloth server.
   ai            = var.app_set == "opencode"
   default_image = var.workspace_image != "" ? var.workspace_image : "codercom/enterprise-base:ubuntu"
@@ -620,7 +634,7 @@ resource "coder_agent" "main" {
   dir = data.coder_parameter.start_directory.value
 
   display_apps {
-    web_terminal = var.terminal
+    web_terminal = var.terminal && !local.ghostty
     vscode       = false
     ssh_helper   = false
   }
@@ -815,6 +829,19 @@ resource "coder_app" "opencode" {
   display_name = "OpenCode"
   icon         = "/__icons/opencode.svg" # files/icons/opencode.svg, served by templates/icons.yaml
   command      = "cd ${jsonencode(data.coder_parameter.start_directory.value)} 2>/dev/null; exec coder-opencode ${local.context_length}"
+  share        = "owner"
+}
+
+# Ghostty in place of the web terminal (terminal_app, the DATAFLOW template's): a terminal app, so it opens where and
+# as the Terminal did - Coder's terminal page, in its own window, a login shell in the Start folder - and the
+# dashboard draws an agent's terminals with Ghostty's emulator wherever the agent has this app (slug "ghostty").
+resource "coder_app" "ghostty" {
+  count        = local.ghostty ? 1 : 0
+  agent_id     = coder_agent.main.id
+  slug         = "ghostty"
+  display_name = "Ghostty"
+  icon         = "/__icons/ghostty.png" # files/icons/ghostty.png (Ghostty's app icon, MIT), served by templates/icons.yaml
+  command      = "cd ${jsonencode(data.coder_parameter.start_directory.value)} 2>/dev/null; exec \"$SHELL\" -l"
   share        = "owner"
 }
 

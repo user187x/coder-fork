@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.92` (fork `2474ba1c9`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.93` (fork `9cc047a24`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
@@ -46,6 +46,17 @@ is a plug-in now (`dist/plugins/`, not in the bundle).
   field, and with a menu or dialog open (that closes as it would, then the wheel opens) - but in a terminal, whose
   programs need Escape: there Shift+Escape (which works anywhere). Escape again or a click off the wheel closes it;
   the arrow keys go round it and Enter opens.
+* **DATAFLOW's terminal is Ghostty** (chart, fork): the template's web terminal is replaced by the **Ghostty** app,
+  wherever the Terminal was (the Workspaces table's apps, the workspace page, the template's apps panel): it opens
+  the same session in Coder's terminal page, in its own window, a login shell in the Start folder - drawn by
+  Ghostty's terminal emulator ([ghostty-web](https://github.com/coder/ghostty-web), Ghostty's own VT engine in
+  WebAssembly, bundled into the dashboard: nothing fetched at run time). Any terminal of an agent that has the app
+  (the workspace page's terminal too) is Ghostty's. The template variable `terminal_app` (`web` or `ghostty`) sets
+  it; the chart's `coder-workspace.dataflowTemplate.terminal` is `ghostty`. Existing DATAFLOW workspaces get it at
+  their next update.
+* **`/dev/mouse`** (fork): run at the announcement banner's terminal prompt, it turns the mouse pointer into sparks
+  (codepen-effect-sparks.html, Nik Rowell's pen, MIT) - on a see-through layer the pointer passes through, so the
+  dashboard is used as usual - until any key is pressed.
 * **The top bar** (fork): its controls rounder; the announcement banner rounder, its expand and close buttons both
   at its right; the HUD and the latency menu one split button (the HUD's link, then the latency and the menu's
   chevron) for admins; every dropdown's chevron smaller and fainter. **The bottom**: the Chats panel a floating

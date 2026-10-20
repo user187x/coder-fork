@@ -44,6 +44,8 @@ dataflowTemplate:
   name: "ubuntu-dataflow"
   displayName: "DATAFLOW"
   icon: "/icon/ubuntu.svg"
+  # Its web terminal: Ghostty's (the Ghostty app in the Terminal's place, drawn by Ghostty's emulator), or web.
+  terminal: "ghostty"
 # Its image: the workspace image + NiFi, a Java runtime and Airflow.
 dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.1.3"
 # The AI template, on the AI image (development/workspace-image-ai: the workspace image + Unsloth Studio + OpenCode),
