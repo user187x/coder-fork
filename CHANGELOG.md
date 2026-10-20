@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.43.0 – 2026-10-20
+
+Coder `2.0.0-platform.102` (fork `5ec304d58`); the workspace images as 1.42.0's (workspace 1.9.4, dataflow 1.1.4).
+
+* **The announcement banner is Coder's own; nothing rewrites a response any more** (the owner's rule: no Traefik
+  response-body rewriting, in any mode). Coder serves `/__banner` itself (fork `coderd/platformbanner`):
+  * **What it serves:**
+    * `banner.json` for every page;
+    * the live WebSocket (the banner at once and at every change, a heartbeat every 20 s);
+    * the admin calls behind Admin Settings › Announcement, for whoever may edit the deployment's settings.
+  * **Contract:** the same as the banner service's (cross-site checks, JSON, error texts), and the banner's id is
+    byte for byte the service's, so dismissals and receipts carry over.
+  * **State:** kept in Coder's database (one runtime-config entry) and announced on Coder's pubsub, so every replica
+    pushes a change to its own tabs.
+  * **"Show again"** now works for an announcement that is only a picture or a countdown.
+  * **Gone:**
+    * the `coder-banner` subchart (its Deployment, Service, 5 ConfigMaps, RBAC and HTTPRoute, a Python pod) and its
+      6 Traefik Middlewares, the two that rewrote Coder's HTML and JavaScript among them;
+    * the `rewrite-body` local plugin, so Traefik's reference values (`prereqs/`, the release folder) are stock
+      Traefik.
+  * **Upgrading:** the published banner starts empty again; publish it once more in Admin Settings › Announcement.
+  * **Guarded by static checks:** no rendered Middleware runs a plugin, under every values scenario, with the platform
+    service off, and in the decorator's base and layer; no Traefik values load a plugin; no banner subchart.
+* **Platform HA phase 2: the senior standby takes over.** A lapsed active lease goes first to the longest-running
+  ready standby (anyone after one more lease). A crashed leader's container, restarted in place, therefore does not
+  win the lease straight back, and a crash-looping pod cannot keep retaking it. A leaving replica reports itself
+  draining at once.
+* **Checks:** 132 static, 151 platform unit (the banner service's Python tests replaced by Go tests in the fork,
+  against the Python service's ids).
+
 ## 1.42.0 – 2026-10-20
 
 Coder `2.0.0-platform.101` (fork `98c3d3f4c`); the workspace images as 1.41.0's (workspace 1.9.4, dataflow 1.1.4).

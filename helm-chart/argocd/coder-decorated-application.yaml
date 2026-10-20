@@ -63,7 +63,7 @@ spec:
   # ---- 1. The Coder installation -------------------------------------------------------------------------------
   - repoURL: harbor.example.com/coder-airgapped/charts                # CHANGE-ME: same as the repository url above
     chart: coder-airgapped-base
-    targetRevision: 1.42.0
+    targetRevision: 1.43.0
     helm:
       releaseName: coder
       valuesObject:
@@ -128,7 +128,7 @@ spec:
   # ---- 2. The customization layer: delete this source (and set layer: false above) for plain Coder ----------------
   - repoURL: harbor.example.com/coder-airgapped/charts                # CHANGE-ME: same as above
     chart: coder-airgapped-layer
-    targetRevision: 1.42.0
+    targetRevision: 1.43.0
     helm:
       releaseName: coder
       valuesObject:
@@ -153,10 +153,6 @@ spec:
             enabled: true
             namespace: argocd
             app: coder                              # = metadata.name
-        coder-banner:
-          admin:
-            roles:
-            - owner
         coder-workspace:
           storageClass: gp3                         # CHANGE-ME: workspaces' home volumes (new ones)
           template:
@@ -183,11 +179,6 @@ spec:
     name: coder-code-server-ha-relay
     jsonPointers:
     - /stringData
-    - /data
-  # The banner service stores what admins publish in this ConfigMap at runtime.
-  - kind: ConfigMap
-    name: coder-banner-state
-    jsonPointers:
     - /data
 
   syncPolicy:

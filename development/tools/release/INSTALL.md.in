@@ -64,7 +64,7 @@ helm upgrade --install cnpg cloudnative-pg-0.29.0.tgz -n cnpg-system --create-na
 ```
 
 Traefik's reference values carry the Gateway `traefik/traefik-gateway` (HTTPS with the `coder-airgapped-tls`
-Secret) and the `rewrite-body` local plugin the announcement banner's middlewares use. For high availability add
+Secret); it is stock Traefik (nothing rewrites a response). For high availability add
 `-f traefik-41.4.0.ha-values.yaml`. Skip any of these the cluster already has. Tested: @TRAEFIK@, CloudNativePG
 @CNPG@.
 

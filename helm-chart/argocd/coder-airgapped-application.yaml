@@ -46,7 +46,7 @@ spec:
   source:
     repoURL: 123456789012.dkr.ecr.us-east-1.amazonaws.com/charts  # CHANGE-ME: same as the repository url above
     chart: coder-airgapped
-    targetRevision: 1.42.0
+    targetRevision: 1.43.0
     helm:
       releaseName: coder
       valuesObject:
@@ -132,11 +132,6 @@ spec:
             namespace: argocd
             app: coder                              # = metadata.name
 
-        coder-banner:
-          admin:
-            roles:
-            - owner
-
   destination:
     server: https://kubernetes.default.svc
     namespace: coder                                # the workspace template only accepts "coder"
@@ -158,11 +153,6 @@ spec:
     name: coder-code-server-ha-relay
     jsonPointers:
     - /stringData
-    - /data
-  # The banner service stores what admins publish in this ConfigMap at runtime.
-  - kind: ConfigMap
-    name: coder-banner-state
-    jsonPointers:
     - /data
 
   syncPolicy:

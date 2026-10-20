@@ -103,7 +103,7 @@ if [[ -n "$pull_registry" ]]; then
 	[[ -n "${REGISTRY_USERNAME:-}" && -n "${REGISTRY_PASSWORD:-}" ]] || die "--pull-secret needs REGISTRY_USERNAME and REGISTRY_PASSWORD"
 	secret_from registry-pull docker-registry registry-pull --docker-server="$pull_registry" \
 		--docker-username="$REGISTRY_USERNAME" --docker-password="$REGISTRY_PASSWORD"
-	warn "add imagePullSecrets: [{name: registry-pull}] to your values (coder.coder.image.pullSecrets, uiUpdates, coder-banner, coder-workspace)"
+	warn "add imagePullSecrets: [{name: registry-pull}] to your values (coder.coder.image.pullSecrets, uiUpdates, coder-workspace)"
 fi
 for k in tlsCa wildcardTls; do
 	s="${sname[$k]}"

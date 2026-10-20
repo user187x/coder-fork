@@ -8,7 +8,7 @@ provisioners, the agent, apps, SSH, port forwarding, audit, insights) are all ke
 **Where it lives:**
 - **fork:** the Coder server and dashboard (`user187x/coder`);
 - **service:** the platform service `coder-ui-updates` (`helm-chart/coder-airgapped/files/ui-updates/`), served at
-  `/__coder-ui/` and `/__banner/`;
+  `/__coder-ui/` (the announcement banner at `/__banner/` is the fork's own, `coderd/platformbanner`);
 - **chart:** the Helm chart and its installers (`helm-chart/`);
 - **image:** the workspace image (`development/workspace-image/`) and template
   (`helm-chart/coder-airgapped/charts/coder-workspace/files/main.tf`, its scripts in `files/scripts/`).

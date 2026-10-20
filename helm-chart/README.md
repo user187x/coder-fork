@@ -1,4 +1,4 @@
-# coder-airgapped 1.42.0: portable Helm chart of the live Coder fork
+# coder-airgapped 1.43.0: portable Helm chart of the live Coder fork
 
 This bundle contains one Helm chart, `coder-airgapped/`. It reproduces the forked Coder platform as it ran on the
 reference minikube cluster (namespace `coder`) on **2026-10-09**. All of its dependencies are vendored, so it
@@ -12,7 +12,7 @@ Gateway) configures everything, from a values file or from an Argo CD Applicatio
 |---|---|---|
 | Coder server, `ghcr.io/user187x/coder-platform:2.0.0-platform.4` (Coder 2.37.3 + fork, built from `d01b8f6`) | Argo CD app `argocd/coder` (chart `coder` 2.37.3) | `charts/coder/` (upstream 2.37.3 + platform patch) + `values.yaml › coder` |
 | PostgreSQL `coder-db` (CloudNativePG, 2 instances) | extraTemplate of `argocd/coder` | `templates/database.yaml` |
-| Announcement banner | Argo CD app `argocd/coder-banner` (chart 0.4.1) | `charts/coder-banner/` (unreleased 0.4.3 + platform patch; starts blank) |
+| Announcement banner | Argo CD app `argocd/coder-banner` (chart 0.4.1) | Coder itself since 1.43.0 (the fork's `coderd/platformbanner`, at `/__banner/`; starts blank) – no service, no Traefik body rewrite |
 | Platform service `coder-ui-updates` + `coder-ui-logs-db` + RBAC | `coder-ui-updates apply` (plain manifests) | `templates/ui-updates*.yaml`, `files/ui-updates/` (48 files, identical to the live ConfigMap) |
 | Workspace template `default` (DEFAULT) + `/__icons/` server | Helm release `coder/coder-workspace` rev 13 | `charts/coder-workspace/` (0.1.1-platform.1, see *Changes*) |
 | First owner | created by hand on the reference cluster | `templates/bootstrap-job.yaml` (new) |
@@ -47,8 +47,8 @@ charts/                          every chart of ours, packaged: coder-airgapped-
                                  (a Helm repository: serve the folder, or `mirror-images.sh charts` pushes them), SHA256SUMS
 images.txt                       every image by section (its folder below), with the digest saved and tested
 images/                          every image as a docker-save archive, linux/amd64, one folder per part (images/README.md):
-  ui/                              the user interface: Coder (the fork), the platform and announcement services, the
-                                   image they run on, their database
+  ui/                              the user interface: Coder (the fork), the platform service, the image they run
+                                   on, their database
   workspaces/                      the workspace templates' images
   cloud-drive/ image-builder/      the Cloud Drive (MinIO, CSI driver); Templates > Images (BuildKit, registry)
   cluster/ prereqs/                metrics-server; CloudNativePG operator and Traefik (for prereqs/)
@@ -68,8 +68,6 @@ prereqs/                         cloudnative-pg-0.29.0.tgz, traefik-41.4.0.tgz, 
 * **Traefik v3 with the Gateway API provider** and a Gateway `traefik/traefik-gateway` that has an HTTPS listener for
   `coder.<domain>` and `*.<domain>`. The reference cluster's Traefik values are in
   `prereqs/traefik-41.4.0.reference-values.yaml`.
-* **Traefik's `rewrite-body` local plugin**, used by the banner's middlewares. The full plugin source is under
-  `experimental.localPlugins` in that values file, so it needs no network access.
 * **OIDC (Keycloak)** with a confidential client `coder` and redirect URI
   `https://coder.<domain>/api/v2/users/oidc/callback`.
 * **DNS** for `coder.<domain>` and `*.<domain>` that resolves both inside and outside the cluster.
@@ -120,7 +118,6 @@ The Application must keep three settings:
   OutOfSync over fields the Gateway controller fills in, and self-heal keeps re-syncing.
 * `ignoreDifferences` on Secrets' `/data/password` with `RespectIgnoreDifferences=true`: Argo CD renders without
   cluster access, so the generated passwords would otherwise change on every refresh.
-* `ignoreDifferences` on `coder-banner-state` `/data`: the banner keeps published announcements there.
 
 The database, the add-on PVC and the generated Secrets carry `argocd.argoproj.io/sync-options: Prune=false,Delete=false`,
 so deleting the Application never deletes data. The Keycloak view reads the Application but does not edit
@@ -172,7 +169,8 @@ to Keycloak by email. Every run it mints a 30-minute API token into Secret `code
 * **No nginx** (live: an nginx Deployment served the template's icons at `/__icons/`). Traefik routes `/__icons/` to
   the platform service (`coder-ui-updates`), which mounts the icons ConfigMap and serves them (`TEMPLATE_ICONS_DIR`;
   images only, cacheable, SVGs sandboxed). One pod and one image fewer.
-* **The banner starts blank** (live: a published maintenance notice). An owner publishes one at `/__banner/admin`.
+* **The banner starts blank** (live: a published maintenance notice). An admin publishes one in Admin Settings ›
+  Announcement; Coder keeps it (in its database) and serves it at `/__banner/` itself.
 * **`agent-audit.tf` is off by default** (`coder-workspace.agentAudit`). The live active template version (Sep 28)
   is `main.tf` + `certificates.tf`, byte-identical to the chart's. `agent-audit.tf` was added later and never went
   live: its `%{...}` snoopy format strings are Terraform template directives, so `terraform init` failed. The
@@ -182,8 +180,7 @@ to Keycloak by email. Every run it mints a 30-minute API token into Secret `code
   image (`latest` or `v2.37.3`) contains them. Live only worked because `install-workspace-chart` pre-created a token
   Secret. A python3 init container now does the sign-in. The push goes to the in-cluster Service
   (`coder-workspace.coder.internalUrl`).
-* **Platform patch on the vendored subcharts** (`coder` 2.37.3-platform.1, `coder-banner` 0.4.3-platform.1,
-  `coder-workspace` 0.1.1-platform.1, applied by `../development/tools/apply-platform-patch.py`). Templated string
+* **Platform patch on the vendored subcharts** (`coder` 2.37.3-platform.1, `coder-workspace` 0.1.1-platform.1, applied by `../development/tools/apply-platform-patch.py`). Templated string
   values, `global.imagePullSecrets`, and `coder.extraEnv`. The upstream templates are otherwise untouched. Do not run
   `helm dependency update` on this chart: there is nothing to fetch.
 * **`ui-service.py` reads `OIDC_SECRET`, `OIDC_CA_SECRET` and `CODER_DB_CLUSTER`** (with the old names as defaults)

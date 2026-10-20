@@ -497,8 +497,9 @@ Both are small, write-light and indexed by `replica_id`. Nothing in `public` cha
 
    The rolling-update gap would close with a proactive handover to a newer-revision standby before the leader's
    pod is deleted; that is left for later, and active/active (Phase 3) has none. A crashed leader's container,
-   restarted in place, can win the lapsed lease back as a fresh standby; preferring the longest-running ready
-   standby (anyone after one more lease) is the next refinement, so a crash-looping pod cannot keep retaking it.
+   restarted in place, could win the lapsed lease back as a fresh standby: since platform.102 the longest-running
+   ready standby takes it first (anyone after one more lease), so a crash-looping pod cannot keep retaking it
+   (measured: the senior standby took over, back after 13.9 s).
 5. [ ] Phase 3:
    - `meshcoord`, the `NewCoordinator` factory, `derpcell`, and the `DERPMap()` composition;
    - drain;

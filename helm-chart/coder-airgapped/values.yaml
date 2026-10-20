@@ -15,7 +15,7 @@ global:
   # customizations decorating it, which can be removed again. This chart, coder-airgapped, is both in one.
   decorator:
     # Set by the packaging (leave it): all = this chart; base = Coder, its database and its first owner; layer = the
-    # rest (the platform service, banner, workspace template and icons, image builder, metrics-server, admins' kubectl).
+    # rest (the platform service, workspace template and icons, image builder, metrics-server, admins' kubectl).
     part: all
     # Read by the base only: the layer is installed alongside it, so Coder runs the fork's image with the platform's
     # settings. false: upstream Coder (coderImages.upstream), which is what remains when the layer is removed.
@@ -25,9 +25,9 @@ global:
   # mirror (development/airgap-image), without which templates cannot be pushed or built offline.
   coderImages:
     fork:
-      # The fork's 2.0.0-platform.101 (development/coder-fork/FORK.md)
+      # The fork's 2.0.0-platform.102 (development/coder-fork/FORK.md)
       repo: ghcr.io/user187x/coder-platform
-      tag: 2.0.0-platform.101-airgap
+      tag: 2.0.0-platform.102-airgap
     upstream:
       repo: ghcr.io/user187x/coder-upstream
       tag: 2.38.0-main.70bc2e554-airgap
@@ -488,7 +488,7 @@ uiUpdates:
   # (+ its database) and regctl (development/image-tools), which the Images view lints, formats and scans with -
   # tagged with the code's hash (development/tools/build-ui-image.sh builds and pins it). The chart carries no code:
   # Helm keeps each release in a Secret of at most 1 MiB.
-  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-4dfeee2c24f0") }}'
+  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-e19d63595b99") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'
@@ -535,33 +535,6 @@ uiUpdates:
     resources:
       requests: {cpu: 20m, memory: 64Mi}
       limits: {memory: 256Mi}
-
-# ---------------------------------------------------------------------------------------------------------------
-# Announcement banner (Argo CD Application argocd/coder-banner). Needs Traefik's rewrite-body plugin.
-# ---------------------------------------------------------------------------------------------------------------
-coder-banner:
-  enabled: true
-  admin:
-    roles:
-    - owner
-  coder:
-    host: '{{ include "platform.coderHost" . }}'
-    service:
-      name: coder
-      port: 80
-  gateway:
-    name: '{{ .Values.global.gateway.name }}'
-    namespace: '{{ .Values.global.gateway.namespace }}'
-  image:
-    registry: '{{ include "platform.registryHost" (list . "docker.io") }}'
-    repository: library/python
-    tag: 3.13-alpine
-  imagePullSecrets: []
-  # A fresh install shows no banner: it starts empty and hidden until an owner writes and publishes a message on
-  # https://<coder host>/__banner/admin. What is published is kept in ConfigMap coder-banner-state, never in values.
-  banner:
-    enabled: false
-    message: ""
 
 # ---------------------------------------------------------------------------------------------------------------
 # Workspace template DEFAULT (default) + /__icons/ server (Helm release coder/coder-workspace).

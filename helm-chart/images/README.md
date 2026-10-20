@@ -7,7 +7,7 @@ public ones can be left out where your registry has them already.
 
 | Folder | What | Size | Pushed by default |
 |---|---|---:|---|
-| `ui/` | The user interface: Coder (the fork - the dashboard and its server), the platform service (coder-ui-updates) and the announcement service (coder-banner), what they run on, and their databases (2 of ours, 2 public) | 810 MB | yes |
+| `ui/` | The user interface: Coder (the fork - the dashboard and its server) and the platform service (coder-ui-updates), what they run on, and their databases (2 of ours, 2 public) | 810 MB | yes |
 | `workspaces/` | The workspace templates' images (ours) | 4.8 GB | yes |
 | `cloud-drive/` | The Cloud Drive: its storage (MinIO) and its CSI driver (1 of ours, 2 public) | 182 MB | yes |
 | `image-builder/` | Templates > Images: the build Jobs (BuildKit) and the registry built images are kept in (public) | 143 MB | yes |
@@ -17,8 +17,8 @@ public ones can be left out where your registry has them already.
 | `reference/` | Argo CD + Keycloak as the reference cluster runs them - not pushed unless asked (public) | 1.0 GB | no – reference only: `push REGISTRY reference` |
 
 The user interface is `ui/`: Coder itself (the fork – the dashboard and its server), the platform service
-(coder-ui-updates: Controls › Settings, the Cloud Drive's API, chat, Health, ...) and the announcement service
-(coder-banner), the image they run on, and the database Coder and the platform service's logs keep their data in.
+(coder-ui-updates: Controls › Settings, the Cloud Drive's API, chat, Health, ...), the image they run on, and the
+database Coder and the platform service's logs keep their data in.
 
 The release is also published in parts: `coder-airgapped-<version>-charts.tar.gz` (everything but the images) and one
 `coder-airgapped-<version>-images-<folder>.tar.gz` per folder here. Unpacked into one directory they are the bundle.
@@ -53,7 +53,7 @@ or put them back on an internet machine first: `./mirror-images.sh save` (pulls 
 |---|---|---:|---|
 | `ghcr.io_user187x_coder-platform_2.0.0-platform.57-airgap.tar.gz` | `ghcr.io/user187x/coder-platform:2.0.0-platform.57-airgap` | 320 MB | coder (server); = the fork's platform.57 (fa2a23742) + Terraform provider mirror |
 | `ghcr.io_user187x_coder-image-tools_1.0.0.tar.gz` | `ghcr.io/user187x/coder-image-tools:1.0.0` | 208 MB | coder-ui-updates and the Images builder's scans: the bundled Python + shellcheck, shfmt, trivy (+ vulnerability DB), regctl (development/image-tools) |
-| `docker.io_library_python_3.13-alpine.tar.gz` | `docker.io/library/python:3.13-alpine` | 20 MB | coder-ui-updates, coder-banner, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor) |
+| `docker.io_library_python_3.13-alpine.tar.gz` | `docker.io/library/python:3.13-alpine` | 20 MB | coder-ui-updates, bootstrap Job, push-Job login (reference cluster: same tag via its Harbor) |
 | `ghcr.io_cloudnative-pg_postgresql_18.4-system-trixie.tar.gz` | `ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie` | 262 MB | database, uiUpdates.logsDb, uiUpdates.pgImage |
 
 ### `workspaces/`

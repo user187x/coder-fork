@@ -15,7 +15,7 @@ Everything needed to keep developing the coder-airgapped deliverable, other than
 | First user / template-push bootstrap | `../helm-chart/coder-airgapped/files/bootstrap/bootstrap.py`, `templates/bootstrap-job.yaml` |
 | Workspace image (desktop, fonts, tmux, preinstalled tools) | `workspace-image/` (then `tools/build-workspace-image.sh`) |
 | Workspace template `default` (shown as DEFAULT) | `../helm-chart/coder-airgapped/charts/coder-workspace/files/*.tf`, its scripts in `files/scripts/` (format: `shfmt -i 1 -w files/scripts/*.sh`) |
-| Announcement banner | `../helm-chart/coder-airgapped/charts/coder-banner/` |
+| Announcement banner | the fork: `coderd/platformbanner` (server), `site/src/modules/platform/announcement/` (dashboard) |
 | The Coder server itself (UI, API) | the fork, `~/workspace/coder` – see `coder-fork/FORK.md` |
 | Images that are shipped | `../helm-chart/images.txt` (+ `mirror-images.sh save`, or `tools/build-airgap-image.sh` / `tools/build-minio-image.sh` for the custom ones) |
 
@@ -44,8 +44,8 @@ minikube profile `coder` is the development cluster. Deploy (or redeploy) the wo
 | `tools/render-diff.py` | Compare two `helm template` outputs object by object |
 | `tools/export_live.py`, `tools/compare.py` | Export a cluster's objects; diff a render against them |
 | `tools/extract_release_chart.py` | Recover a chart from a Helm release Secret |
-| `upstream-charts/` | Untouched upstream charts: `coder-2.37.3` (vendored as `charts/coder`), `coder-banner-0.4.1` (what minikube ran) |
-| `reference/` | Frozen capture (2026-10-09) of the original deployment on minikube profile `minikube`: every object, cleaned (`manifests/`), and the Helm/Argo CD values (`helm-values/`). Read-only |
+| `upstream-charts/` | Untouched upstream charts: `coder-2.37.3` (vendored as `charts/coder`), `coder-banner-0.4.1` (what minikube ran; since 1.43.0 the banner is Coder's own) |
+| `reference/` | Frozen capture (2026-10-09) of the original deployment on minikube profile `minikube`: every object, cleaned (`manifests/`), and the Helm/Argo CD values (`helm-values/`). Read-only, except that the banner service's objects and Traefik's rewrite-body plugin were taken out on 2026-10-20 (no Traefik response-body rewriting anywhere, in any mode) |
 
 Not in this repository: secrets, the database dump, the fork's git bundle and the original image are in
 `~/coder-airgapped-private/` (backup only; the deployment starts from a clean database). Built tarballs go to
@@ -54,8 +54,7 @@ Not in this repository: secrets, the database dump, the fork's git bundle and th
 ## Upgrading a vendored subchart
 
 Unpack the new upstream chart over `../helm-chart/coder-airgapped/charts/<name>/`, then
-`tools/apply-platform-patch.py <dir> coder coder.image.pullSecrets --extra-env --coder-ha` (banner:
-`<dir> coder-banner imagePullSecrets`), and update the dependency version in the umbrella `Chart.yaml`. Compare
+`tools/apply-platform-patch.py <dir> coder coder.image.pullSecrets --extra-env --coder-ha`, and update the dependency version in the umbrella `Chart.yaml`. Compare
 with `tools/render-diff.py` against a render from before the upgrade.
 
 ## Facts worth knowing

@@ -163,14 +163,14 @@ decorator_charts() {
 		python3 - "$d/Chart.yaml" "$part" <<'PY' || return 1
 import re, sys
 path, part = sys.argv[1], sys.argv[2]
-drop = {"base": {"coder-banner", "coder-workspace"}, "layer": {"coder"}}[part]
+drop = {"base": {"coder-workspace"}, "layer": {"coder"}}[part]
 desc = {
     "base": "Plain Coder for air-gapped Kubernetes, the base of the coder-airgapped Argo CD decorator install: the "
             "upstream Coder chart 2.37.3 running upstream Coder (main at the fork's base, with a Terraform provider "
             "mirror), its CloudNativePG database and its first owner. coder-airgapped-layer decorates it (set "
             "global.decorator.layer: true here, and Coder runs the fork's image).",
     "layer": "The coder-airgapped customization layer, decorating coder-airgapped-base in the same Argo CD "
-             "Application: the coder-ui-updates platform service, the coder-banner announcement service, the "
+             "Application: the coder-ui-updates platform service, the "
              "DEFAULT workspace template and its icons, the image builder, metrics-server and admins' "
              "cluster access. Remove it (and set the base's global.decorator.layer to false) to go back to plain Coder.",
 }[part]
@@ -203,7 +203,7 @@ for line in s.split("\n"):
     out.append(line)
 open(path, "w").write("\n".join(out))
 PY
-		if [[ "$part" == base ]]; then rm -rf "$d/charts/coder-banner" "$d/charts/coder-workspace"; else rm -rf "$d/charts/coder"; fi
+		if [[ "$part" == base ]]; then rm -rf "$d/charts/coder-workspace"; else rm -rf "$d/charts/coder"; fi
 		helm package "$d" -d "$out" | sed -n 's/.*saved it to: //p' || return 1
 	done
 	rm -rf "$tmp"

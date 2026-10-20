@@ -1,6 +1,6 @@
 # High availability: Coder on 2 replicas in Platform HA's activeStandby (one serves, the other takes over: no license
 # needed - docs/adr/0001-platform-ha.md), across availability zones, its database on 3 instances (one per zone) with
-# synchronous replication and a PgBouncer pooler, the announcement banner and metrics-server on 2 each; every component
+# synchronous replication and a PgBouncer pooler, metrics-server on 2; every component
 # with more than one replica gets a PodDisruptionBudget. Pass it after your own values (it sets no list you set there:
 # Helm replaces lists):
 #   ./install.sh -f my-values.yaml -f values-ha.example.yaml ...
@@ -70,9 +70,6 @@ database:
 
 metricsServer:
   replicas: 2
-
-coder-banner:
-  replicaCount: 2
 
 # The platform service (uiUpdates) stays one replica: its data is a SQLite file on a ReadWriteOnce volume. Coder works
 # without it while it restarts (quota and schedule checks let requests through; the dashboard keeps its defaults).

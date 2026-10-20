@@ -85,10 +85,10 @@ s, b, _ = get(CODER + "/__coder-ui/healthz"); check("platform service /__coder-u
 s, b, _ = get(CODER + "/__icons/cloud-drive.svg"); check("icon server /__icons/ through the Gateway", s == 200 and b"<svg" in b, str(s))
 s, b, _ = get(CODER + "/__banner/banner.json")
 banner = json.loads(b) if s == 200 else {}
-check("banner service /__banner/ through the Gateway", s == 200, str(s))
+check("the banner (Coder's own) at /__banner/ through the Gateway", s == 200, str(s))
 check("the banner starts blank (hidden, no message)", banner.get("enabled") is False and banner.get("message") == "",
       "enabled=%s message=%r" % (banner.get("enabled"), banner.get("message")))
-s, b, _ = get(CODER + "/__banner/admin"); check("banner admin page loads", s in (200, 302, 303, 401, 403), str(s))
+s, b, _ = get(CODER + "/__banner/api/state"); check("the banner's admin calls ask for a session", s == 401, str(s))
 s, b, _ = get(CODER + "/", headers={"Accept": "text/html"}); check("dashboard HTML loads", s == 200 and b"<html" in b.lower(), str(s))
 
 # --- a workspace, end to end (as the admin) ---

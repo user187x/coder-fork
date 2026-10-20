@@ -40,16 +40,15 @@ def objects(render):
 
 
 def ha_checks(B, ha_render, default_render):
-    """High availability (values-ha.example.yaml): 3 Coder replicas with a PodDisruptionBudget, 3 database instances,
-    2 banners; one Coder replica gets no budget (it would only block node drains)."""
+    """High availability (values-ha.example.yaml): 2 Coder replicas with a PodDisruptionBudget, 3 database instances;
+    one Coder replica gets no budget (it would only block node drains)."""
     import yaml
     docs = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(ha_render) if d}
     got = {"coder": docs.get(("Deployment", "coder"), {}).get("spec", {}).get("replicas"),
            "coder-db": docs.get(("Cluster", "coder-db"), {}).get("spec", {}).get("instances"),
-           "coder-banner": docs.get(("Deployment", "coder-banner"), {}).get("spec", {}).get("replicas"),
            "budget": docs.get(("PodDisruptionBudget", "coder"), {}).get("spec")}
-    check("high availability: 2 Coder replicas (one down at a time), 3 database instances, 2 banners",
-          got == {"coder": 2, "coder-db": 3, "coder-banner": 2, "budget": {
+    check("high availability: 2 Coder replicas (one down at a time), 3 database instances",
+          got == {"coder": 2, "coder-db": 3, "budget": {
               "maxUnavailable": 1, "selector": {"matchLabels": {"app.kubernetes.io/name": "coder",
                                                                 "app.kubernetes.io/instance": "coder"}}}}, got)
     check("one Coder replica: no PodDisruptionBudget", ("PodDisruptionBudget", "coder") not in objects(default_render))
@@ -71,7 +70,7 @@ def ha_checks(B, ha_render, default_render):
           and "coder-db-pooler-rw.coder.svc" in alt and "@coder-db-pooler-rw.coder.svc:5432/" in relay,
           {"pooler": bool(pooler), "alt": alt, "relay host": relay.split("@")[-1].split("/")[0]})
     check("high availability: a PodDisruptionBudget for every component with more than one copy",
-          {"coder", "coder-banner", "coder-code-server-replicator", "coder-db-pooler-rw"} <= set(pdbs), pdbs)
+          {"coder", "coder-code-server-replicator", "coder-db-pooler-rw"} <= set(pdbs), pdbs)
     dflt = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(default_render) if d}
     ddb = dflt.get(("Cluster", "coder-db"), {}).get("spec", {})
     druri = dflt.get(("Secret", "coder-code-server-ha-relay"), {}).get("stringData", {}).get("uri", "")
@@ -127,44 +126,33 @@ def ha_checks(B, ha_render, default_render):
               "topologySpreadConstraints"), err.strip()[-200:])
 
 
-def banner_checks(chart):
-    """The banner chart's four copies of the banner's contract agree with its service (files/server.py): the chart's
-    defaults (values.yaml, the ConfigMap's banner.json, the choices _helpers.tpl checks them against), the admin page's
-    lists and the loader's effects. They drifted once: the defaults could not set a picture, Pew-Pew was unknown."""
-    import ast, yaml
-    d = os.path.join(chart, "charts/coder-banner")
-    tree = ast.parse(open(os.path.join(d, "files/server.py")).read())
-    server = {t.id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
-              for t in n.targets if isinstance(t, ast.Name) and t.id in (
-                  "LEVELS", "EFFECTS", "SPEEDS", "FONTS", "ALIGNS", "PICTURE_FITS", "OPEN_EFFECTS", "CLOSE_EFFECTS")}
-    fields = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
-                  and any(isinstance(t, ast.Name) and t.id == "FIELDS" for t in n.targets))
-    helpers = open(os.path.join(d, "templates/_helpers.tpl")).read()
-    choices = yaml.safe_load(re.search(r'define "coder-banner.choices" -\}\}\n(.*?)\{\{- end', helpers, re.S).group(1))
-    pairs = {"level": "LEVELS", "effect": "EFFECTS", "speed": "SPEEDS", "font": "FONTS", "align": "ALIGNS",
-             "pictureFit": "PICTURE_FITS", "openEffect": "OPEN_EFFECTS", "closeEffect": "CLOSE_EFFECTS"}
-    differ = {k: (choices.get(k), list(server[v])) for k, v in pairs.items() if choices.get(k) != list(server[v])}
-    check("banner: the chart's choices are the service's (templates/_helpers.tpl vs files/server.py)", not differ, differ)
-    values = yaml.safe_load(open(os.path.join(d, "values.yaml")))["banner"]
-    check("banner: every field the service takes can be set as a chart default (values.yaml banner.*)",
-          set(fields) <= set(values), sorted(set(fields) - set(values)))
-    rc, out, err = run(["helm", "template", "t", d])
-    m = re.search(r"banner\.json: \|\n((?:    .*\n)+)", out)
-    keys = set(json.loads(m.group(1))) if rc == 0 and m else set()
-    check("banner: the chart's default banner.json has every field the service has, and only those",
-          keys == set(fields) | {"id"}, (err.strip()[-200:] if rc else sorted(keys ^ (set(fields) | {"id"}))))
-    page = open(os.path.join(d, "files/admin.html")).read()
-    lists = {k: re.findall(r'<option value="([\w-]+)"', (re.search(r'<select id="%s"[^>]*>(.*?)</select>' % k, page, re.S)
-                                                          or [None, ""])[1]) for k in ("effect", "speed", "pictureFit")}
-    want = {"effect": list(server["EFFECTS"]), "speed": list(server["SPEEDS"]), "pictureFit": sorted(server["PICTURE_FITS"])}
-    got = dict(lists, pictureFit=sorted(lists["pictureFit"]))
-    check("banner: the admin page offers every effect, speed and picture fit (files/admin.html)", got == want,
-          {k: (got[k], want[k]) for k in want if got[k] != want[k]})
-    js = open(os.path.join(d, "files/banner.js")).read()
-    drawn = set(re.findall(r"^    (\w+): function \(a, sp", js, re.M)) | set(
-        re.findall(r"^    (\w+): \{", re.search(r"var CSS_EFFECTS = \{\n(.*?)\n  \};", js, re.S).group(1), re.M))
-    check("banner: the loader draws every effect (files/banner.js: Anime.js and fx.css)",
-          drawn == set(server["EFFECTS"]) - {"none"}, sorted(drawn ^ (set(server["EFFECTS"]) - {"none"})))
+def body_rewrites(render):
+    """The Traefik Middlewares in a render that run a plugin (the rewrite-body kind)."""
+    import yaml
+    return sorted(d["metadata"]["name"] for d in yaml.safe_load_all(render or "") if d and d.get("kind") == "Middleware"
+                  and (d.get("spec") or {}).get("plugin"))
+
+
+def no_rewrite_checks(B, chart, renders):
+    """No Traefik response-body rewriting, in any mode (the owner's rule, 2026-10-20): a change to the user interface is
+    built into the fork (Go + React), never rewritten into Coder's responses by Traefik. No rendered Middleware runs a
+    plugin - every scenario, the platform service off (a plain Coder), the decorator's base and layer (decorator_checks)
+    - and no Traefik values file loads one, so the prerequisite is stock Traefik."""
+    import yaml
+    renders = dict(renders)
+    rc, out, err = run(["helm", "template", "coder", chart, "-n", "coder", "--set", "uiUpdates.enabled=false"])
+    renders["the platform service off (uiUpdates.enabled=false)"] = out if rc == 0 else ""
+    bad = {name: body_rewrites(r) for name, r in renders.items() if body_rewrites(r)}
+    check("no Traefik body rewriting: no rendered Middleware runs a plugin (%d renders)" % len(renders),
+          not bad and all(renders.values()), bad or [n for n, r in renders.items() if not r])
+    values = sorted(glob.glob(os.path.join(B, "prereqs", "traefik-*.yaml")) +
+                    glob.glob(os.path.join(os.path.dirname(B), "development", "reference", "helm-values", "traefik*.yaml")))
+    loads = [os.path.relpath(f, os.path.dirname(B)) for f in values
+             if {"localPlugins", "plugins"} & set(((yaml.safe_load(open(f)) or {}).get("experimental") or {}))]
+    check("no Traefik body rewriting: Traefik's values load no plugin (stock Traefik)", values and not loads,
+          loads or "%d values files" % len(values))
+    left = sorted(set(os.listdir(os.path.join(chart, "charts"))) & {"coder-banner"})
+    check("no Traefik body rewriting: the banner is Coder's own (no coder-banner subchart)", not left, left)
 
 
 def safe_checks(chart, default_render):
@@ -398,6 +386,8 @@ def decorator_checks(B, chart, full_render):
         rc, out, err = run(["helm", "template", "coder", pkg, "-n", "coder"] + extra)
         renders[name] = out if rc == 0 else ""
         check("decorator: %s renders" % name, rc == 0, err.strip().splitlines()[-1] if rc and err.strip() else "")
+    bad = {name: body_rewrites(r) for name, r in renders.items() if body_rewrites(r)}
+    check("no Traefik body rewriting: the decorator's base and layer run no plugin Middleware", not bad, bad)
     full, base, layer = objects(full_render), objects(renders["base"]), objects(renders["layer"])
     check("decorator: the base and the layer share no object, and together are coder-airgapped",
           base and layer and not (base & layer) and (base | layer) == full,
@@ -406,7 +396,7 @@ def decorator_checks(B, chart, full_render):
     check("decorator: the base is Coder, its database and first owner only",
           {k for k, _ in base} <= {"Deployment", "Service", "ServiceAccount", "Role", "RoleBinding", "HTTPRoute", "Cluster",
                                     "Secret", "ConfigMap", "Job"} and ("Cluster", "coder-db") in base and ("Deployment", "coder") in base
-          and not any(n.startswith(("coder-ui", "coder-banner", "coder-workspace-push", "coder-image")) for _, n in base),
+          and not any(n.startswith(("coder-ui", "coder-workspace-push", "coder-image")) for _, n in base),
           sorted(base))
     plain, dec = renders["base"], renders["base+layer"]
     plain_env = re.findall(r"name: CODER_PLATFORM_(?:SERVICE_ROUTES|FIRST_OWNER)\n\s+value: (\S*)", plain)
@@ -583,6 +573,7 @@ def main():
     check("the template push's CLI is Coder's own image (same tag as the server)", len(forks) == 1, forks)
     decorator_checks(B, chart, r)
     ha_checks(B, renders["high availability (values-ha.example.yaml)"], r)
+    no_rewrite_checks(B, chart, renders)
     safe_checks(chart, r)
     template_checks(B, chart, r)
     pit_checks(B, chart, r)
@@ -766,7 +757,6 @@ def main():
     mounts = [n for n in names if n.endswith(".py") and re.search(r'"configMap": \{"name": "coder-ui-updates"',
                                                                 open(os.path.join(ui_dir, n)).read())]
     check("platform service: its Jobs take the code from its image, not a ConfigMap", not mounts, mounts or "")
-    banner_checks(chart)
     ui_lock = os.path.join(chart, "files/ui-updates/lockdown.sh")
     tpl_lock = os.path.join(tf_dir, "scripts", "lockdown.sh")
     check("Lock Down: the platform service's lockdown.sh is the template's (one script, two places)",

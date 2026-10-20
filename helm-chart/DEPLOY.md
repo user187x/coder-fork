@@ -194,7 +194,7 @@ The air-gapped cluster needs these already running:
 - [ ] **Kubernetes** 1.27 or newer (EKS is fine) with **amd64 (x86_64) nodes** – the images are amd64 only
 - [ ] **Gateway API CRDs** v1.6.0 – `kubectl apply --server-side -f prereqs/gateway-api-v1.6.0-standard-install.yaml`
 - [ ] **Traefik v3** with a **Gateway** that serves HTTPS for `coder.<your-domain>` and `*.<your-domain>`
-      (plus Traefik's `rewrite-body` plugin – see `prereqs/traefik-41.4.0.reference-values.yaml`)
+      (stock Traefik: nothing rewrites a response – see `prereqs/traefik-41.4.0.reference-values.yaml`)
 - [ ] **Keycloak** (or another OIDC login) with a client called `coder`
       and redirect URL `https://coder.<your-domain>/api/v2/users/oidc/callback` – your users sign in with it
 - [ ] **DNS** for `coder.<your-domain>` and `*.<your-domain>`
@@ -317,8 +317,8 @@ You are the Coder admin (owner).
 **Change the password now:** your avatar › **Account** › **Security**. (Later syncs never reset it.)
 
 Everyone else clicks the **Keycloak logo** on the sign-in page and logs in with Keycloak; they get a normal account.
-The admin can make others admins in **Controls › Settings › Users**. The banner starts empty – publish one at
-`https://coder.<your-domain>/__banner/admin`.
+The admin can make others admins in **Controls › Settings › Users**. The banner starts empty – publish one in
+**Admin Settings › Announcement**.
 
 Then give the image builder its base image (Templates › Images builds on the workspace image, from its own
 registry in the cluster; `./make --deploy` does this itself):
@@ -702,7 +702,6 @@ In active/standby, one Coder replica serves and the others wait warm:
 | Coder | 1 replica, 2 vCPU and 4 GiB | 2 replicas in active/standby (`global.platformHA.mode: activeStandby`), 2 vCPU and 8 GiB each (Coder's reference for up to 1,000 users), one per node, spread over the zones; a PodDisruptionBudget lets node drains take only one down at a time (its preStop hands over) |
 | Database (CloudNativePG) | 2 instances | 3 instances, one per zone. The operator promotes a replica when the primary fails, and Coder follows, because it connects through the `-rw` Service. The operator makes the database's own PodDisruptionBudgets. **Synchronous replication** (`database.synchronous`): a commit waits for one standby, so a failover loses no committed transaction |
 | Database pooler | none | PgBouncer (`database.pooler`, a CloudNativePG Pooler, 2 pods, transaction mode) for code-server HA's relays, whose connections then stop counting against PostgreSQL's `max_connections`; Coder and the replicator keep connecting to `-rw`. Its image, `ghcr.io/cloudnative-pg/pgbouncer:1.25.1`, must be in your registry |
-| Banner | 1 replica | 2 replicas, with a PodDisruptionBudget |
 | metrics-server | 1 replica | 2 replicas on separate nodes, with a PodDisruptionBudget |
 | code-server-replicator | 2 replicas (one works) | the same; a PodDisruptionBudget and zone spread are always on |
 
@@ -796,7 +795,7 @@ and add `-f my-values.yaml` to the step 5 command. That installs everything dire
 ### A single `helm install`
 
 The chart alone – the release asset `coder-airgapped-<version>.tgz`, also `charts/` in the bundle – installs the
-whole platform in one release: Coder and its database, the platform and announcement services, the workspace
+whole platform in one release: Coder and its database, the platform service, the workspace
 templates and their icon server, the Cloud Drive (MinIO and its CSI driver), the image builder (BuildKit and its
 registry) and metrics-server. It needs what [Before you start](#before-you-start) lists (Gateway API CRDs, Traefik's
 Gateway), CloudNativePG's operator, the images in your registry (Step 3), and `my-values.yaml` as above. The Secrets

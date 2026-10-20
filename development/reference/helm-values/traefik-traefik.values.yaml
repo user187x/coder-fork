@@ -1,68 +1,6 @@
 api:
   dashboard: true
   insecure: false
-experimental:
-  localPlugins:
-    rewrite-body:
-      moduleName: github.com/traefik/plugin-rewritebody
-      mountPath: /plugins-local/src/github.com/traefik/plugin-rewritebody
-      source:
-        .traefik.yml: |
-          displayName: Rewrite Body
-          summary: Rewrites the HTTP response body by replacing a search regex by a replacement string.
-          type: middleware
-          import: github.com/traefik/plugin-rewritebody
-          compatibility: TODO
-          testData:
-            lastModified: true
-            rewrites:
-              - regex: "bar"
-                replacement: "foo"
-        go.mod: |
-          module github.com/traefik/plugin-rewritebody
-
-          go 1.14
-        rewritebody.go: "// Package plugin_rewritebody a plugin to rewrite response
-          body.\npackage plugin_rewritebody\n\nimport (\n\t\"bufio\"\n\t\"bytes\"\n\t\"context\"\n\t\"fmt\"\n\t\"log\"\n\t\"net\"\n\t\"net/http\"\n\t\"regexp\"\n)\n\n//
-          Rewrite holds one rewrite body configuration.\ntype Rewrite struct {\n\tRegex
-          \      string `json:\"regex,omitempty\"`\n\tReplacement string `json:\"replacement,omitempty\"`\n}\n\n//
-          Config holds the plugin configuration.\ntype Config struct {\n\tLastModified
-          bool      `json:\"lastModified,omitempty\"`\n\tRewrites     []Rewrite `json:\"rewrites,omitempty\"`\n}\n\n//
-          CreateConfig creates and initializes the plugin configuration.\nfunc CreateConfig()
-          *Config {\n\treturn &Config{}\n}\n\ntype rewrite struct {\n\tregex       *regexp.Regexp\n\treplacement
-          []byte\n}\n\ntype rewriteBody struct {\n\tname         string\n\tnext         http.Handler\n\trewrites
-          \    []rewrite\n\tlastModified bool\n}\n\n// New creates and returns a new
-          rewrite body plugin instance.\nfunc New(_ context.Context, next http.Handler,
-          config *Config, name string) (http.Handler, error) {\n\trewrites := make([]rewrite,
-          len(config.Rewrites))\n\n\tfor i, rewriteConfig := range config.Rewrites
-          {\n\t\tregex, err := regexp.Compile(rewriteConfig.Regex)\n\t\tif err !=
-          nil {\n\t\t\treturn nil, fmt.Errorf(\"error compiling regex %q: %w\", rewriteConfig.Regex,
-          err)\n\t\t}\n\n\t\trewrites[i] = rewrite{\n\t\t\tregex:       regex,\n\t\t\treplacement:
-          []byte(rewriteConfig.Replacement),\n\t\t}\n\t}\n\n\treturn &rewriteBody{\n\t\tname:
-          \        name,\n\t\tnext:         next,\n\t\trewrites:     rewrites,\n\t\tlastModified:
-          config.LastModified,\n\t}, nil\n}\n\nfunc (r *rewriteBody) ServeHTTP(rw
-          http.ResponseWriter, req *http.Request) {\n\twrappedWriter := &responseWriter{\n\t\tlastModified:
-          \  r.lastModified,\n\t\tResponseWriter: rw,\n\t}\n\n\tr.next.ServeHTTP(wrappedWriter,
-          req)\n\n\tbodyBytes := wrappedWriter.buffer.Bytes()\n\n\tcontentEncoding
-          := wrappedWriter.Header().Get(\"Content-Encoding\")\n\n\tif contentEncoding
-          != \"\" && contentEncoding != \"identity\" {\n\t\tif _, err := rw.Write(bodyBytes);
-          err != nil {\n\t\t\tlog.Printf(\"unable to write body: %v\", err)\n\t\t}\n\n\t\treturn\n\t}\n\n\tfor
-          _, rewrite := range r.rewrites {\n\t\tbodyBytes = rewrite.regex.ReplaceAll(bodyBytes,
-          rewrite.replacement)\n\t}\n\n\tif _, err := rw.Write(bodyBytes); err !=
-          nil {\n\t\tlog.Printf(\"unable to write rewrited body: %v\", err)\n\t}\n}\n\ntype
-          responseWriter struct {\n\tbuffer       bytes.Buffer\n\tlastModified bool\n\twroteHeader
-          \ bool\n\n\thttp.ResponseWriter\n}\n\nfunc (r *responseWriter) WriteHeader(statusCode
-          int) {\n\tif !r.lastModified {\n\t\tr.ResponseWriter.Header().Del(\"Last-Modified\")\n\t}\n\n\tr.wroteHeader
-          = true\n\n\t// Delegates the Content-Length Header creation to the final
-          body write.\n\tr.ResponseWriter.Header().Del(\"Content-Length\")\n\n\tr.ResponseWriter.WriteHeader(statusCode)\n}\n\nfunc
-          (r *responseWriter) Write(p []byte) (int, error) {\n\tif !r.wroteHeader
-          {\n\t\tr.WriteHeader(http.StatusOK)\n\t}\n\n\treturn r.buffer.Write(p)\n}\n\nfunc
-          (r *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {\n\thijacker,
-          ok := r.ResponseWriter.(http.Hijacker)\n\tif !ok {\n\t\treturn nil, nil,
-          fmt.Errorf(\"%T is not a http.Hijacker\", r.ResponseWriter)\n\t}\n\n\treturn
-          hijacker.Hijack()\n}\n\nfunc (r *responseWriter) Flush() {\n\tif flusher,
-          ok := r.ResponseWriter.(http.Flusher); ok {\n\t\tflusher.Flush()\n\t}\n}\n"
-      type: inlinePlugin
 gateway:
   enabled: true
   listeners:

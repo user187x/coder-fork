@@ -18,10 +18,6 @@ def load(name, file):
 
 
 ui = load("ui_service", "ui-service.py")
-_banner_spec = importlib.util.spec_from_file_location("banner_server", os.path.normpath(os.path.join(
-    SRC, "../../charts/coder-banner/files/server.py")))
-bn = importlib.util.module_from_spec(_banner_spec)
-_banner_spec.loader.exec_module(bn)
 ib = load("imagebuilder", "imagebuilder.py")
 ld = load("lockdown", "lockdown.py")
 pv = load("provisioners", "provisioners.py")
@@ -134,33 +130,6 @@ class ProvisionersTest(unittest.TestCase):
         with mock.patch.object(pv, "jobs", return_value=[]):
             with self.assertRaises(LookupError):
                 pv.rekick("token", ["gone"], "admin")
-
-
-class BannerCrawlTest(unittest.TestCase):
-    """The announcement service (coder-banner) takes the crawl's pace and convergence as whole numbers in range, and a
-    crawl saved before they existed keeps the pace its speed gave it."""
-
-    def payload(self, **kv):
-        return {"enabled": True, "message": "Hello", "effect": "starwars", **kv}
-
-    def test_takes_both_in_range(self):
-        out = bn.Banner.clean(self.payload(crawlSpeed=4, crawlTilt=0))
-        self.assertEqual((out["crawlSpeed"], out["crawlTilt"]), (4, 0))
-        out = bn.Banner.clean(self.payload(crawlSpeed=60, crawlTilt=100))
-        self.assertEqual((out["crawlSpeed"], out["crawlTilt"]), (60, 100))
-
-    def test_refuses_out_of_range_and_non_numbers(self):
-        for bad in ({"crawlSpeed": 3}, {"crawlSpeed": 61}, {"crawlTilt": -1}, {"crawlTilt": 101},
-                    {"crawlTilt": True}, {"crawlSpeed": "15"}, {"crawlTilt": 50.5}):
-            with self.assertRaises(bn.BannerError, msg=bad):
-                bn.Banner.clean(self.payload(**bad))
-
-    def test_missing_takes_the_speeds_pace_and_the_opening_crawl(self):
-        out = bn.Banner.clean(self.payload(speed="slow"))
-        self.assertEqual((out["crawlSpeed"], out["crawlTilt"]), (9, 100))
-        saved = bn.Banner.with_fields({"message": "Hi", "speed": "fast"})
-        self.assertEqual((saved["crawlSpeed"], saved["crawlTilt"]), (26, 100))
-        self.assertEqual(bn.Banner.with_fields({"speed": "fast", "crawlSpeed": 40})["crawlSpeed"], 40)
 
 
 class TTLCacheTest(unittest.TestCase):
@@ -1437,32 +1406,6 @@ class TrackedWorkspaceImageTest(unittest.TestCase):
         self.assertEqual(a["python"]["packages"][0]["name"], "numpy")
         self.assertIsNone(ib.addons_of("not json"))
         self.assertIsNone(ib.addons_of(None))
-
-
-
-class BannerTransitionsTest(unittest.TestCase):
-    """The banner service (coder-banner/files/server.py) takes the dashboard's effects and transitions, and no other."""
-
-    @classmethod
-    def setUpClass(cls):
-        path = os.path.join(SRC, "../../charts/coder-banner/files/server.py")
-        spec = importlib.util.spec_from_file_location("banner_server", path)
-        cls.srv = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.srv)
-
-    def clean(self, **fields):
-        return self.srv.Banner.clean(dict({"message": "Hello"}, **fields))
-
-    def test_open_transition(self):
-        self.assertEqual(self.clean()["openEffect"], "none")  # saved before it existed: none
-        for effect in ("fade", "rolldown", "kitt", "crt", "glitch"):
-            self.assertEqual(self.clean(openEffect=effect)["openEffect"], effect)
-        with self.assertRaises(self.srv.BannerError):
-            self.clean(openEffect="explode")
-
-    def test_knight_rider(self):
-        self.assertEqual(self.clean(effect="kitt")["effect"], "kitt")
-        self.assertEqual(self.clean(closeEffect="kitt")["closeEffect"], "kitt")
 
 
 
