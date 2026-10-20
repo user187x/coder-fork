@@ -6,9 +6,9 @@ announcement banner and a full-featured workspace template, packaged as **one He
 every container image it needs**. Nothing is downloaded during the install, and nothing at run time reaches outside
 your network.
 
-| | Current release: [**v1.39.1**](https://github.com/user187x/coder-fork/releases/latest) |
+| | Current release: [**v1.40.0**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
-| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.45-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 84 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
+| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.96-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 175 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.9.3` (desktop with two themes, Chromium, Terminator, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
 | Platform service | `ghcr.io/user187x/coder-ui-updates` (its code on `coder-image-tools:1.1.0`: BuildKit helpers, trivy with its databases, Copa; and the image store's provided pictures, `development/image-store`) |
 | Rollback image | `ghcr.io/user187x/coder-upstream:2.38.0-main.70bc2e554-airgap`: pure upstream Coder at the fork's base |
@@ -26,15 +26,21 @@ your network.
 Download the release's parts, verify and join them, then install from inside the air-gapped network:
 
 ```bash
-sha256sum -c coder-airgapped-1.39.1.parts.sha256           # every part: OK
-cat coder-airgapped-1.39.1.tar.gz.part-0* > coder-airgapped-1.39.1.tar.gz
-sha256sum -c coder-airgapped-1.39.1.tar.gz.sha256          # the bundle: OK
+sha256sum -c coder-airgapped-1.40.0-slim.parts.sha256      # every part: OK
+cat coder-airgapped-1.40.0-slim.tar.gz.part-0* > coder-airgapped-1.40.0-slim.tar.gz
+sha256sum -c coder-airgapped-1.40.0-slim.tar.gz.sha256     # the bundle: OK
 
-tar -xzf coder-airgapped-1.39.1.tar.gz && cd coder-airgapped-1.39.1
+tar -xzf coder-airgapped-1.40.0-slim.tar.gz && cd coder-airgapped-1.40.0
 ./make --deploy
 ```
 
-Or take only what you need: from the next release on the bundle also comes in parts by content -
+**1.40.0 carries only our images** (the `-slim` bundle): the public ones (Traefik, CloudNativePG, PostgreSQL, Python,
+BuildKit, the CSI driver, metrics-server) come from your registry under the same paths - or run
+`./mirror-images.sh save` on a machine with internet first. The one chart, `coder-airgapped-1.40.0.tgz`, is also a
+release asset of its own: once the images are in your registry (`./mirror-images.sh push $REGISTRY ours`), a plain
+`helm install` of it installs everything ([DEPLOY.md](helm-chart/DEPLOY.md#a-single-helm-install)).
+
+Or take only what you need: a release can also come in parts by content (`build-bundle.sh`; not 1.40.0) -
 `coder-airgapped-<version>-charts.tar.gz` (installers, chart, every chart packaged; no images) and one
 `-images-<part>.tar.gz` per image folder (`-images-ui`: the user interface; `-images-workspaces`, ...; `-ASSETS.txt`
 says which holds what). Unpacked into one directory they are the bundle, file for file.
@@ -47,14 +53,14 @@ first sign-in (`admin@admin.com` / `admin`; change the password right away).
 Your images in Harbor first? `./make --push-images harbor.example.com/<project>` pushes every image and chart there:
 it helps log your docker and helm in to Harbor (and Docker Hub), checks or creates the project, and checks every push.
 
-**Already running the previous release?** Each release also has a **layer bundle**,
+**Already running the previous release?** A release can also have a **layer bundle** (not 1.40.0),
 `coder-airgapped-<version>-layer.tar.gz`: the customization layer alone (this chart, its installers, and only the
 images changed since the previous release, our own ones as thin deltas of the image the cluster already has), with
 no third-party chart or image. Carry that one file across instead of the whole bundle:
 
 ```bash
-sha256sum -c coder-airgapped-1.39.1-layer.tar.gz.sha256
-tar -xzf coder-airgapped-1.39.1-layer.tar.gz && cd coder-airgapped-1.39.1
+sha256sum -c coder-airgapped-<version>-layer.tar.gz.sha256
+tar -xzf coder-airgapped-<version>-layer.tar.gz && cd coder-airgapped-<version>
 PREVIOUS=../coder-airgapped-1.38.1 ./make --deploy      # the folder you installed from (its .deploy settings)
 ```
 
@@ -64,14 +70,14 @@ on the nodes or in your registry. If anything is missing it says what, changes n
 way. A thin image is made whole again from its base image, every layer checked by its digest. `./layer-support info`
 in the extracted folder lists what the layer carries and needs.
 
-**Installed with Argo CD (the decorator install)?** Its update is smaller still:
+**Installed with Argo CD (the decorator install)?** Its update is smaller still (not 1.40.0):
 `coder-airgapped-<version>-decorator-update.tar.gz` (~300 MB) carries only the fork's Coder image and the two charts,
 with `update-application.sh`, which pushes them to your Harbor and moves your existing Application to the new
 version (it shows the change and keeps your file as a backup):
 
 ```bash
-sha256sum -c coder-airgapped-1.39.1-decorator-update.tar.gz.sha256
-tar -xzf coder-airgapped-1.39.1-decorator-update.tar.gz && cd coder-airgapped-1.39.1-decorator-update
+sha256sum -c coder-airgapped-<version>-decorator-update.tar.gz.sha256
+tar -xzf coder-airgapped-<version>-decorator-update.tar.gz && cd coder-airgapped-<version>-decorator-update
 ./update-application.sh --app /path/to/your-application.yaml --push --apply
 ```
 
@@ -469,8 +475,8 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **51/51** (1.39.1) |
-| Platform service unit tests | **45/45** (1.39.1) |
+| Static checks | **123/123** (1.40.0) |
+| Platform service unit tests | **166/166** (1.40.0) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Argo CD decorator install (`./make --argocd`; kind, egress blocked, Gateway API v1.6.0, Argo CD 3.5.2) | decorated: Synced / Healthy in ~3 min, **7/7**; layer off: **7/7** (upstream Coder, data kept); layer back: **7/7**, every volume the same (1.38.0) |
 | A real Harbor 2.15.2 with a private CA (`harbor-setup.sh`; installing machine: docker-in-docker, no images) | `./make --push-images`: CA trusted, project created, 11 images (all from the bundle) and 5 charts, all checked; a single-chart Argo CD install (robot account, Harbor's CA) migrated to the decorated one by `./make --argocd` in place: **23/23** objects kept, **7/7** (1.39.0) |

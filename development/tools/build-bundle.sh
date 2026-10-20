@@ -22,16 +22,18 @@
 #                                           coder); no third-party chart or image unless it changed (helm-chart/layer-support)
 # Lints and renders the chart first. Public image archives that are missing are fetched with `mirror-images.sh save`
 # (needs internet; --no-save fails instead). Our image archives must exist (tools/build-*.sh).
-#   ./build-bundle.sh [--no-save] [--no-slim] [--no-split] [--layer-base VERSION | --no-layer]
+#   ./build-bundle.sh [--no-save] [--no-full] [--no-slim] [--no-split] [--layer-base VERSION | --no-layer]
 # --no-slim: not the slim tarball (not a release asset; it holds every image of ours, the dataflow one among them).
+# --no-full: not the full tarball (a release of our images only: the slim one is the bundle).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; top="$(cd "${here}/../.." && pwd)"
 bundle="${top}/helm-chart"; chart="${bundle}/coder-airgapped"; dist="${top}/dist"
 version=$(sed -n 's/^version: *//p' "${chart}/Chart.yaml"); name="coder-airgapped-${version}"
-save=1 slim=1 split=1 layer_base=""
+save=1 full=1 slim=1 split=1 layer_base=""
 while (($#)); do
 	case "$1" in
 	--no-save) save=0 ;;
+	--no-full) full=0 ;;
 	--no-slim) slim=0 ;;
 	--no-split) split=0 ;;
 	--layer-base) layer_base="${2:?--layer-base VERSION}"; shift ;;
@@ -76,7 +78,7 @@ tarball() { # OUT [tar options...]: the bundle's tree as coder-airgapped-<versio
 	mv "${dist}/${out}.part" "${dist}/${out}"; (cd "$dist" && sha256sum "$out" >"${out}.sha256")
 	echo "wrote dist/${out} ($(du -h "${dist}/${out}" | cut -f1))"
 }
-tarball "${name}.tar.gz"
+if ((full)); then tarball "${name}.tar.gz"; fi
 
 # The archives of public images (the slim tarball leaves them out)
 public=()

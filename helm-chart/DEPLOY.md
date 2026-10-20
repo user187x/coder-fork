@@ -3,7 +3,7 @@
 ## The quick way: `./make --deploy`
 
 ```bash
-tar -xzf coder-airgapped-1.39.1.tar.gz && cd coder-airgapped-1.39.1
+tar -xzf coder-airgapped-1.40.0-slim.tar.gz && cd coder-airgapped-1.40.0   # 1.40.0: only our images (see Step 1)
 ./make --deploy
 ```
 
@@ -38,8 +38,8 @@ just the layers their previous version lacks; Traefik, CloudNativePG, the Gatewa
 images are not in it at all.
 
 ```bash
-sha256sum -c coder-airgapped-1.39.1-layer.tar.gz.sha256
-tar -xzf coder-airgapped-1.39.1-layer.tar.gz && cd coder-airgapped-1.39.1
+sha256sum -c coder-airgapped-<version>-layer.tar.gz.sha256
+tar -xzf coder-airgapped-<version>-layer.tar.gz && cd coder-airgapped-<version>
 ./layer-support info                                   # what it carries, and what the cluster must have
 ./make --deploy                                        # asks for the folder you installed from
 ```
@@ -213,8 +213,8 @@ Tools needed: `docker`, `helm`, `kubectl` (and `aws` if you use ECR).
 ## Step 1 – Check the bundle
 
 ```bash
-tar -xzf coder-airgapped-1.39.1.tar.gz
-cd coder-airgapped-1.39.1
+tar -xzf coder-airgapped-1.40.0-slim.tar.gz
+cd coder-airgapped-1.40.0
 ./mirror-images.sh list
 ```
 
@@ -222,22 +222,24 @@ Every image should say `bundled` – they are all inside `images/`, one folder p
 user interface, `workspaces/`, `cloud-drive/`, ...: see `images/README.md`), so no internet is needed. The packaged
 charts are in `charts/`.
 
-Using the smaller **`-slim`** bundle (only our images)? Then either run `./mirror-images.sh save` here on a machine with
-internet, or – if your registry already has the public images – go on and use `ours` in Step 3.
+Using the smaller **`-slim`** bundle (only our images – 1.40.0 ships only that one)? Then only ours say `bundled`:
+either run `./mirror-images.sh save` here on a machine with internet, or – if your registry already has the public
+images, under the same paths (`docker.io/library/python:3.13-alpine` as `$REGISTRY/library/python:3.13-alpine`, ...;
+`./mirror-images.sh list $REGISTRY` shows each target) – go on and use `ours` in Step 3.
 
 Downloaded the release **in parts** (`-charts.tar.gz` and the `-images-<part>.tar.gz` you need)? Unpack them all into
-one directory: they make the same `coder-airgapped-1.39.1` folder (`-ASSETS.txt` says which part holds what).
+one directory: they make the same `coder-airgapped-1.40.0` folder (`-ASSETS.txt` says which part holds what).
 
 ## Step 2 – Carry it across
 
-Copy the whole `coder-airgapped-1.39.1` folder into the air-gapped network.
+Copy the whole `coder-airgapped-1.40.0` folder into the air-gapped network.
 
 ---
 
 ## Step 3 – Push the images to your registry
 
 ```bash
-cd coder-airgapped-1.39.1
+cd coder-airgapped-1.40.0
 REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com      # <-- your registry
 
 docker login $REGISTRY                                     # ECR: aws ecr get-login-password | docker login -u AWS --password-stdin $REGISTRY
@@ -258,7 +260,7 @@ ECR=1 ./mirror-images.sh chart $REGISTRY/charts            # drop ECR=1 if not u
 ## Step 5 – Create the secrets (and the database operator)
 
 ```bash
-CNPG_IMAGE=$REGISTRY/cloudnative-pg/cloudnative-pg:1.33.0 \
+CNPG_IMAGE=$REGISTRY/cloudnative-pg/cloudnative-pg:1.30.0 \
 ./install.sh --prepare-only --cnpg \
   --ca ca.crt \
   --tls-crt wildcard.crt --tls-key wildcard.key \
@@ -841,5 +843,32 @@ cp values-eks-airgap.example.yaml my-values.yaml    # change every CHANGE-ME
 ```
 
 and add `-f my-values.yaml` to the step 5 command. That installs everything directly; skip steps 4, 6 and 7.
+
+### A single `helm install`
+
+The chart alone – the release asset `coder-airgapped-<version>.tgz`, also `charts/` in the bundle – installs the
+whole platform in one release: Coder and its database, the platform and announcement services, the workspace
+templates and their icon server, the Cloud Drive (MinIO and its CSI driver), the image builder (BuildKit and its
+registry) and metrics-server. It needs what [Before you start](#before-you-start) lists (Gateway API CRDs, Traefik's
+Gateway), CloudNativePG's operator, the images in your registry (Step 3), and `my-values.yaml` as above. The Secrets
+come from values too, so `install.sh` is not needed:
+
+```bash
+helm install cnpg prereqs/cloudnative-pg-0.29.0.tgz -n cnpg-system --create-namespace --wait \
+  --set image.repository=$REGISTRY/cloudnative-pg/cloudnative-pg --set image.tag=1.30.0   # unless it is there already
+
+tr -d '\r\n' <oidc-client-secret.txt >client-secret.txt     # no newline in the secret
+helm install coder coder-airgapped-1.40.0.tgz -n coder --create-namespace -f my-values.yaml \
+  --set secrets.tlsCa.create=true --set-file secrets.tlsCa.caCrt=ca.crt \
+  --set secrets.wildcardTls.create=true \
+  --set-file secrets.wildcardTls.tlsCrt=wildcard.crt --set-file secrets.wildcardTls.tlsKey=wildcard.key \
+  --set secrets.oidcCa.create=true --set-file secrets.oidcCa.caCrt=keycloak-ca.crt \
+  --set secrets.oidcClient.create=true --set-file secrets.oidcClient.clientSecret=client-secret.txt \
+  --wait --timeout 20m
+```
+
+The namespace must be `coder` (the workspace template accepts no other). Keycloak not ready yet? Leave out the two
+`oidc` lines (Step 5 says what that means). Then Step 8: sign in as `admin@admin.com` / `admin`, and seed the image
+builder. `helm upgrade` with the next release's chart and the same options updates it.
 
 More detail: `README.md`.

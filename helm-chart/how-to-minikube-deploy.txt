@@ -1,8 +1,11 @@
 HOW TO DEPLOY CODER (AIR-GAPPED) ON MINIKUBE
 ============================================
 
-Everything the install needs is in this bundle, every container image included.
-Nothing is downloaded while it runs.
+Everything the install needs is in this bundle, every container image of ours included.
+Release 1.40.0 ships only our images (the -slim bundle): the public ones (Traefik,
+CloudNativePG, PostgreSQL, Python, BuildKit, ...) come from the internet: run
+./mirror-images.sh save  in the folder first, on a machine with internet, and then
+nothing is downloaded while the install runs.
 
 
 BEFORE YOU START
@@ -12,13 +15,13 @@ The machine needs these installed:  docker, minikube, helm, kubectl
 
 1. UNPACK THE BUNDLE
 --------------------
-    tar -xzf coder-airgapped-1.39.1.tar.gz
-    cd coder-airgapped-1.39.1
+    tar -xzf coder-airgapped-1.40.0-slim.tar.gz
+    cd coder-airgapped-1.40.0
 
-(The release on GitHub comes in two parts. Join them first:
-    sha256sum -c coder-airgapped-1.39.1.parts.sha256
-    cat coder-airgapped-1.39.1.tar.gz.part-0* > coder-airgapped-1.39.1.tar.gz
-    sha256sum -c coder-airgapped-1.39.1.tar.gz.sha256 )
+(The release on GitHub comes in parts. Join them first:
+    sha256sum -c coder-airgapped-1.40.0-slim.parts.sha256
+    cat coder-airgapped-1.40.0-slim.tar.gz.part-0* > coder-airgapped-1.40.0-slim.tar.gz
+    sha256sum -c coder-airgapped-1.40.0-slim.tar.gz.sha256 )
 
 
 2. RUN THE INSTALLER

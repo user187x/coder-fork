@@ -1,10 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.40.0 – 2026-10-20
 
 Coder `2.0.0-platform.96` (fork `c62a06cae`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
+
+* **The release carries only our images**: the slim bundle (`coder-airgapped-1.40.0-slim.tar.gz`, in parts) holds the
+  installers, the chart and the eight images of ours (Coder, the platform service, the three workspace images, MinIO,
+  the image registry, and the rollback Coder); no public image (Traefik, CloudNativePG and PostgreSQL, Python,
+  BuildKit, the CSI driver, metrics-server) - those come from your registry, under the same paths. And the one chart,
+  `coder-airgapped-1.40.0.tgz`, installs all of it with `helm install` (the Secrets from values, `secrets.*.create`).
+  `build-bundle.sh --no-full` builds such a release (no full tarball).
 
 * **Pit stop: Copa patches an image from the Fix image page** (service, fork, tools image), the page's first way in
   beside Dockerfile and Agent. [Copa (Copacetic)](https://github.com/project-copacetic/copacetic) v0.15.0 patches
