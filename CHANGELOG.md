@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.41.0 – 2026-10-20
 
-Coder `2.0.0-platform.99` (fork `f69299bdc`).
+Coder `2.0.0-platform.99` (fork `f69299bdc`); the workspace images as 1.40.1's (workspace 1.9.4, dataflow 1.1.4).
 
 * **Platform HA phase 1: the replica registry** (fork, `coderd/platformha`, Community code; chart
   `global.platformHA.mode: registry`, off by default). Each Coder replica holds a lease in PostgreSQL (schema
