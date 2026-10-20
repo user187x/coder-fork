@@ -1554,7 +1554,10 @@ class PitStopTest(unittest.TestCase):
     def test_an_image_built_here_gets_its_next_version_and_only_the_findings_chosen(self):
         ib.STORE.create("tool", "", ib.empty_spec(), "alice")
         ib.STORE.set("tool", status="ready", version=4, ref="%s/coder-images/tool:4" % ib.REGISTRY, report=self.REPORT)
-        target, build_id = ib.start_pit_stop("tool", {"keys": [{"id": "CVE-2", "pkg": "requests"}]}, "alice")
+        with self.assertRaisesRegex(ValueError, "Python ones with library patching"):
+            ib.start_pit_stop("tool", {"keys": [{"id": "CVE-2", "pkg": "requests"}]}, "alice")
+        target, build_id = ib.start_pit_stop("tool", {"keys": [{"id": "CVE-2", "pkg": "requests"}], "libraries": True},
+                                             "alice")
         st = ib.pit_state(build_id)
         self.assertEqual((target, st["version"], st["pairs"], st["source"]),
                          ("tool", 5, [["CVE-2", "requests"]], "%s/coder-images/tool:4" % ib.REGISTRY))
@@ -1587,13 +1590,35 @@ class PitStopTest(unittest.TestCase):
         trivy = {"Results": [
             {"Target": "x (ubuntu 24.04)", "Class": "os-pkgs", "Vulnerabilities": [
                 {"VulnerabilityID": "CVE-1", "PkgName": "openssl"}, {"VulnerabilityID": "CVE-9", "PkgName": "curl"}]},
-            {"Target": "Python", "Class": "lang-pkgs", "Vulnerabilities": [
+            {"Target": "Python", "Class": "lang-pkgs", "Type": "python-pkg", "Vulnerabilities": [
                 {"VulnerabilityID": "CVE-8", "PkgName": "idna"}]}]}
         out = ib.pit_filter(trivy, [["CVE-1", "openssl"]])
         self.assertEqual([(r["Target"], [v["VulnerabilityID"] for v in r["Vulnerabilities"]]) for r in out["Results"]],
                          [("x (ubuntu 24.04)", ["CVE-1"])])
         self.assertEqual(ib.pit_remaining(self.REPORT, {("CVE-1", "openssl"), ("CVE-7", "gone")}),
                          [("CVE-1", "openssl")])
+
+    def test_copa_works_on_os_and_python_packages_only(self):
+        top = [dict(v) for v in self.REPORT["vulnerabilities"]["top"]] + [
+            {"id": "CVE-4", "pkg": "lodash", "fixed": "4.17.21", "class": "lang-pkgs", "type": "node-pkg",
+             "target": "Node.js"},
+            {"id": "CVE-5", "pkg": "stdlib", "fixed": "1.24.1", "class": "lang-pkgs", "type": "gobinary",
+             "target": "usr/bin/x"},
+            # a scan from before findings had their class and type: told by the target and the path
+            {"id": "CVE-6", "pkg": "glibc", "fixed": "2.39-0ubuntu8.5", "target": "x (ubuntu 24.04)"},
+            {"id": "CVE-7", "pkg": "idna", "fixed": "3.7", "target": "opt/venv/lib/python3.12/site-packages/idna-3.6.dist-info/METADATA"}]
+        report = {"vulnerabilities": {"top": top}}
+        self.assertEqual(ib.pit_keys(report, []), {("CVE-1", "openssl"), ("CVE-2", "requests"), ("CVE-6", "glibc"),
+                                                   ("CVE-7", "idna")})
+        self.assertEqual(ib.pit_keys(report, [], libraries=False), {("CVE-1", "openssl"), ("CVE-6", "glibc")})
+        self.assertEqual(ib.pit_keys(report, [{"id": "CVE-4", "pkg": "lodash"}, {"id": "CVE-2", "pkg": "requests"}]),
+                         {("CVE-2", "requests")})
+        trivy = {"Results": [
+            {"Target": "Python", "Class": "lang-pkgs", "Type": "python-pkg", "Vulnerabilities": [
+                {"VulnerabilityID": "CVE-2", "PkgName": "requests"}]},
+            {"Target": "Node.js", "Class": "lang-pkgs", "Type": "node-pkg", "Vulnerabilities": [
+                {"VulnerabilityID": "CVE-2", "PkgName": "requests"}]}]}
+        self.assertEqual([r["Target"] for r in ib.pit_filter(trivy, [["CVE-2", "requests"]])["Results"]], ["Python"])
 
     def test_the_lap_job_runs_copa_beside_a_rootless_buildkit(self):
         with mock.patch.object(ib, "PULL_SECRETS", [{"name": "harbor"}]), \

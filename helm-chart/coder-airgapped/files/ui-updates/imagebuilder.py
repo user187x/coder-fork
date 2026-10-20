@@ -1853,11 +1853,29 @@ def pit_target(img, source, user):
     return target
 
 
-def pit_keys(report, keys):
-    """The findings a pit stop works on, as (vulnerability id, package) pairs: of those with a fixed version, the ones
-    chosen, or (none chosen) every one."""
+# trivy's types of the Python packages Copa's library patching updates (in their own environments). Node.js ones it
+# patches through a tooling image from Docker Hub, and on the AI image that failed the whole patch: left out, they go
+# the other ways (an add-on's newer release). Go, Java and the rest Copa does not patch.
+PIT_PYTHON_TYPES = {"python-pkg", "pip", "pipenv", "poetry", "uv", "conda-pkg"}
+_PY_PATH = re.compile(r"(^|/)lib/python[0-9.]+/(site|dist)-packages/")
+
+
+def pit_kind(v):
+    """A report finding's kind for a pit stop: "os" (a package of the distribution), "python", or None (not Copa's)."""
+    if v.get("class") == "os-pkgs" or (not v.get("class") and re.search(r" \([^)]+\)$", v.get("target") or "")):
+        return "os"
+    if v.get("type") in PIT_PYTHON_TYPES or v.get("target") == "Python" or (
+            not v.get("type") and _PY_PATH.search((v.get("path") or v.get("target") or "").lstrip("/"))):
+        return "python"
+    return None
+
+
+def pit_keys(report, keys, libraries=True):
+    """The findings a pit stop works on, as (vulnerability id, package) pairs: of those Copa patches (OS packages, and
+    Python ones with library patching) with a fixed version, the ones chosen, or (none chosen) every one."""
+    kinds = {"os", "python"} if libraries else {"os"}
     fixable = {(v["id"], v["pkg"]) for v in ((report or {}).get("vulnerabilities") or {}).get("top") or []
-               if v.get("fixed")}
+               if v.get("fixed") and pit_kind(v) in kinds}
     if keys:
         return fixable & {(str(k.get("id")), str(k.get("pkg"))) for k in keys if isinstance(k, dict)}
     return fixable
@@ -1953,7 +1971,7 @@ class PitStop(Build):
                 source=p["source"], laps=p["laps"], libraries=p["libraries"])
         STORE.append_log(self.build_id, "[pit] into the pit: %s -> %s (up to %d lap%s; %s)\n" % (
             p["source"], self.target_ref, p["laps"], "" if p["laps"] == 1 else "s",
-            "OS and library packages" if p["libraries"] else "OS packages"))
+            "OS and Python packages" if p["libraries"] else "OS packages"))
         self.finish_step("pit-in")
         good = None
         for lap in range(1, p["laps"] + 1):
@@ -2079,9 +2097,10 @@ def start_pit_stop(image_id, options, user):
     keys = options.get("keys") or []
     if not isinstance(keys, list) or len(keys) > 2000:
         raise ValueError("The findings: a list of {id, pkg}.")
-    pairs = pit_keys(img["report"], keys)
+    pairs = pit_keys(img["report"], keys, libraries)
     if not pairs:
-        raise ValueError("Nothing to fix: no finding chosen has a fixed version.")
+        raise ValueError("Nothing to fix: Copa patches OS packages, and Python ones with library patching, that "
+                         "have a fixed version; none of the findings chosen is one.")
     source = pit_source(img)
     target = pit_target(img, source, user)
     if target != image_id and STORE.active_build(target):
@@ -2193,12 +2212,13 @@ def _forward(port, target):
 
 
 def pit_filter(report, pairs):
-    """trivy's JSON report with only the findings worked on ((vulnerability id, package) pairs), and only the results
-    that keep one: what Copa patches."""
+    """trivy's JSON report with only the findings worked on ((vulnerability id, package) pairs), in OS packages and
+    Python environments only, and only the results that keep one: what Copa patches."""
     wanted = {tuple(k) for k in pairs}
     for res in report.get("Results") or []:
+        ours = res.get("Class") == "os-pkgs" or res.get("Type") in PIT_PYTHON_TYPES
         res["Vulnerabilities"] = [v for v in res.get("Vulnerabilities") or []
-                                  if (v.get("VulnerabilityID"), v.get("PkgName")) in wanted]
+                                  if ours and (v.get("VulnerabilityID"), v.get("PkgName")) in wanted]
     report["Results"] = [r for r in report.get("Results") or [] if r.get("Vulnerabilities")]
     return report
 
@@ -2221,7 +2241,7 @@ def copa(url):
     print("[pit] lap %d: %s -> %s" % (plan["lap"], plan["source"], plan["target"]), flush=True)
     report = plan.get("report")
     if not report:
-        print("[pit] report: trivy on %s (%s packages)" % (plan["source"], "OS and library" if plan["libraries"]
+        print("[pit] report: trivy on %s (%s packages)" % (plan["source"], "OS and Python" if plan["libraries"]
                                                              else "OS"), flush=True)
         data = securitydata.job_stamp(os.environ.get("SECURITY_DIR"))
         # Java archives aside: Copa does not patch them, and they would need trivy's Java database
