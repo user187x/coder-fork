@@ -1857,6 +1857,8 @@ def pit_target(img, source, user):
 # patches through a tooling image from Docker Hub, and on the AI image that failed the whole patch: left out, they go
 # the other ways (an add-on's newer release). Go, Java and the rest Copa does not patch.
 PIT_PYTHON_TYPES = {"python-pkg", "pip", "pipenv", "poetry", "uv", "conda-pkg"}
+# pip's --break-system-packages, as an environment variable: Copa runs pip with the image's environment
+PIT_PIP_ENV = "PIP_BREAK_SYSTEM_PACKAGES"
 _PY_PATH = re.compile(r"(^|/)lib/python[0-9.]+/(site|dist)-packages/")
 
 
@@ -1961,7 +1963,46 @@ class PitStop(Build):
             except Exception:  # noqa: BLE001
                 pass
 
+    def _drop_job(self, name):
+        """A lap's Job, gone as soon as the lap has what it needs: its pod's scratch space (BuildKit's, GBs) with it."""
+        try:
+            kube_call("DELETE", "/apis/batch/v1/namespaces/%s/jobs/%s?propagationPolicy=Background" % (NAMESPACE, name))
+        except Exception:  # noqa: BLE001 - run() deletes it at the end anyway
+            pass
+
+    def _pip_source(self):
+        """Copa's source when it updates Python packages: the source with PIP_BREAK_SYSTEM_PACKAGES=1 in its
+        configuration (a tag of its own, the same layers), for pip installs into environments the distribution or uv
+        manage (PEP 668) - as the Dockerfile's fix does (--break-system-packages). The patched image has it taken out
+        again. None where it cannot be made: Copa patches the source as it is."""
+        src = self.pit["source"]
+        if not src.startswith(REGISTRY + "/"):
+            return None
+        repo, tag = src[len(REGISTRY) + 1:].rsplit(":", 1)
+        out = ("%s-pit%d" % (tag, self.build_id))[-128:]
+        try:
+            image_env(repo, tag, out, add={PIT_PIP_ENV: "1"})
+        except Exception as e:  # noqa: BLE001
+            STORE.append_log(self.build_id, "[pit] the source for pip could not be made (%s): Copa patches the image "
+                                            "as it is - pip refuses environments the distribution manages\n" % e)
+            return None
+        self.pip_tag = (repo, out)
+        STORE.append_log(self.build_id, "[pit] Python: pip may update environments the distribution or uv manage "
+                                        "(%s, for the patch only)\n" % PIT_PIP_ENV)
+        return "%s/%s:%s" % (REGISTRY, repo, out)
+
     def _run(self):
+        self.pip_tag = None
+        try:
+            self._race()
+        finally:
+            if self.pip_tag:
+                try:
+                    delete_manifest(*self.pip_tag)
+                except Exception:  # noqa: BLE001 - a tag left over: its configuration blob, nothing more
+                    pass
+
+    def _race(self):
         p = self.pit
         STORE.update_build(self.build_id, status="building", steps=self.steps(),
                            message="Into the pit: %s" % p["source"])
@@ -1972,8 +2013,11 @@ class PitStop(Build):
         STORE.append_log(self.build_id, "[pit] into the pit: %s -> %s (up to %d lap%s; %s)\n" % (
             p["source"], self.target_ref, p["laps"], "" if p["laps"] == 1 else "s",
             "OS and Python packages" if p["libraries"] else "OS packages"))
+        p["copaSource"] = self._pip_source() if p["libraries"] else None
+        self._save()
         self.finish_step("pit-in")
         good = None
+        repo = "%s/%s" % (REPO, self.image_id)
         for lap in range(1, p["laps"] + 1):
             p["lap"] = lap
             rec = {"lap": lap, "level": self.level(lap) if p["libraries"] else None, "status": "patching",
@@ -1991,6 +2035,7 @@ class PitStop(Build):
             if self.cancelled:
                 raise RuntimeError("cancelled")
             code, reason = self._exit_code(name, "copa")
+            self._drop_job(name)
             result = STORE.setting("pit-result-%d-%d" % (self.build_id, lap)) or {}
             rec.update(summary=result.get("summary"), vex=result.get("vex"), finishedAt=now())
             if code != 0 or not result.get("pushed"):
@@ -2002,11 +2047,15 @@ class PitStop(Build):
                         lap, why, good["lap"]))
                     break
                 raise RuntimeError("Copa could not patch the image: %s" % why)
+            if p.get("copaSource"):
+                # pip's permission was for the patch only: out of the patched image's configuration
+                image_env(repo, str(self.version), str(self.version), drop=[PIT_PIP_ENV])
             # the patched image, rescanned
             self.advance("rescan", "Rescanning the patched image (lap %d)" % lap)
             self.scan_kind = "scan%d" % lap
             STORE.put_setting("report-%d" % self.build_id, None)
             report = self._scan()
+            self._drop_job(job_name(self.scan_kind, self.image_id, self.build_id))
             if not report:
                 rec.update(status="failed", error="The rescan gave no report.")
                 self._save()
@@ -2023,15 +2072,16 @@ class PitStop(Build):
                 lap, summary.get("grade") or "?", len(left), len(p["pairs"])))
             if not left:
                 break
-            # another lap only where it could do better: library updates may go further, or packages were skipped
-            skipped = (result.get("summary") or {}).get("skipped") or 0
+            # another lap only where it could do better: library updates may go a level further. (The same lap
+            # again - from the same image, with the same report - would patch the same packages, skip the same.)
             further = p["libraries"] and self.level(lap + 1) != self.level(lap)
-            if lap < p["laps"] and not further and not skipped:
-                STORE.append_log(self.build_id, "[pit] no further lap: Copa found no newer packages for the rest\n")
+            if lap < p["laps"] and not further:
+                STORE.append_log(self.build_id, "[pit] no further lap: %s\n" % (
+                    "library updates may go no further than %s" % self.level(lap) if p["libraries"]
+                    else "Copa found no newer packages for the rest"))
                 break
         # back on the track: the patched image is this version, and :latest
         self.advance("pit-out", "Back on the track")
-        repo = "%s/%s" % (REPO, self.image_id)
         retag(repo, str(self.version), "latest")
         _, digest = manifest(repo, str(self.version))
         size = image_size(repo, str(self.version))
@@ -2060,6 +2110,75 @@ class PitStop(Build):
         if st:
             st["outcome"] = "cancelled" if self.cancelled else "failed"
             STORE.put_setting("pit-%d" % self.build_id, st)
+
+
+def push_blob(repo, data):
+    """A blob into the builder's registry (in one upload), unless it is there: its digest."""
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    try:
+        with registry("HEAD", "%s/blobs/%s" % (repo, digest), accept="*/*", timeout=30):
+            return digest
+    except urllib.error.HTTPError as e:
+        e.close()
+    req = urllib.request.Request("http://%s/v2/%s/blobs/uploads/" % (REGISTRY, repo), data=b"", method="POST")
+    with urllib.request.urlopen(req, timeout=60) as r:
+        loc = r.headers.get("Location") or ""
+    if loc.startswith("/"):
+        loc = "http://%s%s" % (REGISTRY, loc)
+    loc += ("&" if "?" in loc else "?") + "digest=" + urllib.parse.quote(digest)
+    urllib.request.urlopen(urllib.request.Request(loc, data=data, method="PUT", headers={
+        "Content-Type": "application/octet-stream"}), timeout=300).read()
+    return digest
+
+
+def put_manifest(repo, ref, body, ctype):
+    """A manifest into the builder's registry, under a tag (or, ref None, its digest): its digest."""
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    urllib.request.urlopen(urllib.request.Request("http://%s/v2/%s/manifests/%s" % (REGISTRY, repo, ref or digest),
+                                                  data=body, method="PUT", headers={"Content-Type": ctype}),
+                           timeout=60).read()
+    return digest
+
+
+def image_env(repo, ref, out_tag, add=None, drop=()):
+    """repo:ref again as repo:out_tag with its configuration's environment changed - `add` ({name: value}) set,
+    `drop` (names) taken out: a new configuration and manifest over the same layers, no build. Of an index, each
+    image's (its attestations left out: they name the manifests as they were). The new manifest's digest."""
+    names = set(drop) | set(add or {})
+    pack = lambda obj: json.dumps(obj, separators=(",", ":")).encode()  # noqa: E731
+
+    def edit(m):
+        with registry("GET", "%s/blobs/%s" % (repo, m["config"]["digest"]), accept="*/*") as r:
+            cfg = json.loads(r.read())
+        conf = cfg.setdefault("config", {})
+        conf["Env"] = [e for e in conf.get("Env") or [] if e.split("=", 1)[0] not in names] + [
+            "%s=%s" % kv for kv in (add or {}).items()]
+        blob = pack(cfg)
+        return dict(m, config=dict(m["config"], digest=push_blob(repo, blob), size=len(blob)))
+
+    with registry("GET", "%s/manifests/%s" % (repo, ref)) as r:
+        top = json.loads(r.read())
+        ctype = r.headers.get("Content-Type") or top.get("mediaType")
+    if not top.get("manifests"):
+        return put_manifest(repo, out_tag, pack(edit(top)), ctype)
+    kept = []
+    for x in top["manifests"]:
+        if (x.get("platform") or {}).get("architecture") in (None, "unknown"):
+            continue
+        with registry("GET", "%s/manifests/%s" % (repo, x["digest"])) as r:
+            m, mtype = json.loads(r.read()), r.headers.get("Content-Type") or x.get("mediaType")
+        body = pack(edit(m))
+        kept.append(dict(x, digest=put_manifest(repo, None, body, mtype), size=len(body)))
+    return put_manifest(repo, out_tag, pack(dict(top, manifests=kept)), ctype)
+
+
+def delete_manifest(repo, ref):
+    """A tag's manifest out of the builder's registry (every tag on it goes; its blobs stay until garbage
+    collection)."""
+    with registry("HEAD", "%s/manifests/%s" % (repo, ref), timeout=30) as r:
+        digest = r.headers.get("Docker-Content-Digest")
+    urllib.request.urlopen(urllib.request.Request("http://%s/v2/%s/manifests/%s" % (REGISTRY, repo, digest),
+                                                  method="DELETE"), timeout=60).read()
 
 
 def retag(repo, tag, new):
@@ -3002,7 +3121,9 @@ def pit_internal(h, method, b, what):
         h.send(404, "not a pit stop\n")
         return True
     if len(parts) == 2 and method == "GET":
-        h.send_json(200, {"lap": lap, "source": st["source"], "target": run.target_ref, "libraries": st["libraries"],
+        # Copa's source: the image, or (Python) its copy that lets pip into environments the distribution manages
+        h.send_json(200, {"lap": lap, "source": st.get("copaSource") or st["source"], "target": run.target_ref,
+                          "libraries": st["libraries"],
                           "level": run.level(lap), "pairs": st["pairs"],
                           "report": STORE.setting("pit-report-%d" % b["id"])})
         return True

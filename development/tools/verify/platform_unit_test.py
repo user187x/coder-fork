@@ -1494,6 +1494,143 @@ class NodeImagesTest(unittest.TestCase):
             self.assertEqual(ib.scan_target("ghcr.io/o/small:1"), ("ghcr.io/o/small:1", "n1"))
 
 
+class FakeRegistry:
+    """An in-memory registry (the v2 API's manifests, blobs, uploads and deletes), on a port of its own."""
+
+    def __init__(self):
+        import hashlib, http.server, re, socketserver
+        self.blobs, self.manifests = {}, {}
+        reg, sha = self, lambda b: "sha256:" + hashlib.sha256(b).hexdigest()
+        self.sha = sha
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def reply(self, code, body=b"", headers=None):
+                self.send_response(code)
+                for k, v in (headers or {}).items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+
+            def do_GET(self):
+                repo, kind, ref = re.match(r"^/v2/(.+)/(manifests|blobs)/([^/?]+)$", self.path).groups()
+                if kind == "blobs":
+                    data = reg.blobs.get((repo, ref))
+                    return self.reply(200, data) if data is not None else self.reply(404)
+                found = reg.manifests.get((repo, ref))
+                if not found:
+                    return self.reply(404)
+                self.reply(200, found[0], {"Content-Type": found[1], "Docker-Content-Digest": sha(found[0])})
+
+            do_HEAD = do_GET
+
+            def do_POST(self):
+                repo = re.match(r"^/v2/(.+)/blobs/uploads/$", self.path).group(1)
+                self.reply(202, headers={"Location": "/v2/%s/blobs/uploads/u1?_state=x" % repo})
+
+            def do_PUT(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                u = urllib.parse.urlparse(self.path)
+                up = re.match(r"^/v2/(.+)/blobs/uploads/\w+$", u.path)
+                if up:
+                    digest = urllib.parse.parse_qs(u.query)["digest"][0]
+                    assert digest == sha(body)
+                    reg.blobs[(up.group(1), digest)] = body
+                    return self.reply(201)
+                repo, ref = re.match(r"^/v2/(.+)/manifests/(.+)$", u.path).groups()
+                assert not ref.startswith("sha256:") or ref == sha(body)
+                for r in {ref, sha(body)}:
+                    reg.manifests[(repo, r)] = (body, self.headers["Content-Type"])
+                self.reply(201, headers={"Docker-Content-Digest": sha(body)})
+
+            def do_DELETE(self):
+                repo, digest = re.match(r"^/v2/(.+)/manifests/(.+)$", self.path).groups()
+                body = reg.manifests[(repo, digest)][0]
+                for k in [k for k, v in reg.manifests.items() if k[0] == repo and v[0] == body]:
+                    del reg.manifests[k]
+                self.reply(202)
+
+        self.server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addr = "127.0.0.1:%d" % self.server.server_address[1]
+
+    def put(self, repo, ref, obj, ctype):
+        body = json.dumps(obj).encode()
+        for r in {ref, self.sha(body)}:
+            self.manifests[(repo, r)] = (body, ctype)
+        return self.sha(body)
+
+    def blob(self, repo, obj):
+        data = json.dumps(obj).encode() if not isinstance(obj, bytes) else obj
+        self.blobs[(repo, self.sha(data))] = data
+        return self.sha(data)
+
+    def get(self, repo, ref):
+        return json.loads(self.manifests[(repo, ref)][0])
+
+    def env(self, repo, ref):
+        m = self.get(repo, ref)
+        return json.loads(self.blobs[(repo, m["config"]["digest"])])["config"]["Env"]
+
+
+class PitRegistryTest(unittest.TestCase):
+    """The pit stop's own registry work: Copa's source with pip let into environments the distribution manages (the
+    image's configuration only, the same layers), and that taken out of the patched image again."""
+
+    V2 = "application/vnd.docker.distribution.manifest.v2+json"
+    INDEX = "application/vnd.oci.image.index.v1+json"
+    OCI = "application/vnd.oci.image.manifest.v1+json"
+
+    def setUp(self):
+        self.reg = FakeRegistry()
+        self.patch = mock.patch.object(ib, "REGISTRY", self.reg.addr)
+        self.patch.start()
+        self.repo = "coder-images/base/ai"
+        cfg = self.reg.blob(self.repo, {"architecture": "amd64", "config": {"Env": ["PATH=/usr/bin", "LANG=C"]}})
+        self.layer = self.reg.blob(self.repo, b"layer")
+        self.manifest = {"schemaVersion": 2, "mediaType": self.V2,
+                         "config": {"mediaType": "application/vnd.docker.container.image.v1+json", "digest": cfg,
+                                    "size": 1},
+                         "layers": [{"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                                     "digest": self.layer, "size": 5}]}
+
+    def tearDown(self):
+        self.patch.stop()
+        self.reg.server.shutdown()
+        self.reg.server.server_close()
+
+    def test_an_environment_variable_set_and_taken_out_again_with_the_same_layers(self):
+        self.reg.put(self.repo, "2.0.0", self.manifest, self.V2)
+        ib.image_env(self.repo, "2.0.0", "2.0.0-pit7", add={ib.PIT_PIP_ENV: "1"})
+        self.assertEqual(self.reg.env(self.repo, "2.0.0-pit7"), ["PATH=/usr/bin", "LANG=C", "PIP_BREAK_SYSTEM_PACKAGES=1"])
+        self.assertEqual(self.reg.get(self.repo, "2.0.0-pit7")["layers"], self.manifest["layers"])
+        self.assertEqual(self.reg.env(self.repo, "2.0.0"), ["PATH=/usr/bin", "LANG=C"])  # the source as it was
+        ib.image_env(self.repo, "2.0.0-pit7", "3", drop=[ib.PIT_PIP_ENV])
+        self.assertEqual(self.reg.env(self.repo, "3"), ["PATH=/usr/bin", "LANG=C"])
+        ib.delete_manifest(self.repo, "2.0.0-pit7")
+        self.assertNotIn((self.repo, "2.0.0-pit7"), self.reg.manifests)
+        self.assertIn((self.repo, "2.0.0"), self.reg.manifests)
+
+    def test_an_index_each_image_and_no_attestations(self):
+        image = self.reg.put(self.repo, "m", dict(self.manifest, mediaType=self.OCI), self.OCI)
+        att = self.reg.put(self.repo, "a", dict(self.manifest, mediaType=self.OCI), self.OCI)
+        self.reg.put(self.repo, "1", {"schemaVersion": 2, "mediaType": self.INDEX, "manifests": [
+            {"mediaType": self.OCI, "digest": image, "size": 1, "platform": {"architecture": "amd64", "os": "linux"}},
+            {"mediaType": self.OCI, "digest": att, "size": 1, "platform": {"architecture": "unknown", "os": "unknown"},
+             "annotations": {"vnd.docker.reference.type": "attestation-manifest"}}]}, self.INDEX)
+        ib.image_env(self.repo, "1", "1-pit3", add={ib.PIT_PIP_ENV: "1"})
+        index = self.reg.get(self.repo, "1-pit3")
+        self.assertEqual([x["platform"]["architecture"] for x in index["manifests"]], ["amd64"])
+        self.assertIn("PIP_BREAK_SYSTEM_PACKAGES=1", self.reg.env(self.repo, index["manifests"][0]["digest"]))
+        # through the service's own reading of an image
+        m, _ = ib.manifest(self.repo, "1-pit3")
+        self.assertEqual(m["layers"][0]["digest"], self.layer)
+
+
 class PitStopTest(unittest.TestCase):
     """Images > Fix image > Pit stop (imagebuilder.py: PitStop): Copa patches an image in place - where the patched
     image goes, the findings worked on, the laps' library levels, the Job, and the Job's own endpoints."""

@@ -1,4 +1,4 @@
 9953c043d2a7b235772332a5e1ac223c140bb8fbb8e8a565a296cb09977d9d49  docker.io_library_python_3.13-alpine.tar.gz
 83855e017e7aafbecf488fd8e335abe9e3af3729294ad5d3c3eb011f0320ad74  ghcr.io_cloudnative-pg_postgresql_18.4-system-trixie.tar.gz
-bca22de0ff3d5e30b28da92dbf2e55e7265403fc04bdddcdb77a70b0da337eb2  ghcr.io_user187x_coder-platform_2.0.0-platform.88-airgap.tar.gz
-7a514f7bc6d1c9b821c0455366064e8f6d3584330a74a17e8c0834c4b98e52b6  ghcr.io_user187x_coder-ui-updates_code-313e6105eff1.tar.gz
+9926f8f8886ed09b7da703c3aa05e18377bd8310992926c0d2d6202a50f47a52  ghcr.io_user187x_coder-platform_2.0.0-platform.89-airgap.tar.gz
+1cbc5b1657f132a11695c34f06cfb7e37c34a44d9e80a4a5099ced0f37fc3698  ghcr.io_user187x_coder-ui-updates_code-6423df6c4562.tar.gz

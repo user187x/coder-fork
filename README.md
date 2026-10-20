@@ -246,9 +246,9 @@ The full feature list, with where each piece lives and how it is tested, is
   "31 fixable → B", **Fix CVEs**). **Fix image** groups its findings by how they get fixed, shows the grade the
   selected fixes leave, and applies them as an installation step that is built and scanned again (on the image, or
   on a fixed copy of an imported one). Or a **pit stop**: [Copa](https://github.com/project-copacetic/copacetic)
-  patches the image's packages in place (OS packages, and Python and Node.js ones with library patching), it is
-  scanned again, patched again while that helps (up to three laps), and goes back on the track as the next version or
-  a patched copy - all from the page. Agent runs, pull requests and accepted risks are proposed in
+  patches the image's packages in place (OS packages, and Python ones with library patching), it is scanned again,
+  patched again a library level further while that helps (up to three laps), and goes back on the track as the next
+  version or a patched copy - all from the page. Agent runs, pull requests and accepted risks are proposed in
   `docs/fix-image-api.md`.
 - **Every image is scanned offline**, built ones and the workspace image the template runs (listed first, read-only,
   "In use by workspaces"). See [Image security](#image-security).
