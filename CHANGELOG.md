@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.40.1 – 2026-10-20
 
-Coder `2.0.0-platform.98` (fork `61769b225`).
+Coder `2.0.0-platform.98` (fork `61769b225`); the images otherwise as 1.40.0's (workspace 1.9.4, dataflow 1.1.4).
 
 * **DEFAULT is the basic template, with nothing of DATAFLOW's** (chart): its files are `main.tf` and the shared
   scripts only, naming no other template's app - its apps are Desktop, File Browser, code-server, the web terminal

@@ -6,9 +6,9 @@ announcement banner and a full-featured workspace template, packaged as **one He
 every container image it needs**. Nothing is downloaded during the install, and nothing at run time reaches outside
 your network.
 
-| | Current release: [**v1.40.0**](https://github.com/user187x/coder-fork/releases/latest) |
+| | Current release: [**v1.40.1**](https://github.com/user187x/coder-fork/releases/latest) |
 |---|---|
-| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.96-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 175 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
+| Coder server | `ghcr.io/user187x/coder-platform:2.0.0-platform.98-airgap`, upstream Coder `main` at `70bc2e554` (after v2.38.0) + 177 fork commits ([`user187x/coder`](https://github.com/user187x/coder)), with a Terraform provider mirror |
 | Workspace image | `ghcr.io/user187x/coder-workspace:1.9.4` (desktop with two themes, Chromium, Terminator, IDEs, FileBrowser Quantum, Kubernetes tools; nothing fetched at start) |
 | Platform service | `ghcr.io/user187x/coder-ui-updates` (its code on `coder-image-tools:1.2.0`: BuildKit helpers, trivy with its databases, Copa; and the image store's provided pictures, `development/image-store`) |
 | Release | One folder: our six images (Coder, the platform service, the DEFAULT and DATAFLOW workspace images, MinIO, the image registry; split where over 2 GiB), `push-images.sh`, the one chart and `INSTALL.md`; scanned with no fixable CVE (`CVE-REPORT.md`). The public images come from your registry |
@@ -33,7 +33,7 @@ prerequisites) are expected in your registry under the same paths; `INSTALL.md` 
 sha256sum -c SHA256SUMS                                   # every file: OK
 ./push-images.sh $REGISTRY                                # ours, as $REGISTRY/user187x/... (ECR=1 creates ECR repos)
 cp values-eks-airgap.example.yaml my-values.yaml          # set every CHANGE-ME
-helm install coder coder-airgapped-1.40.0.tgz -n coder --create-namespace -f my-values.yaml \
+helm install coder coder-airgapped-1.40.1.tgz -n coder --create-namespace -f my-values.yaml \
   --set secrets.tlsCa.create=true --set-file secrets.tlsCa.caCrt=ca.crt \
   --set secrets.wildcardTls.create=true \
   --set-file secrets.wildcardTls.tlsCrt=wildcard.crt --set-file secrets.wildcardTls.tlsKey=wildcard.key \
@@ -52,7 +52,7 @@ tar -xzf coder-airgapped-<version>.tar.gz && cd coder-airgapped-<version>
 ./make --deploy
 ```
 
-Or take only what you need: a release can also come in parts by content (`build-bundle.sh`; not 1.40.0) -
+Or take only what you need: a release can also come in parts by content (`build-bundle.sh`; not the slim releases) -
 `coder-airgapped-<version>-charts.tar.gz` (installers, chart, every chart packaged; no images) and one
 `-images-<part>.tar.gz` per image folder (`-images-ui`: the user interface; `-images-workspaces`, ...; `-ASSETS.txt`
 says which holds what). Unpacked into one directory they are the bundle, file for file.
@@ -65,7 +65,7 @@ first sign-in (`admin@admin.com` / `admin`; change the password right away).
 Your images in Harbor first? `./make --push-images harbor.example.com/<project>` pushes every image and chart there:
 it helps log your docker and helm in to Harbor (and Docker Hub), checks or creates the project, and checks every push.
 
-**Already running the previous release?** A release can also have a **layer bundle** (not 1.40.0),
+**Already running the previous release?** A release can also have a **layer bundle** (not the slim releases),
 `coder-airgapped-<version>-layer.tar.gz`: the customization layer alone (this chart, its installers, and only the
 images changed since the previous release, our own ones as thin deltas of the image the cluster already has), with
 no third-party chart or image. Carry that one file across instead of the whole bundle:
@@ -82,7 +82,7 @@ on the nodes or in your registry. If anything is missing it says what, changes n
 way. A thin image is made whole again from its base image, every layer checked by its digest. `./layer-support info`
 in the extracted folder lists what the layer carries and needs.
 
-**Installed with Argo CD (the decorator install)?** Its update is smaller still (not 1.40.0):
+**Installed with Argo CD (the decorator install)?** Its update is smaller still (not the slim releases):
 `coder-airgapped-<version>-decorator-update.tar.gz` (~300 MB) carries only the fork's Coder image and the two charts,
 with `update-application.sh`, which pushes them to your Harbor and moves your existing Application to the new
 version (it shows the change and keeps your file as a backup):
@@ -477,8 +477,8 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **123/123** (1.40.0) |
-| Platform service unit tests | **166/166** (1.40.0) |
+| Static checks | **121/121** (1.40.1) |
+| Platform service unit tests | **155/155** (1.40.1) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Argo CD decorator install (`./make --argocd`; kind, egress blocked, Gateway API v1.6.0, Argo CD 3.5.2) | decorated: Synced / Healthy in ~3 min, **7/7**; layer off: **7/7** (upstream Coder, data kept); layer back: **7/7**, every volume the same (1.38.0) |
 | A real Harbor 2.15.2 with a private CA (`harbor-setup.sh`; installing machine: docker-in-docker, no images) | `./make --push-images`: CA trusted, project created, 11 images (all from the bundle) and 5 charts, all checked; a single-chart Argo CD install (robot account, Harbor's CA) migrated to the decorated one by `./make --argocd` in place: **23/23** objects kept, **7/7** (1.39.0) |
