@@ -4,6 +4,7 @@ Imported by ui-service.py (the API below), and run on its own by the build and s
     python3 imagebuilder.py fetch-context URL DIR     the build Job's first step: the build context into DIR
     python3 imagebuilder.py scan REF REPORT_URL       the scan Job: trivy + image checks + FIPS checks, posted back
     python3 imagebuilder.py scan-rootfs REF REPORT_URL DIR   the same on an image's files copied out of a node's copy
+    python3 imagebuilder.py copa PLAN_URL              a pit stop's lap: trivy's report, Copa's patch (beside BuildKit)
 
 An image is a definition (spec, below) that admins (and template admins) edit in a builder; a build turns it into
 <registry>/coder-images/<name>:<version> with BuildKit rootless in a Job, then a scan Job reports on its security.
@@ -20,6 +21,9 @@ before building on it, or using it in an enclave.
     POST /__coder-ui/api/images/<id> {spec?, description?}       save the builder's changes
     POST /__coder-ui/api/images/<id>/delete             the image, its files and its tags in the registry
     POST /__coder-ui/api/images/<id>/build              build the saved spec (a new version)
+    POST /__coder-ui/api/images/<id>/pit {keys?, libraries, level, maxLevel, laps}   a pit stop: Copa patches it in
+                                                        place, rescans, patches again (laps), puts it back on track
+    GET  /__coder-ui/api/images/<id>/pit                its latest pit stop (also in the image's view, "pit")
     GET  /__coder-ui/api/images/<id>/builds/<n>         a build's progress, steps and log tail
     POST /__coder-ui/api/images/<id>/builds/<n>/cancel
     PUT  /__coder-ui/api/images/<id>/files/<kind>/<name>[?install=<id>]   upload a file (kind: deb | install | dotfile)
@@ -1132,10 +1136,11 @@ def build_job(image_id, build_id, version, token):
     return name, job_body(name, image_id, build_id, "build", spec)
 
 
-def scan_job(image_id, build_id, version, token, ref=None, node=None):
+def scan_job(image_id, build_id, version, token, ref=None, node=None, kind="scan"):
     """The scan Job: trivy on the image in the cluster's registry; or, given the node that holds it (an image no
-    registry here holds), on its files copied out of the node's copy (node_scan_spec)."""
-    name = job_name("scan", image_id, build_id)
+    registry here holds), on its files copied out of the node's copy (node_scan_spec). kind: the Job's own (a pit
+    stop scans after each lap: scan1, scan2...)."""
+    name = job_name(kind, image_id, build_id)
     ref = ref or "%s/%s/%s:%d" % (REGISTRY, REPO, image_id, version)
     url = "%s%s/internal/builds/%s/report" % (SERVICE_URL, BASE, token)
     command = (["python3", "/app/imagebuilder.py", "scan-rootfs", ref, url, "/rootfs"] if node
@@ -1165,7 +1170,7 @@ def scan_job(image_id, build_id, version, token, ref=None, node=None):
     spec["volumes"].append({"name": "tmp", "emptyDir": {"sizeLimit": "8Gi"}})
     if init:
         spec["volumes"].append({"name": "sec", "emptyDir": {"sizeLimit": "8Gi"}})
-    return name, job_body(name, image_id, build_id, "scan", spec)
+    return name, job_body(name, image_id, build_id, kind, spec)
 
 
 # The tools a node scan runs inside the image being scanned, whatever it has (no shell, another libc): the tools
@@ -1283,7 +1288,7 @@ class Build(threading.Thread):
             self.fail(str(e))
         finally:
             # Its log and report are kept here: the Jobs go now, and BuildKit's scratch space (GBs) with their pods.
-            for kind in ("build", "scan"):
+            for kind in ["build", "scan"] + ["%s%d" % (k, n) for k in ("copa", "scan") for n in range(1, PIT_MAX_LAPS + 1)]:
                 try:
                     kube_call("DELETE", "/apis/batch/v1/namespaces/%s/jobs/%s?propagationPolicy=Background" % (
                         NAMESPACE, job_name(kind, self.image_id, self.build_id)))
@@ -1451,7 +1456,7 @@ class Build(threading.Thread):
         self.advance("scan")
         STORE.update_build(self.build_id, status="scanning")
         name, body = scan_job(self.image_id, self.build_id, self.version, self.token, getattr(self, "scan_ref", None),
-                              getattr(self, "scan_node", None))
+                              getattr(self, "scan_node", None), getattr(self, "scan_kind", "scan"))
         self._job(body)
         deadline = time.time() + 1800
         while time.time() < deadline and not self.cancelled:
@@ -1601,7 +1606,7 @@ def in_builder_registry(ref):
 def scan_target(ref):
     """(what to scan, node or None): an image of the builder's registry is read from it; any other from a node that
     holds it (air-gapped clusters and preloaded images need no registry); one no node holds, from its registry."""
-    own = in_builder_registry(ref)
+    own = registry_copy(ref)
     if own:
         return own, None
     holders = (node_images().get(ref) or {}).get("nodes") or []
@@ -1774,6 +1779,496 @@ def start_import(name, description, source, user):
     BUILDS[build_id] = b
     b.start()
     return image_id, build_id
+
+
+# ---------------------------------------------------------------------------------------------------------- pit stops
+# Images > Fix image > Pit stop: Copa (Copacetic) patches an image's packages in place, no rebuild - the image comes
+# into the pit, is patched, rescanned (patched again while there is more it can fix, up to the laps given) and goes
+# back out on the track: the patched image is the image's next version (for an image only scanned here, or the
+# platform's workspace image, the next version of its patched copy, <name>-patched), and its :latest. Templates offer
+# it with every version the registry has (IMAGES_CONFIGMAP).
+#
+# Copa runs in a Job beside a rootless BuildKit (a native sidecar, its socket in a shared volume): from a trivy report
+# of the image - OS packages, and (experimental in Copa) Python and Node.js packages - it updates them with the
+# image's own package managers, which reach the distribution's repositories (or the mirrors the image names) and, for
+# libraries, PyPI and npm, and pushes a patch layer. Every lap patches the image as it came in (Copa replaces its own
+# earlier patch layer, so a lap's image is complete on its own); a later lap lets library updates go further (patch,
+# then minor, then major versions, as far as allowed). An image the builder's registry does not hold is taken from its
+# own registry (BuildKit pulls it with the cluster's pull secret).
+COPA_LEVELS = ("patch", "minor", "major")
+PIT_MAX_LAPS = 3
+# The builder's registry as the pit stop's Job reaches it: through a forwarder of its own on localhost, which Copa's
+# registry client (as BuildKit, by its configuration) reaches over plain HTTP.
+PIT_LOCAL = "localhost:5000"
+PIT_TIMEOUT_MINUTES = int(os.environ.get("BUILDER_PIT_TIMEOUT_MINUTES", "90") or 90)
+PIT_SUMMARY = re.compile(r"Patch Summary: (\d+) total, (\d+) patched, (\d+) skipped")
+
+
+def registry_copy(ref):
+    """The builder's registry's name for an image: one of its own, or its copy of an outside image
+    (coder-images/base/<name:tag>, seeded by `make --deploy` or mirror-images.sh seed-builder), else None."""
+    own = in_builder_registry(ref)
+    if own:
+        return own
+    name = (ref or "").rsplit("/", 1)[-1]
+    if "@" in name or ":" not in name:
+        return None
+    repo, tag = name.split(":", 1)
+    try:
+        with registry("HEAD", "%s/base/%s/manifests/%s" % (REPO, repo, tag), timeout=10):
+            return "%s/%s/base/%s:%s" % (REGISTRY, REPO, repo, tag)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def pit_source(img):
+    """Where a pit stop takes the image from: the builder's registry's copy, else its own reference."""
+    if img.get("scanned"):
+        ref = img["scanned"]["image"]
+        return registry_copy(ref) or ref
+    if img.get("tracked"):
+        return img.get("ref") or registry_copy(img["tracked"]["image"]) or img["tracked"]["image"]
+    if not img.get("ref"):
+        raise ValueError("Build the image first: a pit stop patches a built image.")
+    return img["ref"]
+
+
+def pit_target(img, source, user):
+    """The entry the patched image goes to: the image itself (its next version), or, for one only scanned here or the
+    platform's workspace image, its patched copy (<name>-patched, made the first time)."""
+    if not img.get("scanned") and not img.get("tracked"):
+        return img["id"]
+    outside = (img.get("scanned") or img.get("tracked"))["image"]
+    base = re.sub(r"[^a-z0-9]+", "-", outside.rsplit("/", 1)[-1].split("@")[0].split(":")[0].lower()).strip("-")
+    target = "%s-patched" % (base[:31].strip("-") or "image")
+    copy = {"source": "copa", "from": outside, "entry": img["id"], "at": now(), "by": user}
+    existing = STORE.image(target)
+    if existing and (existing.get("imported") or {}).get("source") != "copa":
+        raise ValueError("There is an image called '%s' already, not a patched copy: rename it first." % target)
+    if existing:
+        STORE.save(target, user, spec=dict(existing["spec"], imported=copy))
+    else:
+        STORE.create(target, "%s, patched in place by Copa (Images > Fix image > Pit stop)." % outside,
+                     dict(empty_spec(), imported=copy), user)
+    return target
+
+
+def pit_keys(report, keys):
+    """The findings a pit stop works on, as (vulnerability id, package) pairs: of those with a fixed version, the ones
+    chosen, or (none chosen) every one."""
+    fixable = {(v["id"], v["pkg"]) for v in ((report or {}).get("vulnerabilities") or {}).get("top") or []
+               if v.get("fixed")}
+    if keys:
+        return fixable & {(str(k.get("id")), str(k.get("pkg"))) for k in keys if isinstance(k, dict)}
+    return fixable
+
+
+def pit_remaining(report, pairs):
+    """Of those findings, the ones a report still has with a fixed version."""
+    left = {(v["id"], v["pkg"]) for v in ((report or {}).get("vulnerabilities") or {}).get("top") or [] if v.get("fixed")}
+    return sorted(pairs & left)
+
+
+def with_pit(images):
+    """The images, each with its pit stop in progress (the Images list's "In the pit" badge): {lap, laps, stage,
+    target} or None."""
+    for img in images:
+        img["pit"] = None
+        latest = STORE.setting("pit-latest-%s" % img["id"])
+        b = STORE.build(latest) if latest else None
+        if b and b["status"] in ("queued", "building", "pushing", "scanning"):
+            st = pit_state(latest) or {}
+            img["pit"] = {"build": latest, "lap": st.get("lap") or 1, "laps": st.get("laps"), "stage": b["stage"],
+                          "target": st.get("target"), "source": st.get("sourceEntry")}
+    return images
+
+
+def pit_state(build_id):
+    return STORE.setting("pit-%d" % build_id)
+
+
+def pit_view(build_id):
+    """A pit stop as the Fix image page shows it: its options, laps, before and after, and its build's progress."""
+    st = pit_state(build_id)
+    b = STORE.build(build_id)
+    if not st or not b:
+        return None
+    return dict(st, build=build_id, status=b["status"], stage=b["stage"], progress=b["progress"], message=b["message"],
+                error=b["error"], startedAt=b["started_at"], finishedAt=b["finished_at"],
+                steps=json.loads(b["steps"] or "[]"), log=(b["log"] or "")[-6000:])
+
+
+class PitStop(Build):
+    """A pit stop: into the pit (the image's source), a trivy report of what to fix, Copa's patch (a lap), the patched
+    image rescanned - another lap while there is more to fix and laps are left - and back out on the track."""
+
+    def __init__(self, image_id, build_id, version, token, spec, user, pit):
+        super().__init__(image_id, build_id, version, token, spec, user)
+        self.pit = pit
+        self.plan = [("pit-in", "Into the pit"), ("report", "Reading what to fix (trivy)"),
+                     ("patch", "Copa patching it"), ("rescan", "Rescanning the patched image"),
+                     ("pit-out", "Back on the track")]
+        self.current = "pit-in"
+        self.target_ref = "%s/%s/%s:%d" % (REGISTRY, REPO, image_id, version)
+        self.scan_ref = self.target_ref
+
+    def _save(self):
+        STORE.put_setting("pit-%d" % self.build_id, self.pit)
+
+    def level(self, lap):
+        """The library updates a lap allows: the chosen level on lap 1, a level further each lap after, never past
+        the most allowed."""
+        first = COPA_LEVELS.index(self.pit["level"])
+        top = COPA_LEVELS.index(self.pit["maxLevel"])
+        return COPA_LEVELS[min(first + lap - 1, max(first, top))]
+
+    def _follow_copa(self, job):
+        """The Copa Job's output -> the build log (and its steps: the report, then the patch)."""
+        stream = kube_stream("/api/v1/namespaces/%s/pods/%s/log?container=copa&follow=true" % (
+            NAMESPACE, self._pod(job)["metadata"]["name"]), timeout=PIT_TIMEOUT_MINUTES * 60)
+        self.problems = []
+        try:
+            for raw in stream:
+                if self.cancelled:
+                    break
+                line = raw.decode("utf-8", "replace").rstrip("\n")
+                if line.startswith("[pit] patch"):
+                    self.advance("patch", "Copa patching it (lap %d)" % self.pit["lap"])
+                if re.search(r"level=(error|fatal)|^Error:", line):
+                    self.problems = (self.problems + [line[-300:]])[-5:]
+                STORE.append_log(self.build_id, line + "\n")
+        finally:
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _run(self):
+        p = self.pit
+        STORE.update_build(self.build_id, status="building", steps=self.steps(),
+                           message="Into the pit: %s" % p["source"])
+        STORE.set(self.image_id, status="building")
+        if LOG:
+            LOG(event="image-pit-stop", image=self.image_id, build=self.build_id, version=self.version, by=self.user,
+                source=p["source"], laps=p["laps"], libraries=p["libraries"])
+        STORE.append_log(self.build_id, "[pit] into the pit: %s -> %s (up to %d lap%s; %s)\n" % (
+            p["source"], self.target_ref, p["laps"], "" if p["laps"] == 1 else "s",
+            "OS and library packages" if p["libraries"] else "OS packages"))
+        self.finish_step("pit-in")
+        good = None
+        for lap in range(1, p["laps"] + 1):
+            p["lap"] = lap
+            rec = {"lap": lap, "level": self.level(lap) if p["libraries"] else None, "status": "patching",
+                   "startedAt": now()}
+            p["history"] = p.get("history", []) + [rec]
+            self._save()
+            STORE.update_build(self.build_id, status="building")
+            self.advance("report" if lap == 1 else "patch",
+                         "Reading what to fix (trivy)" if lap == 1 else "Copa patching it (lap %d)" % lap)
+            name, body = copa_job(self.image_id, self.build_id, lap, self.token)
+            STORE.update_build(self.build_id, job=name)
+            self._job(body)
+            self._wait_container(name, "copa", timeout=1800)
+            self._follow_copa(name)
+            if self.cancelled:
+                raise RuntimeError("cancelled")
+            code, reason = self._exit_code(name, "copa")
+            result = STORE.setting("pit-result-%d-%d" % (self.build_id, lap)) or {}
+            rec.update(summary=result.get("summary"), vex=result.get("vex"), finishedAt=now())
+            if code != 0 or not result.get("pushed"):
+                why = (self.problems[-1] if self.problems else "exit %s%s" % (code, ", " + reason if reason else ""))
+                rec.update(status="failed", error=why)
+                self._save()
+                if good:
+                    STORE.append_log(self.build_id, "[pit] lap %d failed (%s): lap %d's image goes out\n" % (
+                        lap, why, good["lap"]))
+                    break
+                raise RuntimeError("Copa could not patch the image: %s" % why)
+            # the patched image, rescanned
+            self.advance("rescan", "Rescanning the patched image (lap %d)" % lap)
+            self.scan_kind = "scan%d" % lap
+            STORE.put_setting("report-%d" % self.build_id, None)
+            report = self._scan()
+            if not report:
+                rec.update(status="failed", error="The rescan gave no report.")
+                self._save()
+                if good:
+                    break
+                raise RuntimeError("The patched image's rescan gave no report. See the log.")
+            left = pit_remaining(report, {tuple(k) for k in p["pairs"]})
+            summary = report_summary(report) or {}
+            rec.update(status="done", grade=summary.get("grade"), counts=(report.get("vulnerabilities") or {}).get(
+                "counts"), remaining=len(left))
+            good = {"lap": lap, "report": report, "left": left}
+            self._save()
+            STORE.append_log(self.build_id, "[pit] lap %d: grade %s, %d of the %d findings worked on left\n" % (
+                lap, summary.get("grade") or "?", len(left), len(p["pairs"])))
+            if not left:
+                break
+            # another lap only where it could do better: library updates may go further, or packages were skipped
+            skipped = (result.get("summary") or {}).get("skipped") or 0
+            further = p["libraries"] and self.level(lap + 1) != self.level(lap)
+            if lap < p["laps"] and not further and not skipped:
+                STORE.append_log(self.build_id, "[pit] no further lap: Copa found no newer packages for the rest\n")
+                break
+        # back on the track: the patched image is this version, and :latest
+        self.advance("pit-out", "Back on the track")
+        repo = "%s/%s" % (REPO, self.image_id)
+        retag(repo, str(self.version), "latest")
+        _, digest = manifest(repo, str(self.version))
+        size = image_size(repo, str(self.version))
+        report = good["report"]
+        before, after = p.get("before") or {}, report_summary(report) or {}
+        p.update(after={"grade": after.get("grade"), "counts": (report.get("vulnerabilities") or {}).get("counts")},
+                 ref="%s/%s:%d" % (PULL_PREFIX, repo, self.version),
+                 fixed=len(p["pairs"]) - len(good["left"]), outcome="on-track")
+        self._save()
+        STORE.set(self.image_id, status="ready", version=self.version, ref=self.target_ref, digest=digest, size=size,
+                  builtAt=now(), builtBy=self.user, report=report)
+        self.done = {k for k, _ in self.plan}
+        STORE.update_build(self.build_id, status="ready", progress=1.0, stage="done", finished_at=now(),
+                           message="Back on the track: %s/%s:%d - grade %s (was %s)" % (
+                               PULL_PREFIX, repo, self.version, after.get("grade") or "?",
+                               before.get("grade") or "?"), steps=self.steps())
+        if LOG:
+            LOG(event="image-pit-stop-done", image=self.image_id, build=self.build_id, version=self.version,
+                laps=len(p.get("history", [])), fixed=p["fixed"], grade=after.get("grade"), was=before.get("grade"))
+
+    def fail(self, error):
+        super().fail(error)
+        st = pit_state(self.build_id)
+        if st:
+            st["outcome"] = "cancelled" if self.cancelled else "failed"
+            STORE.put_setting("pit-%d" % self.build_id, st)
+
+
+def retag(repo, tag, new):
+    """Another tag of the same manifest in the builder's registry (its :latest)."""
+    with registry("GET", "%s/manifests/%s" % (repo, tag)) as r:
+        body, ctype = r.read(), r.headers.get("Content-Type")
+    req = urllib.request.Request("http://%s/v2/%s/manifests/%s" % (REGISTRY, repo, new), data=body, method="PUT",
+                                 headers={"Content-Type": ctype})
+    urllib.request.urlopen(req, timeout=60).read()
+
+
+def start_pit_stop(image_id, options, user):
+    """A pit stop for an image (options: keys - the findings chosen, [{id, pkg}], none: every fixable one -,
+    libraries, level and maxLevel, laps): (target entry, build id)."""
+    img = STORE.image(image_id)
+    if not img:
+        raise ValueError("No such image.")
+    if not img.get("report"):
+        raise ValueError("Scan the image first: a pit stop starts from its report.")
+    if STORE.active_build(image_id):
+        raise ValueError("This image is in the pit already, or being built or scanned.")
+    libraries = bool(options.get("libraries"))
+    level = str(options.get("level") or "patch")
+    max_level = str(options.get("maxLevel") or level)
+    if level not in COPA_LEVELS or max_level not in COPA_LEVELS:
+        raise ValueError("Library updates: patch, minor or major.")
+    if COPA_LEVELS.index(max_level) < COPA_LEVELS.index(level):
+        max_level = level
+    try:
+        laps = int(options.get("laps") or 2)
+    except (TypeError, ValueError):
+        raise ValueError("Laps: 1 to %d." % PIT_MAX_LAPS) from None
+    if not 1 <= laps <= PIT_MAX_LAPS:
+        raise ValueError("Laps: 1 to %d." % PIT_MAX_LAPS)
+    keys = options.get("keys") or []
+    if not isinstance(keys, list) or len(keys) > 2000:
+        raise ValueError("The findings: a list of {id, pkg}.")
+    pairs = pit_keys(img["report"], keys)
+    if not pairs:
+        raise ValueError("Nothing to fix: no finding chosen has a fixed version.")
+    source = pit_source(img)
+    target = pit_target(img, source, user)
+    if target != image_id and STORE.active_build(target):
+        raise ValueError("Its patched copy, %s, is in the pit already." % target)
+    timg = STORE.image(target)
+    version = timg["version"] + 1
+    build_id, token = STORE.new_build(target, version, timg["spec"], user)
+    summary = report_summary(img["report"]) or {}
+    pit = {"source": source, "sourceEntry": image_id, "target": target, "version": version, "libraries": libraries,
+           "level": level, "maxLevel": max_level, "laps": laps, "lap": 0, "pairs": sorted(list(k) for k in pairs),
+           "chosen": len(keys), "before": {"grade": summary.get("grade"),
+                                           "counts": (img["report"].get("vulnerabilities") or {}).get("counts")},
+           "by": user, "outcome": "running"}
+    STORE.put_setting("pit-%d" % build_id, pit)
+    for entry in {image_id, target}:
+        STORE.put_setting("pit-latest-%s" % entry, build_id)
+    b = PitStop(target, build_id, version, token, timg["spec"], user, pit)
+    STORE.update_build(build_id, steps=b.steps())
+    BUILDS[build_id] = b
+    b.start()
+    return target, build_id
+
+
+def copa_job(image_id, build_id, lap, token):
+    """A pit stop's lap: rootless BuildKit as a native sidecar (its socket in the shared /run/copa), and the tools
+    image running `imagebuilder.py copa` (the report on lap 1, Copa's patch pushed, the result posted back)."""
+    name = job_name("copa%d" % lap, image_id, build_id)
+    url = "%s%s/internal/builds/%s/copa/%d" % (SERVICE_URL, BASE, token, lap)
+    sock = "/run/copa/buildkitd.sock"
+    buildkitd = {"name": "buildkitd", "image": BUILDKIT_IMAGE, "imagePullPolicy": "IfNotPresent",
+                 "restartPolicy": "Always",
+                 "command": ["rootlesskit", "buildkitd", "--addr", "unix://" + sock, "--oci-worker-no-process-sandbox",
+                             "--config", "/etc/buildkit/buildkitd.toml"],
+                 "resources": {"requests": {"cpu": "500m", "memory": "1Gi"},
+                               "limits": {"cpu": BUILD_CPU, "memory": BUILD_MEMORY}},
+                 "volumeMounts": [{"name": "cfg", "mountPath": "/etc/buildkit"}, {"name": "run", "mountPath": "/run/copa"},
+                                  {"name": "state", "mountPath": "/home/user/.local/share/buildkit"}]}
+    copa = {"name": "copa", "image": TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent",
+            "command": ["python3", "/app/imagebuilder.py", "copa", url],
+            "env": [{"name": "TRIVY_INSECURE", "value": "true"}, {"name": "HOME", "value": "/tmp"},
+                    {"name": "BUILDER_REGISTRY", "value": REGISTRY}, {"name": "COPA_ADDR", "value": "unix://" + sock},
+                    {"name": "PIT_TIMEOUT_MINUTES", "value": str(PIT_TIMEOUT_MINUTES)}],
+            "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "2", "memory": "4Gi"}},
+            "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+            "volumeMounts": [{"name": "run", "mountPath": "/run/copa"}, {"name": "tmp", "mountPath": "/tmp"}]}
+    init = [buildkitd]
+    if securitydata.active_bundle():
+        sec_url = "%s%s/internal/builds/%s/security-data.tar.gz" % (SERVICE_URL, BASE, token)
+        init.insert(0, {"name": "security-data", "image": TOOLS_IMAGE, "imagePullPolicy": "IfNotPresent",
+                        "command": ["python3", "/app/securitydata.py", "fetch", sec_url, "/sec"],
+                        "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+                        "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"memory": "1Gi"}},
+                        "volumeMounts": [{"name": "sec", "mountPath": "/sec"}]})
+        copa["env"].append({"name": "SECURITY_DIR", "value": "/sec"})
+        copa["volumeMounts"].append({"name": "sec", "mountPath": "/sec", "readOnly": True})
+    spec = pod_spec([copa], init, unconfined=True)
+    spec["volumes"] += [{"name": "cfg", "configMap": {"name": "coder-image-builder"}}, {"name": "run", "emptyDir": {}},
+                        {"name": "state", "emptyDir": {}}, {"name": "tmp", "emptyDir": {}}]
+    if securitydata.active_bundle():
+        spec["volumes"].append({"name": "sec", "emptyDir": {"sizeLimit": "8Gi"}})
+    if PULL_SECRETS:  # an image from your registry (EKS): BuildKit, Copa and trivy sign in with the pull secret
+        spec["volumes"].append({"name": "docker", "secret": {"secretName": PULL_SECRETS[0]["name"], "items": [
+            {"key": ".dockerconfigjson", "path": "config.json"}]}})
+        buildkitd["volumeMounts"].append({"name": "docker", "mountPath": "/home/user/.docker"})
+        copa["volumeMounts"].append({"name": "docker", "mountPath": "/docker"})
+        copa["env"].append({"name": "DOCKER_CONFIG", "value": "/docker"})
+    return name, job_body(name, image_id, build_id, "copa", spec)
+
+
+def _forward(port, target):
+    """127.0.0.1:port -> target (host:port), every connection in threads of its own: the builder's registry as
+    localhost for the pit stop's Job (Copa's registry client talks plain HTTP to localhost only)."""
+    import socket
+    host, tport = target.rsplit(":", 1)
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", port))
+    srv.listen(64)
+
+    def pipe(a, b):
+        try:
+            while True:
+                data = a.recv(1 << 16)
+                if not data:
+                    break
+                b.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for s_ in (a, b):
+                try:
+                    s_.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def serve():
+        while True:
+            c, _ = srv.accept()
+            try:
+                u = socket.create_connection((host, int(tport)), timeout=30)
+                u.settimeout(None)
+            except OSError:
+                c.close()
+                continue
+            threading.Thread(target=pipe, args=(c, u), daemon=True).start()
+            threading.Thread(target=pipe, args=(u, c), daemon=True).start()
+
+    threading.Thread(target=serve, daemon=True).start()
+
+
+def pit_filter(report, pairs):
+    """trivy's JSON report with only the findings worked on ((vulnerability id, package) pairs), and only the results
+    that keep one: what Copa patches."""
+    wanted = {tuple(k) for k in pairs}
+    for res in report.get("Results") or []:
+        res["Vulnerabilities"] = [v for v in res.get("Vulnerabilities") or []
+                                  if (v.get("VulnerabilityID"), v.get("PkgName")) in wanted]
+    report["Results"] = [r for r in report.get("Results") or [] if r.get("Vulnerabilities")]
+    return report
+
+
+def copa(url):
+    """The pit stop's Job (one lap): the plan from the service; on lap 1 a trivy report of the image (the findings
+    worked on only), else lap 1's; then Copa, through the BuildKit beside it, pushing the patched image; its summary
+    and VEX document posted back. Exits with Copa's status."""
+    def call(method, path="", body=None):
+        req = urllib.request.Request(url + path, data=json.dumps(body).encode() if body is not None else None,
+                                     method=method, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read() or b"null")
+
+    plan = call("GET")
+    registry_ = os.environ.get("BUILDER_REGISTRY", REGISTRY)
+    local = lambda ref: PIT_LOCAL + ref[len(registry_):] if ref.startswith(registry_ + "/") else ref  # noqa: E731
+    _forward(5000, registry_)
+    source, target = local(plan["source"]), local(plan["target"])
+    print("[pit] lap %d: %s -> %s" % (plan["lap"], plan["source"], plan["target"]), flush=True)
+    report = plan.get("report")
+    if not report:
+        print("[pit] report: trivy on %s (%s packages)" % (plan["source"], "OS and library" if plan["libraries"]
+                                                             else "OS"), flush=True)
+        data = securitydata.job_stamp(os.environ.get("SECURITY_DIR"))
+        cmd = ["trivy", "image", "--insecure", "--cache-backend", "memory", "--cache-dir", data["cacheDir"],
+               "--skip-db-update", "--skip-java-db-update", "--scanners", "vuln", "--ignore-unfixed",
+               "--pkg-types", "os,library" if plan["libraries"] else "os", "--format", "json", "--quiet",
+               "--timeout", "45m", source]
+        p = subprocess.run(cmd, capture_output=True, timeout=3600)
+        if p.returncode != 0:
+            print(p.stderr.decode()[-2000:], flush=True)
+            sys.exit("[pit] trivy could not read %s" % plan["source"])
+        report = pit_filter(json.loads(p.stdout or b"{}"), plan["pairs"])
+        kept = sum(len(r["Vulnerabilities"]) for r in report["Results"])
+        print("[pit] report: %d findings to fix in %d places" % (kept, len(report["Results"])), flush=True)
+        call("POST", "/report", report)
+    with open("/tmp/report.json", "w") as f:
+        json.dump(report, f)
+    for _ in range(120):
+        if os.path.exists(os.environ.get("COPA_ADDR", "")[len("unix://"):]):
+            break
+        time.sleep(1)
+    args = ["copa", "patch", "-i", source, "-r", "/tmp/report.json", "-t", target, "--push",
+            "--addr", os.environ.get("COPA_ADDR", ""), "--ignore-errors", "--progress", "plain",
+            "--timeout", "%sm" % os.environ.get("PIT_TIMEOUT_MINUTES", "90"), "-f", "openvex", "-o", "/tmp/vex.json"]
+    env = dict(os.environ)
+    if plan["libraries"]:
+        args += ["--pkg-types", "os,library", "--library-patch-level", plan["level"]]
+        env["COPA_EXPERIMENTAL"] = "1"
+    print("[pit] patch: copa %s" % " ".join(args[1:]), flush=True)
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    summary = None
+    pushed = False
+    for line in proc.stdout:
+        print(line.rstrip("\n"), flush=True)
+        m = PIT_SUMMARY.search(line)
+        if m:
+            summary = {"total": int(m.group(1)), "patched": int(m.group(2)), "skipped": int(m.group(3))}
+        if "Patched image" in line:
+            pushed = True
+    code = proc.wait()
+    vex = None
+    try:
+        with open("/tmp/vex.json") as f:
+            vex = json.load(f)
+    except (OSError, ValueError):
+        pass
+    fixed = sorted({(s_.get("vulnerability") or {}).get("name") for s_ in (vex or {}).get("statements") or []} - {None})
+    call("POST", "/result", {"exit": code, "summary": summary, "pushed": pushed and code == 0,
+                             "vex": {"fixed": fixed[:500], "statements": len((vex or {}).get("statements") or [])}})
+    sys.exit(code)
 
 
 INDEX_TYPES = ("application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json")
@@ -2422,13 +2917,16 @@ def can_edit(user, admin_roles):
 
 def handle_internal(h, method, path):
     """Build and scan Jobs: token-protected, no user."""
-    m = re.match(r"^%s/internal/builds/([A-Za-z0-9_-]{20,})/(context\.tar|report|security-data\.tar\.gz)$" % BASE, path)
+    m = re.match(r"^%s/internal/builds/([A-Za-z0-9_-]{20,})/(context\.tar|report|security-data\.tar\.gz|"
+                 r"copa/[1-9](?:/report|/result)?)$" % BASE, path)
     if not m or not STORE:
         return False
     b = STORE.build(token=m.group(1))
     if not b or b["status"] in ("ready", "failed", "cancelled"):
         h.send(404, "not found\n")
         return True
+    if m.group(2).startswith("copa/"):
+        return pit_internal(h, method, b, m.group(2))
     if m.group(2) == "context.tar" and method == "GET":
         spec = json.loads(b["spec"])
         h.send_response(200)
@@ -2467,6 +2965,37 @@ def handle_internal(h, method, path):
         h.send_json(200, {"ok": True})
         return True
     return False
+
+
+def pit_internal(h, method, b, what):
+    """The pit stop's Job: its lap's plan (GET copa/<lap>), lap 1's report of what to fix (POST copa/1/report: later
+    laps get it with their plan), and the lap's result (POST copa/<lap>/result)."""
+    parts = what.split("/")
+    lap = int(parts[1])
+    st = pit_state(b["id"])
+    run = BUILDS.get(b["id"])
+    if not st or not isinstance(run, PitStop):
+        h.send(404, "not a pit stop\n")
+        return True
+    if len(parts) == 2 and method == "GET":
+        h.send_json(200, {"lap": lap, "source": st["source"], "target": run.target_ref, "libraries": st["libraries"],
+                          "level": run.level(lap), "pairs": st["pairs"],
+                          "report": STORE.setting("pit-report-%d" % b["id"])})
+        return True
+    if method != "POST":
+        h.send(405, "method not allowed\n")
+        return True
+    n = int(h.headers.get("Content-Length") or 0)
+    if n > 64 * 1024 * 1024:
+        h.send(413, "too large\n")
+        return True
+    body = json.loads(h.rfile.read(n) or b"null")
+    if parts[2] == "report":
+        STORE.put_setting("pit-report-%d" % b["id"], body)
+    else:
+        STORE.put_setting("pit-result-%d-%d" % (b["id"], lap), body if isinstance(body, dict) else {})
+    h.send_json(200, {"ok": True})
+    return True
 
 
 def upload_csrf_ok(h):
@@ -2521,7 +3050,7 @@ def route(h, method, rest, query, user, editor, admin):
     q_ = urllib.parse.parse_qs(query)
     try:
         if rest in ("", "/") and method == "GET":
-            return h.send_json(200, {"images": STORE.images(), "canEdit": editor, "pullPrefix": PULL_PREFIX,
+            return h.send_json(200, {"images": with_pit(STORE.images()), "canEdit": editor, "pullPrefix": PULL_PREFIX,
                                      "baseImage": BASE_IMAGE.rsplit("/", 1)[-1],
                                      "templates": [{"name": t.get("name"), "displayName": t.get("displayName")}
                                                    for t in TEMPLATES if t.get("name")]}) or True
@@ -2659,6 +3188,8 @@ def route(h, method, rest, query, user, editor, admin):
             img["builds"] = STORE.builds(image_id)
             img["activeBuild"] = STORE.active_build(image_id)
             img["canEdit"] = editor
+            latest = STORE.setting("pit-latest-%s" % image_id)
+            img["pit"] = pit_view(latest) if latest else None
             return {"image": img}
 
         if sub == "" and method == "GET":
@@ -2696,6 +3227,13 @@ def route(h, method, rest, query, user, editor, admin):
         if sub == "/rescan" and method == "POST":
             need(editor)
             return h.send_json(200, {"build": start_rescan(image_id, user["username"])}) or True
+        if sub == "/pit" and method == "GET":
+            latest = STORE.setting("pit-latest-%s" % image_id)
+            return h.send_json(200, {"pit": pit_view(latest) if latest else None}) or True
+        if sub == "/pit" and method == "POST":
+            need(editor)
+            target, build_id = start_pit_stop(image_id, read_json(h), user["username"])
+            return h.send_json(200, {"target": target, "build": build_id, "pit": pit_view(build_id)}) or True
         if sub == "/build" and method == "POST":
             need(editor)
             build_id = start_build(image_id, user["username"])
@@ -3021,5 +3559,7 @@ if __name__ == "__main__":
         scan(sys.argv[2], sys.argv[3])
     elif sys.argv[1:2] == ["scan-rootfs"]:
         scan_rootfs(sys.argv[2], sys.argv[3], sys.argv[4])
+    elif sys.argv[1:2] == ["copa"]:
+        copa(sys.argv[2])
     else:
         sys.exit(__doc__)

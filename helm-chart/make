@@ -558,9 +558,13 @@ deploy() {
 	secret_args
 	if [[ "$METHOD" == argocd ]]; then install_argocd; else install_helm; fi
 	restart_reloaded
-	step "Images view: the workspace image as a build base"
+	step "Images view: the workspace images in the builder's registry (the base of builds, and pit stops)"
 	if [[ "$TARGET" == minikube ]]; then
-		"${here}/minikube-support" seed-registry "$PROFILE" "$(awk '/^ghcr.io\/user187x\/coder-workspace:/ {print $1; exit}' "${here}/images.txt")"
+		# the workspace image (the base of builds) and the templates' own images (dataflow, AI): a pit stop (Fix image)
+		# patches them from the registry - here they are only in the nodes' Docker
+		while read -r img; do
+			"${here}/minikube-support" seed-registry "$PROFILE" "$img"
+		done < <(awk '/^ghcr.io\/user187x\/coder-workspace(-dataflow|-ai)?:/ {print $1}' "${here}/images.txt")
 	else
 		# Through kubectl port-forward: no node access and no registry credentials in the cluster needed.
 		"${here}/mirror-images.sh" seed-builder coder || warn "the image builder's base was not seeded: run ./mirror-images.sh seed-builder"

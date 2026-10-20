@@ -16,7 +16,8 @@
 #                                                      (device login, "groups" claim) and group coder-cluster-admins;
 #                                                      the API server trusts Keycloak's tokens (CA: its TLS CA)
 #   ./minikube-support seed-registry PROFILE IMAGE      Images view: pushes IMAGE (in the nodes' Docker) into the in-cluster
-#                                                      registry as coder-images/base/<name:tag>, the base of builds
+#                                                      registry as coder-images/base/<name:tag>: the base of builds, and what
+#                                                      pit stops (Images > Fix image) patch
 #   ./minikube-support minikube-expose-services PROFILE   `minikube tunnel` in the background (asks for sudo once)
 #   ./minikube-support minikube-sync-hosts PROFILE DOMAIN /etc/hosts block for the cluster's hostnames (sudo)
 #   ./minikube-support expose PROFILE DOMAIN           both of the above - run it again after a reboot
@@ -404,6 +405,9 @@ mk_seed_registry() {
 	if docker exec "$PROFILE" curl -fs "http://localhost:5000/v2/coder-images/base/${name%%:*}/manifests/${name##*:}" \
 		-H "Accept: application/vnd.docker.distribution.manifest.v2+json" -o /dev/null; then
 		say "registry: coder-images/base/${name} is there"; return 0
+	fi
+	if ! docker exec "$PROFILE" docker image inspect "$image" >/dev/null 2>&1; then
+		say "registry: ${name} is not in the node: not seeded"; return 0
 	fi
 	say "registry: pushing ${name} as coder-images/base/${name} (a few minutes the first time)"
 	docker exec "$PROFILE" docker tag "$image" "localhost:5000/coder-images/base/${name}"

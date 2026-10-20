@@ -8,6 +8,9 @@ built on what the image builder already has:
 - **Fixable counts and projected grade:** `report_summary`'s `fixableCounts`, `projectedGrade` and `needsFixing`.
 - **The build trigger:** an installation step saved in the image's spec, then `POST /images/<id>/build`. A build
   scans the new version.
+- **The pit stop (implemented):** `POST /images/<id>/pit` (`keys`, `libraries`, `level`, `maxLevel`, `laps`) starts
+  Copa on the image; `GET /images/<id>/pit` and the image's detail (`pit`) follow it. It is a build of the patched
+  image (`/images/<target>/builds/<n>`), so it is cancelled like one.
 
 The design asks for three more things that have no backend. Their controls are on the page but off; each says it
 waits for this API. Nothing below exists yet: it is the contract to agree on before building it.

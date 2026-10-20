@@ -2,10 +2,25 @@
 
 ## Unreleased
 
-Coder `2.0.0-platform.87` (fork `ceeb34617`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
+Coder `2.0.0-platform.88` (fork `1cd7789a8`), workspace image `coder-workspace:1.9.3`, dataflow image `coder-workspace-dataflow:1.1.3`,
 AI image `coder-workspace-ai:2.0.0`, image registry `coder-registry:3.1.2-1`; the model scanner `coder-garak:0.17.1-2`
 is a plug-in now (`dist/plugins/`, not in the bundle).
 
+* **Pit stop: Copa patches an image from the Fix image page** (service, fork, tools image), the page's first way in
+  beside Dockerfile and Agent. [Copa (Copacetic)](https://github.com/project-copacetic/copacetic) v0.15.0 patches
+  the image's packages in place - no rebuild - from its scan: the image pits in, its report is taken again (fixable
+  findings only), Copa patches, the patched image is scanned, and it goes back on the track as the next version
+  (`latest` retagged) - or, for an image only scanned here (the template images), as a patched copy
+  (`<name>-patched`, tagged **Patched**, its own Pit stop button). While it can do better it takes another lap (up
+  to three), each from the original image with the whole report, Python and Node.js packages (Copa's experimental
+  library patching) going a level further each lap, up to the one chosen (patch, minor, major). The page shows the
+  pit lane (the car at its station, the laps with their grades, Copa's log, the pit time, Cancel) and the result (the
+  grade before and after, the findings fixed, the reference workspaces pull); the Images list shows **In the pit ·
+  lap n/N**. Copa runs in a Job of the platform service's image beside BuildKit (a native sidecar), reaching the
+  builder's registry through its own forwarder on `localhost:5000`; it writes a VEX document of what it fixed. The
+  packages come from the distribution's repositories (and PyPI, npm): the cluster must reach them or the mirrors the
+  image names. `coder-image-tools:1.1.0` adds `copa`; a minikube deploy seeds the template images (workspace,
+  dataflow, AI) into the builder's registry, since their GHCR packages are private.
 * **UBUNTU is DEFAULT** (chart, docs, fork): the base template is `default` (DEFAULT), as it was renamed on the dev
   cluster; a cluster that still has `ubuntu-vnc-desktop` (UBUNTU) has it taken over and renamed at its next deploy
   (its workspaces and history kept). The dataflow template's default display name is DATAFLOW.

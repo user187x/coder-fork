@@ -235,6 +235,10 @@ data:
     [registry."coder-image-registry.{{ $ns }}.svc:5000"]
       http = true
       insecure = true
+    # the same registry in a pit stop's Job (Images > Fix image), through its own forwarder on localhost
+    [registry."localhost:5000"]
+      http = true
+      insecure = true
 ---
 # The platform service runs builds and scans as Jobs, and follows their logs.
 apiVersion: rbac.authorization.k8s.io/v1

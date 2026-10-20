@@ -370,6 +370,36 @@ def decorator_checks(B, chart, full_render):
         pass
 
 
+def pit_checks(B, chart, default_render):
+    """Images > Fix image > Pit stop: Copa (Copacetic) patches an image in a Job of the platform service's image (its
+    tools layer, coder-image-tools, carries copa and trivy) beside a BuildKit sidecar, which reaches the builder's
+    registry through the Job's own forwarder on localhost:5000."""
+    r = default_render
+    repo = os.path.dirname(B)
+    tools = open(os.path.join(repo, "development/tools/build-image-tools.sh")).read()
+    ui = open(os.path.join(repo, "development/tools/build-ui-image.sh")).read()
+    tag = re.search(r'tag="\$\{1:-([0-9.]+)\}"', tools)
+    tag = tag.group(1) if tag else ""
+    check("pit stop: the tools image pins Copa's release by checksum and checks it runs",
+          re.search(r"copa_[0-9.]+_linux_amd64\.tar\.gz", tools) and re.search(r"\b[0-9a-f]{64}\b", tools)
+          and "copa --version" in tools, tag)
+    check("pit stop: the platform service's image is built on that tools image, and its smoke test runs copa",
+          tag and ("coder-image-tools:%s" % tag) in ui and "copa --version" in ui, tag)
+    toml = re.search(r"buildkitd\.toml: \|\n((?:    .*\n|\n)+)", r)
+    toml = toml.group(1) if toml else ""
+    check("pit stop: BuildKit reaches the builder's registry by its Service and by the Job's localhost forwarder (HTTP)",
+          re.search(r'\[registry\."coder-image-registry\.coder\.svc:5000"\]\s*\n\s*http = true', toml)
+          and re.search(r'\[registry\."localhost:5000"\]\s*\n\s*http = true', toml), toml.strip()[:200])
+    ib = open(os.path.join(chart, "files/ui-updates/imagebuilder.py")).read()
+    check("pit stop: Copa's Job runs BuildKit as a native sidecar, patches from the original image with the whole "
+          "report (--ignore-errors), and writes VEX",
+          '"restartPolicy": "Always"' in ib and "--ignore-errors" in ib and "openvex" in ib
+          and "COPA_EXPERIMENTAL" in ib, "")
+    mk = open(os.path.join(B, "make")).read()
+    check("pit stop: a minikube deploy seeds the workspace images into the builder's registry",
+          "seed-registry" in mk and "coder-workspace(-dataflow|-ai)?" in mk, "")
+
+
 def main():
     global OUT
     ap = argparse.ArgumentParser()
@@ -455,6 +485,7 @@ def main():
     ha_checks(B, renders["high availability (values-ha.example.yaml)"], r)
     safe_checks(chart, r)
     ai_checks(B, chart, r)
+    pit_checks(B, chart, r)
     icon_checks(chart, r)
     check("Coder starts without Keycloak's Secrets (optional)",
           re.search(r"name: keycloaking-coder-oidc\s*\n\s*optional: true", r) and

@@ -1494,6 +1494,158 @@ class NodeImagesTest(unittest.TestCase):
             self.assertEqual(ib.scan_target("ghcr.io/o/small:1"), ("ghcr.io/o/small:1", "n1"))
 
 
+class PitStopTest(unittest.TestCase):
+    """Images > Fix image > Pit stop (imagebuilder.py: PitStop): Copa patches an image in place - where the patched
+    image goes, the findings worked on, the laps' library levels, the Job, and the Job's own endpoints."""
+
+    REPORT = {"grade": "D", "secrets": [], "checks": [],
+              "vulnerabilities": {"counts": {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0}, "total": 3,
+                                  "fixable": 2, "top": [
+                                      {"id": "CVE-1", "pkg": "openssl", "fixed": "3.0.2", "severity": "CRITICAL",
+                                       "class": "os-pkgs", "type": "ubuntu", "target": "x (ubuntu 24.04)"},
+                                      {"id": "CVE-2", "pkg": "requests", "fixed": "2.32.0", "severity": "HIGH",
+                                       "class": "lang-pkgs", "type": "python-pkg", "target": "Python"},
+                                      {"id": "CVE-3", "pkg": "zlib", "fixed": "", "severity": "LOW",
+                                       "class": "os-pkgs", "type": "ubuntu", "target": "x (ubuntu 24.04)"}]}}
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.patches = [mock.patch.object(ib, "FILES", self.dir.name),
+                        mock.patch.object(ib, "STORE", ib.DB(os.path.join(self.dir.name, "images.sqlite"))),
+                        mock.patch.object(ib.PitStop, "start"),  # nothing runs
+                        mock.patch.object(ib, "registry_copy", lambda ref: None)]
+        for p in self.patches:
+            p.start()
+        ib.LOG = lambda **kw: None
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+        self.dir.cleanup()
+
+    def scanned(self, ref="ghcr.io/user187x/coder-workspace-ai:2.0.0"):
+        image_id = ib.scanned_id(ref)
+        ib.STORE.create(image_id, "", dict(ib.empty_spec(), scanned={"image": ref}), "alice")
+        ib.STORE.set(image_id, status="ready", ref=ref, report=self.REPORT)
+        return image_id
+
+    def test_a_scanned_image_goes_out_as_its_patched_copy(self):
+        image_id = self.scanned()
+        target, build_id = ib.start_pit_stop(image_id, {"libraries": True, "level": "patch", "maxLevel": "major",
+                                                        "laps": 3}, "alice")
+        self.assertEqual(target, "coder-workspace-ai-patched")
+        copy = ib.STORE.image(target)
+        self.assertEqual((copy["imported"]["source"], copy["imported"]["from"], copy["imported"]["entry"]),
+                         ("copa", "ghcr.io/user187x/coder-workspace-ai:2.0.0", image_id))
+        st = ib.pit_state(build_id)
+        # every finding with a fixed version (none chosen), the grade it came in with
+        self.assertEqual(st["pairs"], [["CVE-1", "openssl"], ["CVE-2", "requests"]])
+        self.assertEqual((st["source"], st["version"], st["before"]["grade"]),
+                         ("ghcr.io/user187x/coder-workspace-ai:2.0.0", 1, "D"))
+        self.assertEqual([s_["key"] for s_ in json.loads(ib.STORE.build(build_id)["steps"])],
+                         ["pit-in", "report", "patch", "rescan", "pit-out"])
+        # both the scanned entry and the copy know their pit stop
+        self.assertEqual(ib.STORE.setting("pit-latest-%s" % image_id), build_id)
+        self.assertEqual(ib.STORE.setting("pit-latest-%s" % target), build_id)
+        with self.assertRaisesRegex(ValueError, "in the pit already"):
+            ib.start_pit_stop(image_id, {}, "alice")
+
+    def test_an_image_built_here_gets_its_next_version_and_only_the_findings_chosen(self):
+        ib.STORE.create("tool", "", ib.empty_spec(), "alice")
+        ib.STORE.set("tool", status="ready", version=4, ref="%s/coder-images/tool:4" % ib.REGISTRY, report=self.REPORT)
+        target, build_id = ib.start_pit_stop("tool", {"keys": [{"id": "CVE-2", "pkg": "requests"}]}, "alice")
+        st = ib.pit_state(build_id)
+        self.assertEqual((target, st["version"], st["pairs"], st["source"]),
+                         ("tool", 5, [["CVE-2", "requests"]], "%s/coder-images/tool:4" % ib.REGISTRY))
+
+    def test_what_a_pit_stop_needs(self):
+        ib.STORE.create("draft", "", ib.empty_spec(), "alice")
+        with self.assertRaisesRegex(ValueError, "Scan the image first"):
+            ib.start_pit_stop("draft", {}, "alice")
+        ib.STORE.set("draft", report=self.REPORT)
+        with self.assertRaisesRegex(ValueError, "Build the image first"):
+            ib.start_pit_stop("draft", {}, "alice")
+        image_id = self.scanned()
+        for bad, why in (({"laps": 9}, "Laps"), ({"level": "huge"}, "Library updates"),
+                         # only a finding with no fixed version chosen
+                         ({"keys": [{"id": "CVE-3", "pkg": "zlib"}]}, "Nothing to fix")):
+            with self.assertRaisesRegex(ValueError, why):
+                ib.start_pit_stop(image_id, bad, "alice")
+        # a name taken by an image of another kind
+        ib.STORE.create("coder-workspace-ai-patched", "", ib.empty_spec(), "alice")
+        with self.assertRaisesRegex(ValueError, "not a patched copy"):
+            ib.start_pit_stop(image_id, {}, "alice")
+
+    def test_each_lap_lets_library_updates_go_a_level_further(self):
+        run = ib.PitStop("x", 1, 1, "t", ib.empty_spec(), "alice", {"level": "patch", "maxLevel": "major"})
+        self.assertEqual([run.level(n) for n in (1, 2, 3)], ["patch", "minor", "major"])
+        run = ib.PitStop("x", 1, 1, "t", ib.empty_spec(), "alice", {"level": "minor", "maxLevel": "minor"})
+        self.assertEqual([run.level(n) for n in (1, 2, 3)], ["minor", "minor", "minor"])
+
+    def test_the_report_copa_gets_and_what_is_left(self):
+        trivy = {"Results": [
+            {"Target": "x (ubuntu 24.04)", "Class": "os-pkgs", "Vulnerabilities": [
+                {"VulnerabilityID": "CVE-1", "PkgName": "openssl"}, {"VulnerabilityID": "CVE-9", "PkgName": "curl"}]},
+            {"Target": "Python", "Class": "lang-pkgs", "Vulnerabilities": [
+                {"VulnerabilityID": "CVE-8", "PkgName": "idna"}]}]}
+        out = ib.pit_filter(trivy, [["CVE-1", "openssl"]])
+        self.assertEqual([(r["Target"], [v["VulnerabilityID"] for v in r["Vulnerabilities"]]) for r in out["Results"]],
+                         [("x (ubuntu 24.04)", ["CVE-1"])])
+        self.assertEqual(ib.pit_remaining(self.REPORT, {("CVE-1", "openssl"), ("CVE-7", "gone")}),
+                         [("CVE-1", "openssl")])
+
+    def test_the_lap_job_runs_copa_beside_a_rootless_buildkit(self):
+        with mock.patch.object(ib, "PULL_SECRETS", [{"name": "harbor"}]), \
+                mock.patch.object(ib.securitydata, "active_bundle", lambda: None):
+            name, body = ib.copa_job("tool", 7, 2, "tok")
+        self.assertEqual(name, "coder-image-copa2-tool-7")
+        spec = body["spec"]["template"]["spec"]
+        sidecar = next(c for c in spec["initContainers"] if c["name"] == "buildkitd")
+        self.assertEqual(sidecar["restartPolicy"], "Always")  # a native sidecar: the Job ends with Copa
+        self.assertEqual(sidecar["command"][:4], ["rootlesskit", "buildkitd", "--addr", "unix:///run/copa/buildkitd.sock"])
+        copa = spec["containers"][0]
+        self.assertEqual(copa["command"][-2:], ["copa", "%s%s/internal/builds/tok/copa/2" % (ib.SERVICE_URL, ib.BASE)])
+        env = {e["name"]: e["value"] for e in copa["env"]}
+        self.assertEqual((env["COPA_ADDR"], env["DOCKER_CONFIG"]), ("unix:///run/copa/buildkitd.sock", "/docker"))
+        self.assertEqual(spec["securityContext"]["seccompProfile"]["type"], "Unconfined")  # rootlesskit
+
+    def test_the_jobs_own_endpoints(self):
+        import io
+        image_id = self.scanned()
+        target, build_id = ib.start_pit_stop(image_id, {"libraries": True, "level": "patch", "maxLevel": "minor"},
+                                             "alice")
+        token = ib.STORE.build(build_id)["token"]
+
+        class H:
+            def __init__(self, body=b""):
+                self.headers = {"Content-Length": str(len(body))}
+                self.rfile = io.BytesIO(body)
+                self.out = None
+
+            def send_json(self, code, obj):
+                self.out = (code, obj)
+
+            def send(self, code, text):
+                self.out = (code, text)
+
+        h = H()
+        path = "%s/internal/builds/%s/copa/2" % (ib.BASE, token)
+        self.assertTrue(ib.handle_internal(h, "GET", path))
+        code, plan = h.out
+        self.assertEqual((code, plan["lap"], plan["level"], plan["target"], plan["report"]),
+                         (200, 2, "minor", "%s/coder-images/%s:1" % (ib.REGISTRY, target), None))
+        h = H(json.dumps({"Results": []}).encode())
+        ib.handle_internal(h, "POST", "%s/internal/builds/%s/copa/1/report" % (ib.BASE, token))
+        self.assertEqual(ib.STORE.setting("pit-report-%d" % build_id), {"Results": []})
+        h = H(json.dumps({"exit": 0, "pushed": True}).encode())
+        ib.handle_internal(h, "POST", "%s/internal/builds/%s/copa/1/result" % (ib.BASE, token))
+        self.assertEqual(ib.STORE.setting("pit-result-%d-1" % build_id)["pushed"], True)
+        # the image's view carries it
+        view = ib.pit_view(build_id)
+        self.assertEqual((view["target"], view["status"], view["outcome"]), (target, "queued", "running"))
+
+
 class ImageImportTest(unittest.TestCase):
     """Images brought in (imagebuilder.py: Import): references, names, archives, and what workspaces run."""
 
