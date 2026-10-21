@@ -891,6 +891,15 @@ def main():
           and '"/__icons/ghostty.png"' in app.group(1), {"pushes": pushes, "fork slug": fork_slug})
     check("template: no script left inline in the .tf files (heredocs)", not any("<<" in t for t in tf.values()),
           [n for n, t in tf.items() if "<<" in t])
+    # File Browser Quantum refuses a config with a key it does not know (it does not start): its userDefaults take
+    # groups (listing, account, ...), not the user's own settings such as stickySidebar, which filebrowser.sh sets per
+    # user at every start (2026-10-21: a stickySidebar default stopped File Browser in every restarted workspace).
+    fb = open(os.path.join(chart, "charts/coder-workspace/files/scripts/filebrowser.sh")).read()
+    defaults = re.search(r"userDefaults: \{(.*?)\}\}'", fb)
+    top = re.findall(r"(?:^|, )(\w+):", re.sub(r"\{[^{}]*\}", "{}", defaults.group(1))) if defaults else []
+    check("template: File Browser's userDefaults only known groups; the sidebar hidden per user at every start",
+          defaults and set(top) <= {"listing", "account", "preview", "fileLoading"} and '"stickySidebar":false' in fb,
+          top)
     if subprocess.run(["sh", "-c", "command -v shfmt"], capture_output=True).returncode == 0:
         rc, out, err = run(["shfmt", "-i", "1", "-d"] + scripts)
         check("template scripts: formatted (shfmt -i 1)", rc == 0, (out + err).strip()[:300] or "%d scripts" % len(scripts))

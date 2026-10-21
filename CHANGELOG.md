@@ -2,7 +2,48 @@
 
 ## 1.46.0 – unreleased
 
-Coder `2.0.0-platform.105` (fork `8409a8430`).
+Coder `2.0.0-platform.106` (fork `a14d152f7`).
+
+* **platform.106:**
+  * **The announcement banner could not be turned on.** On an empty banner (the chart's defaults, or after a reset)
+    the Show banner switch refused, and said why only at the bottom of the page. Now:
+    * with a message written, turning it on publishes it, showing;
+    * with nothing written, it says so beside itself and brings the message box into view.
+  * **The navbar:**
+    * The HUD | latency split button now reads: the latency in a pill, then "Controls". There is no separate
+      Controls button.
+    * Its menu starts with the Workspaces row: the icon, word and count in a pill as wide as the menu.
+      * Pressed and held, it slides down the workspaces with their latency, while a ring draws round the pill's
+        border (hold to confirm).
+      * Held through the ring (0.8 s), the list locks open, the ring green, until a press elsewhere. A double click
+        locks it too.
+    * Below that comes the whole Controls menu, graphs last.
+    * The logo sits in the same tile as the avatar, cropped to a squircle unless its corners are transparent.
+  * **The chat console** opens centred over the page from the chat bar's console button, the rest blurred like the
+    quick access wheel. Escape there no longer also opens the wheel.
+  * **The Cluster Network view:**
+    * pods and Services are coloured by kind, each with an icon of what it is right of its colour mark (a database,
+      Traefik a network, the image registry a container...);
+    * every pod, Service, node and line opens its details;
+    * a code-server HA and storage card;
+    * a mesh of the components with measured latencies (edges that can't be measured say why);
+    * a node topology card;
+    * the platform service reads Services, events, persistent volumes, EndpointSlices and CSI drivers (new
+      read-only rules).
+  * **The workspace page:** its Cloud Drive glyph sits just left of the Uptime pill.
+  * **The tab row is gone** from Workspaces, Templates and Images: the navbar's Resources menu already has them.
+  * **Images:** a finished scan is deleted with its row's trash can, after a confirmation.
+  * **A terminal:**
+    * a shell that exits (`exit`, `logout`, Ctrl-D) closes Coder's terminal window instead of reconnecting into a new
+      shell; a window the browser keeps open says the session ended;
+    * the workspace page's Terminal panel already rolls up.
+  * **File Browser** always opens with its sidebar hidden: the user's `stickySidebar` is turned off at every start.
+    Its config refuses the key as a default; a static check now guards that.
+  * **code-server HA, measured on the dev cluster:**
+    * when the active instance's pod was lost, code-server answered again 2.6 s later (a new generation);
+    * the open IDE asks to reload its window, as VS Code can't resume a session on a new server process.
+
+Earlier in this release (platform.105, the bake-in's first step, the VM's 1.45.0 findings):
 
 * **The template lock-down** (the owner's report: the template settings' Permissions card said "Template permissions
   is not enabled on this deployment"). Coder's template permissions are a Premium feature, and the platform runs the

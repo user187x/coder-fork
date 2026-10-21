@@ -1408,6 +1408,104 @@ class TrackedWorkspaceImageTest(unittest.TestCase):
         self.assertIsNone(ib.addons_of(None))
 
 
+class ScanDeleteTest(unittest.TestCase):
+    """Images > an image > Scans: a finished scan's record deleted (its row, log and report); the image's report goes
+    back to its newest scan left. Editors only; a running scan is refused (409), an unknown one is 404; a build
+    stays."""
+
+    REF = ib.REGISTRY + "/coder-images/base/coder-workspace:1.9.4"
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.logs = []
+        for p in (mock.patch.object(ib, "FILES", self.dir.name),
+                  mock.patch.object(ib, "STORE", ib.DB(os.path.join(self.dir.name, "images.sqlite"))),
+                  mock.patch.object(ib, "LOG", lambda **kw: self.logs.append(kw))):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.dir.cleanup)
+        ib.STORE.create("scan-ws", "",
+                        dict(ib.empty_spec(), scanned={"image": "ghcr.io/user187x/coder-workspace:1.9.4"}), "alice")
+        ib.STORE.set("scan-ws", status="ready", ref=self.REF)
+
+    def scan(self, image_id="scan-ws", at="2026-10-20T19:03:22Z", ref=REF, status="ready"):
+        """A rescan as start_rescan records it, finished with its report (the image's, as Rescan sets it)."""
+        img = ib.STORE.image(image_id)
+        build_id, token = ib.STORE.new_build(image_id, img["version"], img["spec"], "alice")
+        steps = ib.Rescan(image_id, build_id, img["version"], token, img["spec"], "alice").steps()
+        ib.STORE.update_build(build_id, steps=steps, status=status)
+        report = {"ref": ref, "scannedAt": at, "grade": "B"}
+        if status == "ready":
+            ib.STORE.put_setting("report-%d" % build_id, report)
+            ib.STORE.set(image_id, report=report)
+        return build_id, report
+
+    def delete(self, build_id, image_id="scan-ws", editor=True):
+        h = mock.MagicMock()
+        ib.route(h, "POST", "/%s/builds/%d/delete" % (image_id, build_id), "", {"username": "admin"}, editor, editor)
+        return h.send_json.call_args[0]
+
+    def test_a_scan_and_its_report_go_and_the_image_keeps_its_newer_one(self):
+        first, _ = self.scan(at="2026-10-19T10:00:00Z")
+        second, newer = self.scan()
+        self.assertEqual([b["scanOnly"] for b in ib.STORE.builds("scan-ws")], [True, True])
+        self.assertEqual(self.delete(first), (200, {"ok": True}))
+        self.assertIsNone(ib.STORE.build(first))
+        self.assertIsNone(ib.STORE.setting("report-%d" % first))
+        self.assertEqual([b["id"] for b in ib.STORE.builds("scan-ws")], [second])
+        self.assertEqual(ib.STORE.image("scan-ws")["report"], newer)
+        self.assertEqual(self.logs[-1], {"event": "image-scan-deleted", "image": "scan-ws", "build": first,
+                                         "by": "admin", "report": "kept"})
+
+    def test_the_image_report_goes_back_to_its_newest_scan_left(self):
+        other, _ = self.scan(at="2026-10-18T10:00:00Z", ref=ib.REGISTRY + "/coder-images/base/coder-workspace:1.9.3")
+        first, older = self.scan(at="2026-10-19T10:00:00Z")
+        second, _ = self.scan()
+        self.assertEqual(self.delete(second)[0], 200)
+        self.assertEqual(ib.STORE.image("scan-ws")["report"], older)
+        self.assertEqual(self.logs[-1]["report"], "earlier")
+        # the scan of another image (an earlier workspace image) does not stand in for it
+        self.assertEqual(self.delete(first)[0], 200)
+        self.assertIsNone(ib.STORE.image("scan-ws")["report"])
+        self.assertEqual(self.logs[-1]["report"], "none")
+        self.assertIsNotNone(ib.STORE.build(other))
+
+    def test_a_running_scan_is_refused_an_unknown_one_is_not_found(self):
+        running, _ = self.scan(status="scanning")
+        code, body = self.delete(running)
+        self.assertEqual(code, 409)
+        self.assertIn("still running", body["error"])
+        self.assertIsNotNone(ib.STORE.build(running))
+        self.assertEqual(self.delete(999)[0], 404)
+        # another image's scan, through this one: not found either
+        ib.STORE.create("tool", "", ib.empty_spec(), "alice")
+        self.assertEqual(self.delete(running, image_id="tool")[0], 404)
+        self.assertEqual(self.logs, [])
+
+    def test_editors_only_behind_the_cross_site_check(self):
+        done, _ = self.scan()
+        self.assertEqual(self.delete(done, editor=False)[0], 403)
+        self.assertIsNotNone(ib.STORE.build(done))
+        h = mock.MagicMock()
+        h.csrf_ok.return_value = False
+        with mock.patch.object(ib, "ENABLED", True):
+            ib.handle(h, "POST", "%s/api/images/scan-ws/builds/%d/delete" % (ib.BASE, done), "", ["owner"])
+        self.assertEqual(h.send_json.call_args[0][0], 403)
+        h.user.assert_not_called()
+        self.assertIsNotNone(ib.STORE.build(done))
+
+    def test_a_build_stays_with_its_image(self):
+        ib.STORE.create("tool", "", ib.empty_spec(), "alice")
+        spec = ib.clean_spec(ib.empty_spec(), "tool")
+        build_id, _ = ib.STORE.new_build("tool", 1, spec, "alice")
+        ib.STORE.update_build(build_id, status="ready", steps=[{"key": k, "label": l, "state": "done"}
+                                                               for k, l in ib.build_plan(spec)])
+        self.assertFalse(ib.STORE.builds("tool")[0]["scanOnly"])
+        with self.assertRaisesRegex(ValueError, "Only a scan's record"):
+            self.delete(build_id, image_id="tool")
+        self.assertIsNotNone(ib.STORE.build(build_id))
+
 
 class SafeTest(unittest.TestCase):
     """The safe (safe.py): only ever the caller's own prefix, every account's volume made, the nodes' endpoint."""
@@ -3496,6 +3594,421 @@ class WebhookTest(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+class ClusterNetworkViewTest(unittest.TestCase):
+    """The Cluster Network view in depth (clusternet.py): each pod's kind (the dashboard's colours), the Services on
+    the map, one entity's details, code-server HA and the storage, and the mesh - numbers only where they were
+    measured, the rest drawn with the reason."""
+
+    @staticmethod
+    def pod(name, ns="coder", labels=None, ip="10.0.0.1", node="n1", ready=True, containers=None, **extra):
+        cs = containers or [{"name": "main", "ports": []}]
+        return {"metadata": dict({"name": name, "namespace": ns, "labels": labels or {}}, **extra.get("meta", {})),
+                "spec": {"nodeName": node, "containers": cs, **extra.get("spec", {})},
+                "status": {"podIP": ip, "phase": "Running", "startTime": "2026-10-20T10:00:00Z",
+                           "containerStatuses": [{"name": c["name"], "ready": ready, "restartCount": 0}
+                                                 for c in cs]}}
+
+    class Kube:
+        """GET path (query included) -> (status, body); the longest matching prefix answers, else 404."""
+
+        def __init__(self, routes):
+            self.routes, self.calls = routes, []
+
+        def call(self, method, path, body=None, patch_type=None):
+            self.calls.append((method, path))
+            hits = [p for p in self.routes if path.startswith(p)]
+            return self.routes[max(hits, key=len)] if hits else (404, {})
+
+    class Pool:
+        """Coder's database: answers by a fragment of the SQL."""
+
+        def __init__(self, answers):
+            self.answers, self.queries = answers, []
+
+        def query(self, sql, params=()):
+            self.queries.append(sql)
+            for frag, rows in self.answers.items():
+                if frag in sql:
+                    if isinstance(rows, Exception):
+                        raise rows
+                    return rows
+            return []
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cn = load("clusternet", "clusternet.py")
+
+    def setUp(self):
+        self.cn._cache.clear()
+        self.cn.MESH = self.cn.Mesh()
+        self.pods = [
+            self.pod("coder-878d-a", labels={"app.kubernetes.io/name": "coder", "app.kubernetes.io/instance": "coder",
+                                             "coder-airgapped/ha-role": "active", "pod-template-hash": "878d"},
+                     ip="10.0.0.10", containers=[{"name": "coder", "ports": [{"name": "http", "containerPort": 8080}],
+                                                  "resources": {"requests": {"cpu": "500m", "memory": "1Gi"}}}],
+                     meta={"ownerReferences": [{"kind": "ReplicaSet", "name": "coder-878d", "controller": True}]}),
+            self.pod("coder-db-1", labels={"cnpg.io/cluster": "coder-db", "cnpg.io/instanceRole": "primary"}, ip="10.0.0.20"),
+            self.pod("coder-db-2", labels={"cnpg.io/cluster": "coder-db", "cnpg.io/instanceRole": "replica"}, ip="10.0.0.21",
+                     node="n2"),
+            self.pod("coder-ui-updates-x", labels={"app.kubernetes.io/name": "coder-ui-updates"}, ip="10.0.0.30"),
+            self.pod("coder-user-storage-minio-x", labels={"app.kubernetes.io/name": "coder-user-storage-minio"},
+                     ip="10.0.0.40"),
+            self.pod("coder-image-registry-x", labels={"app.kubernetes.io/name": "coder-image-registry"}, ip="10.0.0.50"),
+            self.pod("coder-code-server-replicator-a", labels={"app.kubernetes.io/name": "coder-code-server-replicator"},
+                     ip="10.0.0.60", containers=[{"name": "operator", "env": [
+                         {"name": "CSHA_CLUSTER", "value": "primary"}, {"name": "CSHA_LEASE_SECONDS", "value": "30"},
+                         {"name": "CSHA_DB", "valueFrom": {"secretKeyRef": {"name": "coder-db-app", "key": "uri"}}}]}]),
+            self.pod("coder-code-server-replicator-b", labels={"app.kubernetes.io/name": "coder-code-server-replicator"},
+                     ip="10.0.0.61", node="n2"),
+            self.pod("coder-cs-111111112222-g3", labels={"app.kubernetes.io/name": "coder-code-server",
+                                                         "coder.code-server/workspace": "11111111-2222-3333-4444-555555555555",
+                                                         "coder.code-server/generation": "3"}, ip="10.0.0.70"),
+            self.pod("coder-cs-111111112222-g2", labels={"app.kubernetes.io/name": "coder-code-server",
+                                                         "coder.code-server/workspace": "11111111-2222-3333-4444-555555555555",
+                                                         "coder.code-server/generation": "2"}, ip="10.0.0.71", ready=False),
+            self.pod("coder-ws-look", labels={"com.coder.workspace.id": "11111111-2222-3333-4444-555555555555",
+                                              "com.coder.workspace.name": "look", "com.coder.user.username": "alice"},
+                     ip="10.0.0.80", containers=[{"name": "dev"}, {"name": "code-server-relay"}]),
+            self.pod("traefik-x", ns="traefik", labels={"app.kubernetes.io/name": "traefik"}, ip="10.0.0.90"),
+            self.pod("coredns-x", ns="kube-system", labels={"k8s-app": "kube-dns"}, ip="10.0.0.99"),
+        ]
+        self.snapshot = {"pods": self.pods, "nodes": [], "usage": None}
+
+    def setup_cn(self, kube, coder_get=None, db=None, safe=None):
+        self.cn.setup(lambda **kw: None, kube, coder_get or (lambda token, path: (404, {})), lambda: self.snapshot,
+                      (lambda: db), ui.quantity, safe=safe)
+
+    def labels(self, name):
+        return next(p for p in self.pods if p["metadata"]["name"] == name)["metadata"]["labels"]
+
+    def test_each_pod_has_its_kind(self):
+        kind = lambda name: self.cn.component_kind(self.labels(name), "coder")  # noqa: E731
+        self.assertEqual([kind(n) for n in ("coder-878d-a", "coder-db-1", "coder-db-2", "coder-ui-updates-x",
+                                            "coder-user-storage-minio-x", "coder-image-registry-x",
+                                            "coder-code-server-replicator-a", "coder-cs-111111112222-g3", "coder-ws-look",
+                                            "traefik-x", "coredns-x")],
+                         ["coder", "database", "database", "platform", "storage", "platform", "replicator",
+                          "code-server", "workspace", "gateway", "other"])
+        self.assertEqual(self.cn.component_kind({"cnpg.io/poolerName": "coder-db-pooler-rw"}), "database")
+        self.assertEqual(self.cn.component_kind({"app.kubernetes.io/name": "coder-user-storage-csi"}), "storage")
+        self.assertEqual(self.cn.component_kind({"app.kubernetes.io/name": "coder", "app.kubernetes.io/instance": "other"},
+                                                "coder"), "other")       # another release's Coder is not this one
+        on = [p["metadata"]["name"] for p in self.pods if self.cn.on_map(p)]
+        self.assertIn("traefik-x", on)                                     # the way in, from its own namespace
+        self.assertNotIn("coredns-x", on)
+        self.assertNotIn("coder-ws-look", on)                              # workspaces are placed on their own
+        self.setup_cn(self.Kube({}))
+        extras = self.cn.map_extras(self.pods[0])
+        self.assertEqual((extras["kind"], extras["haRole"]), ("coder", "active"))
+        self.assertEqual(extras["requests"], {"cpu": 0.5, "memory": 1024 ** 3})
+
+    def test_the_services_on_the_map(self):
+        svc = lambda name, ns, sel, ports, **spec: {"metadata": {"name": name, "namespace": ns},  # noqa: E731
+                                                    "spec": dict({"selector": sel, "ports": ports}, **spec)}
+        kube = self.Kube({
+            "/api/v1/namespaces/coder/services": (200, {"items": [
+                svc("coder", "coder", {"app.kubernetes.io/name": "coder"}, [{"port": 80, "targetPort": 8080}],
+                    clusterIP="10.96.0.10"),
+                svc("coder-db-rw", "coder", {"cnpg.io/cluster": "coder-db", "cnpg.io/instanceRole": "primary"},
+                    [{"port": 5432}]),
+                svc("coder-cs-111111112222", "coder", {"coder.code-server/workspace": "gone"}, [{"port": 8080}])]}),
+            "/apis/discovery.k8s.io/v1/namespaces/coder/endpointslices": (200, {"items": [
+                {"metadata": {"labels": {"kubernetes.io/service-name": "coder"}}, "endpoints": [
+                    {"addresses": ["10.0.0.10"], "conditions": {"ready": True}, "targetRef": {"name": "coder-878d-a"}},
+                    {"addresses": ["10.0.0.11"], "conditions": {"ready": False}, "targetRef": {"name": "coder-878d-b"}}]}]}),
+            "/api/v1/namespaces/traefik/services": (403, {}),
+            "/api/v1/namespaces/keycloak/services": (200, {"items": []}),
+        })
+        self.setup_cn(kube)
+        out = self.cn.services_report(self.pods)
+        by = {s["name"]: s for s in out["services"]}
+        self.assertEqual((by["coder"]["kind"], by["coder"]["ports"], by["coder"]["endpoints"], by["coder"]["ready"]),
+                         ("coder", ["80/TCP -> 8080"], 2, 1))
+        self.assertEqual(by["coder-db-rw"]["kind"], "database")
+        self.assertEqual(by["coder-cs-111111112222"]["kind"], "code-server")  # selects nothing now: by its name
+        self.assertIn("services list", out["error"])                         # an older chart's RBAC: said, not hidden
+        self.assertEqual([s["name"] for s in out["services"]][0], "coder")   # in the legend's order of kinds
+
+    def test_one_pods_details_never_show_its_environment(self):
+        pod = self.pods[0]
+        pod["spec"]["containers"][0]["env"] = [{"name": "CODER_PG_CONNECTION_URL", "value": "postgres://secret"}]
+        pod["spec"]["volumes"] = [{"name": "kube-api-access-x", "projected": {}},
+                                  {"name": "tls", "secret": {"secretName": "coder-tls"}}]
+        pod["status"]["containerStatuses"][0].update(restartCount=2, state={"running": {"startedAt": "t1"}},
+                                                     lastState={"terminated": {"reason": "OOMKilled", "exitCode": 137}})
+        kube = self.Kube({
+            "/api/v1/namespaces/coder/pods/coder-878d-a": (200, pod),
+            "/apis/metrics.k8s.io/v1beta1/namespaces/coder/pods/coder-878d-a": (200, {"containers": [
+                {"usage": {"cpu": "12m", "memory": "100Mi"}}]}),
+            "/api/v1/namespaces/coder/services": (200, {"items": [
+                {"metadata": {"name": "coder"}, "spec": {"selector": {"app.kubernetes.io/name": "coder"}}},
+                {"metadata": {"name": "other"}, "spec": {"selector": {"app": "x"}}}]}),
+            "/api/v1/namespaces/coder/events": (200, {"items": [
+                {"type": "Normal", "reason": "Pulled", "lastTimestamp": "2026-10-20T10:00:00Z"},
+                {"type": "Warning", "reason": "BackOff", "lastTimestamp": "2026-10-20T11:00:00Z", "count": 4}]}),
+        })
+        self.setup_cn(kube)
+        d = self.cn.entity("tok", "type=pod&namespace=coder&name=coder-878d-a")
+        self.assertNotIn("secret", json.dumps(d).replace("coder-tls", "").replace('"Secret"', ""))
+        self.assertEqual(d["owner"], {"kind": "Deployment", "name": "coder", "via": "ReplicaSet coder-878d"})
+        self.assertEqual((d["kind"], d["role"], d["restarts"], d["services"]), ("coder", "active", 2, ["coder"]))
+        self.assertEqual(d["containers"][0]["lastState"]["reason"], "OOMKilled")
+        self.assertEqual(d["containers"][0]["ports"], ["8080/TCP (http)"])
+        self.assertEqual([v["name"] for v in d["volumes"]], ["tls"])           # the API token volume left out
+        self.assertEqual(d["usage"], {"cpu": 0.012, "memory": 100 * 1024 ** 2})
+        self.assertEqual([e["reason"] for e in d["events"]], ["BackOff", "Pulled"])  # newest first
+        with self.assertRaises(LookupError):
+            self.cn.entity("tok", "type=pod&namespace=coder&name=gone")
+        for bad in ("type=pod&name=../x", "type=pod&namespace=Bad_NS&name=x", "type=thing&name=x", "type=link&id=%3Cx%3E"):
+            with self.assertRaises(ValueError):
+                self.cn.entity("tok", bad)
+
+    def test_a_nodes_details(self):
+        node = {"metadata": {"name": "n2", "labels": {"topology.kubernetes.io/zone": "z2", "secret-ish": "x"}},
+                "spec": {"taints": [{"key": "dedicated", "value": "ws", "effect": "NoSchedule"}]},
+                "status": {"capacity": {"cpu": "8", "memory": "32Gi"}, "allocatable": {"cpu": "7500m", "memory": "30Gi",
+                                                                                      "pods": "110"},
+                           "conditions": [{"type": "MemoryPressure", "status": "True", "reason": "KubeletHasPressure"},
+                                          {"type": "Ready", "status": "True"}]}}
+        self.pods[2]["spec"]["containers"][0]["resources"] = {"requests": {"cpu": "1", "memory": "2Gi"},
+                                                              "limits": {"memory": "4Gi"}}
+        self.setup_cn(self.Kube({"/api/v1/nodes/n2": (200, node), "/api/v1/namespaces/default/events": (403, {})}))
+        d = self.cn.entity("tok", "type=node&name=n2")
+        self.assertEqual(d["allocatableValues"], {"cpu": 7.5, "memory": 30 * 1024 ** 3, "pods": 110})
+        self.assertEqual((d["requests"]["cpu"], d["limits"]["memory"]), (1.0, 4 * 1024 ** 3))
+        self.assertEqual(d["taints"], ["dedicated=ws:NoSchedule"])
+        self.assertEqual(d["labels"], {"topology.kubernetes.io/zone": "z2"})
+        self.assertEqual(sorted(p["name"] for p in d["pods"]), ["coder-code-server-replicator-b", "coder-db-2"])
+        self.assertIsNone(d["events"])                                         # not readable: none, not an error
+        self.assertEqual(d["conditions"][0]["type"], "MemoryPressure")
+
+    def test_go_durations(self):
+        ms = self.cn.go_duration_ms
+        self.assertAlmostEqual(ms("442.724µs"), 0.442724)
+        self.assertAlmostEqual(ms("1m2.5s"), 62500)
+        self.assertAlmostEqual(ms("12ms"), 12)
+        self.assertEqual(ms("0s"), 0)
+        for bad in ("", None, "fast", "12 ms", "3x"):
+            self.assertIsNone(ms(bad))
+
+    def test_tcp_connect_is_timed_against_a_real_listener(self):
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(8)
+        port = srv.getsockname()[1]
+        try:
+            ms, err = self.cn.tcp_ms("127.0.0.1", port)
+            self.assertIsNone(err)
+            self.assertGreaterEqual(ms, 0)
+            self.assertLess(ms, 1000)
+        finally:
+            srv.close()
+        ms, err = self.cn.tcp_ms("127.0.0.1", port, tries=1, timeout=0.5)     # nothing listens now
+        self.assertIsNone(ms)
+        self.assertTrue(err)
+
+    def mesh_env(self):
+        health = {"time": "2026-10-21T02:24:16Z",
+                  "derp": {"regions": {"999": {"node_reports": [{"round_trip_ping": "442.724µs",
+                                                                 "round_trip_ping_ms": 0}]}}},
+                  "database": {"reachable": True, "latency": "43.244µs", "latency_ms": 0}}
+        agent = lambda status, ms: {"name": "main", "status": status,  # noqa: E731
+                                    "latency": {"Relay": {"preferred": True, "latency_ms": ms}} if ms else {}}
+        workspaces = {"workspaces": [
+            {"owner_name": "alice", "name": "look", "latest_build": {"resources": [{"agents": [agent("connected", 0.4)]}]}},
+            {"owner_name": "bob", "name": "b", "latest_build": {"resources": [{"agents": [agent("connected", 1.6)]}]}},
+            {"owner_name": "carol", "name": "c", "latest_build": {"resources": [{"agents": [agent("timeout", None)]}]}}]}
+        calls = []
+
+        def coder_get(token, path):
+            calls.append(path)
+            if path.startswith("/api/v2/debug/health"):
+                return 200, health
+            if path.startswith("/api/v2/workspaces"):
+                return 200, workspaces
+            return 404, {}
+
+        kube = self.Kube({"/api/v1/namespaces/coder/services": (200, {"items": [
+            {"metadata": {"name": "coder-image-registry"}, "spec": {"clusterIP": "10.96.5.5", "ports": [{"port": 5000}],
+                                                                   "selector": {"app.kubernetes.io/name": "coder-image-registry"}}},
+            {"metadata": {"name": "coder-db-rw"}, "spec": {"selector": {"cnpg.io/instanceRole": "primary"},
+                                                         "ports": [{"port": 5432}]}}]}),
+            "/api/v1/namespaces/traefik/services": (200, {"items": []}),
+            "/api/v1/namespaces/keycloak/services": (200, {"items": []})})
+        db = self.Pool({"SELECT 1": [["1"]], "to_regclass": [["code_server_ha.clusters"]],
+                        "FROM code_server_ha.clusters": [["primary", "3.4"]]})
+        safe = mock.Mock(ENABLED=True, _status={"checkedAt": 1760000000, "latencyMs": 9, "error": None})
+        safe.backend.return_value = {"source": "chart", "endpoint": "https://minio.coder.svc:9443", "bucket": "b"}
+        self.setup_cn(kube, coder_get, db, safe)
+        return calls
+
+    def test_the_mesh_numbers_only_what_was_measured(self):
+        calls = self.mesh_env()
+        tcp = {"10.0.0.10": (0.21, None), "10.0.0.20": (0.31, None), "10.0.0.21": (None, "timed out"),
+               "10.0.0.70": (0.5, None), "10.0.0.71": (0.7, None), "minio.coder.svc": (0.9, None)}
+        with mock.patch.object(self.cn, "tcp_ms", side_effect=lambda host, port: tcp[host]) as t, \
+                mock.patch.object(self.cn, "http_ms", side_effect=lambda url: (1.5, None, 200) if "/healthz" in url
+                                  else (2.5, None, 401)), \
+                mock.patch.object(self.cn, "ACCESS_URL", "https://coder.example.com"):
+            rep = self.cn.MESH.report("tok")
+            self.assertIs(self.cn.MESH.report("tok"), rep)                     # one measurement serves every viewer
+            self.assertEqual(t.call_count, 6)
+        nodes = {n["id"]: n for n in rep["nodes"]}
+        self.assertEqual(set(nodes), {"gateway", "coder", "workspaces", "code-server", "replicator", "database",
+                                      "replicas", "storage", "registry", "platform"})
+        self.assertEqual(nodes["gateway"]["label"], "Traefik")
+        self.assertEqual(nodes["registry"]["entity"], {"type": "service", "namespace": "coder",
+                                                       "name": "coder-image-registry"})
+        e = {x["id"]: x for x in rep["edges"]}
+        # what the components measure themselves, with when they measured it
+        self.assertEqual(e["gateway-coder"]["ms"], 0.443)                      # to the microsecond
+        self.assertEqual((e["gateway-coder"]["measuredBy"], e["gateway-coder"]["measuredAt"]),
+                         ("Coder", "2026-10-21T02:24:16Z"))
+        self.assertEqual(e["coder-database"]["ms"], 0.043)                    # the duration, not the rounded 0 ms
+        self.assertEqual(e["coder-workspaces"]["ms"], 1.0)                    # the connected agents' median
+        self.assertEqual(len(e["coder-workspaces"]["samples"]), 3)
+        # what only another pod sees: drawn, never numbered
+        for eid in ("workspaces-code-server", "replicator-database", "replicator-code-server", "database-replicas"):
+            self.assertIsNone(e[eid]["ms"], eid)
+            self.assertIsNone(e[eid]["measuredBy"], eid)
+            self.assertTrue(e[eid]["note"], eid)
+        self.assertIn("primary 3 s ago", e["replicator-database"]["note"])
+        self.assertEqual(e["replicator-code-server"]["kind"], "control")
+        # what the platform service times itself
+        self.assertEqual((e["platform-coder"]["ms"], e["platform-gateway"]["ms"], e["platform-registry"]["ms"]),
+                         (1.5, 1.5, 2.5))
+        self.assertIn("HTTP 401", e["platform-registry"]["method"])            # an answer all the same
+        self.assertEqual(e["platform-coder"]["samples"][0]["ms"], 0.21)
+        self.assertGreaterEqual(e["platform-database"]["ms"], 0)
+        self.assertEqual((e["platform-replicas"]["ms"], e["platform-replicas"]["error"]), (None, "timed out"))
+        self.assertIsNone(e["platform-replicas"]["measuredAt"])
+        self.assertEqual(e["platform-code-server"]["ms"], 0.6)
+        self.assertEqual((e["platform-storage"]["ms"], e["platform-storage"]["samples"][0]["ms"]), (0.9, 9))
+        self.assertEqual(sum(1 for c in calls if "debug/health" in c), 1)
+        # a click on a connection: what it joins and its last numbers
+        link = self.cn.entity("tok", "type=link&id=platform-coder")
+        self.assertEqual((link["from"]["label"], link["to"]["kind"], link["history"][0][1]),
+                         ("Platform service", "coder", 1.5))
+        self.assertNotIn("workspaces-code-server", self.cn.MESH.history)      # never measurable: no history
+        with self.assertRaises(LookupError):
+            self.cn.entity("tok", "type=link&id=nothing-here")
+
+    def test_a_failed_probe_is_that_connections_error(self):
+        self.mesh_env()
+        self.snapshot["pods"] = [p for p in self.pods if p["metadata"]["name"] in ("coder-878d-a", "coder-ui-updates-x")]
+        with mock.patch.object(self.cn, "tcp_ms", side_effect=OSError("no route")), \
+                mock.patch.object(self.cn, "http_ms", return_value=(None, "connection refused", None)), \
+                mock.patch.object(self.cn, "ACCESS_URL", ""):
+            link = self.cn.entity("tok", "type=link&id=platform-coder")   # opened first: measured then
+            rep = self.cn.MESH.report("tok")
+        self.assertEqual((link["ms"], link["history"]), (None, [[rep["generatedAt"], None]]))
+        e = {x["id"]: x for x in rep["edges"]}
+        self.assertEqual((e["platform-coder"]["ms"], e["platform-coder"]["error"]), (None, "connection refused"))
+        self.assertEqual(e["platform-coder"]["samples"][0]["error"], "no route")
+        self.assertEqual(e["platform-gateway"]["error"], "no access URL configured")
+        self.assertNotIn("code-server", {n["id"] for n in rep["nodes"]})       # no code-server HA here: no node
+        self.assertTrue(all(x["from"] in {n["id"] for n in rep["nodes"]} for x in rep["edges"]))
+
+    def test_code_server_ha_as_it_is(self):
+        ws = "11111111-2222-3333-4444-555555555555"
+        db = self.Pool({
+            "to_regclass": [["code_server_ha.instances"]],
+            "FROM code_server_ha.clusters c": [["primary", "2.5", "2026-10-20T18:58:04Z", "f", "csha-1", "10.0.0.60",
+                                                "2026-10-21T01:05:27Z"]],
+            "FROM code_server_ha.instances i": [[ws, "alice", "primary", "coder", "n1", "primary",
+                                                 "coder-cs-111111112222-g3", "3", "running", "27.5", "running in primary",
+                                                 "2.5", "1.0", "coder-cs-111111112222.coder.svc:8080", "4",
+                                                 "2026-10-21T01:00:00Z"]],
+            "FROM code_server_ha.events": [["2026-10-21T01:05:00Z", ws, "primary", "lease", "generation 3 in primary"]],
+            "FROM pg_stat_activity WHERE application_name": [["10.0.0.60", "2026-10-21T01:05:27Z", "idle"],
+                                                             ["10.0.0.61", "2026-10-21T01:05:28Z", "idle"]],
+        })
+        kube = self.Kube({"/apis/apps/v1/namespaces/coder/deployments": (200, {"items": [{"spec": {"replicas": 2}}]})})
+        self.setup_cn(kube, db=db)
+        out = self.cn.ha_report(self.pods)
+        self.assertEqual((out["installed"], out["cluster"], out["leaseSeconds"], out["replicas"]), (True, "primary", 30, 2))
+        self.assertEqual({r["name"]: r["lock"] for r in out["replicators"]},
+                         {"coder-code-server-replicator-a": "holds", "coder-code-server-replicator-b": "waits"})
+        self.assertEqual(out["lockHolder"], "coder-code-server-replicator-a")
+        self.assertTrue(out["clusters"][0]["healthy"])
+        inst = out["instances"][0]
+        self.assertEqual((inst["generation"], inst["state"], inst["leaseLeft"], inst["stateFiles"]), (3, "running", 27.5, 4))
+        self.assertEqual(inst["activePod"]["name"], "coder-cs-111111112222-g3")
+        self.assertEqual([p["generation"] for p in inst["superseded"]], [2])   # not fenced yet: relays on
+        self.assertEqual((inst["workspacePod"]["relay"], inst["workspacePod"]["relayReady"]), (True, True))
+        self.assertEqual(out["events"][0]["event"], "lease")
+        self.assertNotIn("token", json.dumps(out).lower())                    # no instance token ever leaves
+        # before the schema exists (or without the database): the Kubernetes half, and why
+        self.setup_cn(kube, db=self.Pool({"to_regclass": [[None]]}))
+        out = self.cn.ha_report(self.pods)
+        self.assertEqual((out["schema"], out["instances"]), (False, []))
+        self.assertEqual({r["lock"] for r in out["replicators"]}, {"unknown"})
+        self.setup_cn(kube, db=None)
+        self.assertIn("not reachable", self.cn.ha_report(self.pods)["error"])
+
+    def test_storage_classes_and_the_cloud_drive(self):
+        pv = lambda name, sc, phase, claim, **kw: {  # noqa: E731
+            "metadata": {"name": name, "annotations": kw.get("ann", {})},
+            "spec": {"storageClassName": sc, "capacity": {"storage": kw.get("size", "10Gi")},
+                     "claimRef": {"namespace": "coder", "name": claim}, "persistentVolumeReclaimPolicy": "Retain",
+                     "csi": {"driver": kw["driver"]} if kw.get("driver") else None},
+            "status": {"phase": phase}}
+        kube = self.Kube({
+            "/apis/storage.k8s.io/v1/storageclasses": (200, {"items": [
+                {"metadata": {"name": "standard"}, "provisioner": "k8s.io/minikube-hostpath"},
+                {"metadata": {"name": "local-path", "annotations": {"storageclass.kubernetes.io/is-default-class": "true"}},
+                 "provisioner": "rancher.io/local-path", "volumeBindingMode": "WaitForFirstConsumer"}]}),
+            "/api/v1/persistentvolumes": (200, {"items": [
+                pv("pvc-1", "local-path", "Bound", "coder-db-1"),
+                pv("pvc-2", "local-path", "Bound", "coder-ws-home", size="20Gi"),
+                pv("coder-safe-u1", "", "Bound", "coder-safe-u1", driver="ru.yandex.s3.csi",
+                   ann={"platform.coder/username": "alice"}),
+                pv("coder-safe-u2", "", "Released", "coder-safe-u2", driver="ru.yandex.s3.csi"),
+                pv("coder-isos", "", "Bound", "coder-isos", driver="ru.yandex.s3.csi")]}),
+            "/apis/storage.k8s.io/v1/csidrivers": (200, {"items": [{"metadata": {"name": "ru.yandex.s3.csi"}, "spec": {}}]}),
+            "/api/v1/namespaces/coder/persistentvolumeclaims": (200, {"items": [
+                {"metadata": {"name": "waiting"}, "spec": {"storageClassName": "local-path"}, "status": {"phase": "Pending"}}]}),
+        })
+        self.pods[10]["spec"]["volumes"] = [{"name": "drive", "persistentVolumeClaim": {"claimName": "coder-safe-u1"}}]
+        safe = mock.Mock(ENABLED=True, CLAIM_PREFIX="coder-safe-", CSI_DRIVER="ru.yandex.s3.csi",
+                         SOURCE_PREFIX="coder-drive-src-", _status={"connected": True, "latencyMs": 9, "checkedAt": 1})
+        safe.backend.return_value = {"source": "chart", "kind": "minio", "endpoint": "https://m:9443", "bucket": "b",
+                                     "region": "", "accessKey": "AK", "secretKey": "SK"}
+        safe.quota_bytes.return_value = 10 * 1024 ** 3
+        self.setup_cn(kube, safe=safe)
+        out = self.cn.storage_report(self.pods)
+        self.assertEqual([c["name"] for c in out["classes"]], ["local-path", "standard"])   # the default first
+        lp = out["classes"][0]
+        self.assertEqual((lp["default"], lp["bindingMode"], lp["reclaimPolicy"], lp["volumes"], lp["bound"]),
+                         (True, "WaitForFirstConsumer", "Delete", 2, 2))
+        self.assertEqual(lp["capacityBytes"], 30 * 1024 ** 3)
+        self.assertEqual(lp["pending"], ["coder/waiting"])
+        cd = out["cloudDrive"]
+        self.assertNotIn("SK", json.dumps(cd))                                 # the keys never leave
+        self.assertNotIn("AK", json.dumps(cd))
+        self.assertEqual((cd["driverInstalled"], cd["quotaGiB"], cd["volumes"]["total"]), (True, 10.0, 2))
+        self.assertEqual(cd["volumes"]["byPhase"], {"Bound": 1, "Released": 1})
+        self.assertEqual(cd["volumes"]["items"][0]["usedBy"], ["coder-ws-look"])
+        self.assertEqual([v["name"] for v in cd["libraries"]], ["coder-isos"])
+        self.assertEqual([p["name"] for p in cd["minio"]], ["coder-user-storage-minio-x"])
+
+    def test_the_routes_are_for_admins_and_say_what_is_wrong(self):
+        sent = []
+        h = mock.Mock(token=lambda: "tok", send_json=lambda status, body: sent.append((status, body)))
+        h.user.return_value = (None, True)                                     # not an admin: answered already
+        self.assertTrue(self.cn.handle(h, "GET", "/__coder-ui/api/network/mesh", ""))
+        self.assertEqual(sent, [])
+        self.assertFalse(self.cn.handle(h, "GET", "/__coder-ui/api/network", ""))  # the map itself: ui-service's
+        h.user.return_value = ({"username": "admin"}, None)
+        self.setup_cn(self.Kube({}))
+        self.cn.handle(h, "GET", "/__coder-ui/api/network/entity", "type=pod&name=..")
+        self.cn.handle(h, "GET", "/__coder-ui/api/network/entity", "type=pod&name=nope")
+        self.cn.handle(h, "GET", "/__coder-ui/api/network/nothing", "")
+        self.cn.handle(h, "POST", "/__coder-ui/api/network/mesh", "")
+        self.assertEqual([s for s, _ in sent], [400, 404, 404, 405])
 
 
 if __name__ == "__main__":

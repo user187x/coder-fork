@@ -26,6 +26,7 @@ before building on it, or using it in an enclave.
     GET  /__coder-ui/api/images/<id>/pit                its latest pit stop (also in the image's view, "pit")
     GET  /__coder-ui/api/images/<id>/builds/<n>         a build's progress, steps and log tail
     POST /__coder-ui/api/images/<id>/builds/<n>/cancel
+    POST /__coder-ui/api/images/<id>/builds/<n>/delete  a finished scan's record (a rescan: its row, log and report)
     PUT  /__coder-ui/api/images/<id>/files/<kind>/<name>[?install=<id>]   upload a file (kind: deb | install | dotfile)
     POST /__coder-ui/api/images/<id>/files/delete {kind, name, install?}
     GET  /__coder-ui/api/images/<id>/download           the built image as a `docker load` tarball
@@ -298,6 +299,12 @@ class DB:
         with self.lock, self.connect() as db:
             db.execute("UPDATE builds SET %s WHERE id=?" % sets, (*fields.values(), build_id))
 
+    def delete_build(self, build_id):
+        """A build's row (its log with it) and the report its scan posted (a setting of its own)."""
+        with self.lock, self.connect() as db:
+            db.execute("DELETE FROM builds WHERE id=?", (build_id,))
+            db.execute("DELETE FROM settings WHERE key=?", ("report-%d" % build_id,))
+
     def append_log(self, build_id, text, limit=1024 * 1024):
         with self.lock, self.connect() as db:
             r = db.execute("SELECT log FROM builds WHERE id=?", (build_id,)).fetchone()
@@ -307,11 +314,12 @@ class DB:
     def builds(self, image_id, limit=20):
         with self.connect() as db:
             rows = db.execute("SELECT id, version, status, stage, progress, message, started_at, finished_at, by, "
-                              "error FROM builds WHERE image_id=? ORDER BY id DESC LIMIT ?",
+                              "error, steps FROM builds WHERE image_id=? ORDER BY id DESC LIMIT ?",
                               (image_id, limit)).fetchall()
         return [{"id": r["id"], "version": r["version"], "status": r["status"], "stage": r["stage"],
                  "progress": r["progress"], "message": r["message"], "startedAt": r["started_at"],
-                 "finishedAt": r["finished_at"], "by": r["by"], "error": r["error"]} for r in rows]
+                 "finishedAt": r["finished_at"], "by": r["by"], "error": r["error"],
+                 "scanOnly": scan_only(r["steps"])} for r in rows]
 
     def active_build(self, image_id):
         with self.connect() as db:
@@ -1546,6 +1554,15 @@ class Rescan(Build):
                 grade=(report_summary(report) or {}).get("grade"), data=data)
 
 
+def scan_only(steps):
+    """A build that only scanned (Rescan's steps: a rescan, or a scan of an image as it is), from its steps (JSON):
+    nothing built, imported or patched, so its record can go on its own (delete_scan)."""
+    try:
+        return [s.get("key") for s in json.loads(steps or "[]")] == ["scan", "checks"]
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def node_image_groups():
     """Every image the cluster's nodes hold (preloaded, loaded or pulled), each once with all its names there (a tag,
     its digest) and the nodes that hold it: [{"names", "sizeBytes", "nodes"}]. A node reports only its largest images
@@ -2612,6 +2629,26 @@ def cancel_build(image_id, build_id):
         STORE.set(image_id, status="ready" if img["ref"] else "draft")
 
 
+def delete_scan(image_id, row):
+    """A finished scan's record (the image page's Scans table): its row, its log and the report it made. Where the
+    image shows that report, the newest scan of the same image left takes its place; with none left it has no report
+    (the workspace template's image is then scanned again: sync_tracked). A build, an import or a pit stop stays: it
+    is a version's record, and what offers that version to the templates (workspace_image_choices). What became of
+    the image's report: "kept", "earlier" or "none"."""
+    if not scan_only(row["steps"]):
+        raise ValueError("Only a scan's record can be deleted: a build's goes with its image.")
+    report = STORE.setting("report-%d" % row["id"])
+    STORE.delete_build(row["id"])
+    BUILDS.pop(row["id"], None)
+    cur = (STORE.image(image_id) or {}).get("report")
+    if not (report and cur and (cur.get("ref"), cur.get("scannedAt")) == (report.get("ref"), report.get("scannedAt"))):
+        return "kept"
+    kept = (STORE.setting("report-%d" % b["id"]) for b in STORE.builds(image_id, limit=200) if b["status"] == "ready")
+    earlier = next((r for r in kept if r and r.get("ref") == cur.get("ref")), None)
+    STORE.set(image_id, report=earlier)
+    return "earlier" if earlier else "none"
+
+
 # --------------------------------------------------------------------------- the report
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 
@@ -3383,12 +3420,25 @@ def route(h, method, rest, query, user, editor, admin):
             need(editor)
             build_id = start_build(image_id, user["username"])
             return h.send_json(200, {"build": build_id}) or True
-        mb = re.match(r"^/builds/(\d+)(/cancel)?$", sub)
+        mb = re.match(r"^/builds/(\d+)(/cancel|/delete)?$", sub)
         if mb:
             build_id = int(mb.group(1))
-            if mb.group(2) and method == "POST":
+            if mb.group(2) == "/cancel" and method == "POST":
                 need(editor)
                 cancel_build(image_id, build_id)
+                return h.send_json(200, {"ok": True}) or True
+            if mb.group(2) == "/delete" and method == "POST":
+                # a scan's record (the Scans table's trash can): whoever may scan images may delete their scans
+                need(editor)
+                b = STORE.build(build_id)
+                if not b or b["image_id"] != image_id:
+                    return h.send_json(404, {"error": "No such scan."}) or True
+                run = BUILDS.get(build_id)
+                if b["status"] in ("queued", "building", "pushing", "scanning") or run and run.is_alive():
+                    return h.send_json(409, {"error": "This scan is still running: cancel it, or wait for it to "
+                                                      "finish."}) or True
+                report = delete_scan(image_id, b)
+                LOG(event="image-scan-deleted", image=image_id, build=build_id, by=user["username"], report=report)
                 return h.send_json(200, {"ok": True}) or True
             b = STORE.build(build_id)
             if not b or b["image_id"] != image_id:

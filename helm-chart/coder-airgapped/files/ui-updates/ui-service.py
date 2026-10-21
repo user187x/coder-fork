@@ -20,7 +20,11 @@
   POST /__coder-ui/api/events/clear {}           admins: forget every announcement and all their receipts
 
   Network map (admins; nodes, pods and metrics read cluster-wide through the ClusterRole coder-ui-updates-<namespace>)
-  GET  /__coder-ui/api/network            nodes (addresses, capacity, usage), Coder's pods, running workspaces per node
+  GET  /__coder-ui/api/network            nodes (addresses, capacity, usage), Coder's pods and the platform's elsewhere
+                                         (Traefik, ...) with their kind, the Services, running workspaces per node
+  GET  /__coder-ui/api/network/entity, /api/network/ha, /api/network/mesh   one pod, Service, node or connection in
+                                         depth; code-server HA and the storage; the connections' measured latency:
+                                         see clusternet.py
   GET  /__coder-ui/api/cluster/usage      CPU / memory totals (allocatable, in use, requested, free) and the last 15 minutes
                                          of the cluster's CPU and memory in use and of its network traffic: the Settings
                                          menu's bars and graphs
@@ -164,6 +168,7 @@ import safe  # noqa: E402  (the safe: each account's own files on S3, on the Wor
 import provisioners  # noqa: E402  (Provisioner Daemons: stuck jobs, their terraform processes, a re-kick)
 import dr  # noqa: E402  (Persistence > Disaster recovery: Coder's database dumped or copied outside the cluster)
 import drivepeers  # noqa: E402  (Cloud Drives shared between users: asked for in chat, approved by admins)
+import clusternet  # noqa: E402  (the Cluster Network view in depth: entity details, code-server HA, the mesh)
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -4361,7 +4366,8 @@ def network_report(token):
             }
         )
 
-    # Coder's own pods (server, database, add-ons) and the workspace pods, matched to Coder's workspaces.
+    # Coder's own pods (server, database, add-ons), the platform's pods elsewhere (Traefik, ...) and the workspace pods,
+    # matched to Coder's workspaces; each with its kind (clusternet.py: one colour per kind in the dashboard).
     by_ws = {}
     coder = []
     for pod in hit["pods"]:
@@ -4369,8 +4375,8 @@ def network_report(token):
         wid = (meta.get("labels") or {}).get("com.coder.workspace.id")
         if wid:
             by_ws.setdefault(wid, pod)
-        elif meta.get("namespace") == CODER_NAMESPACE:
-            coder.append({**pod_brief(pod), "role": coder_role(pod)})
+        elif clusternet.on_map(pod):
+            coder.append({**pod_brief(pod), "role": coder_role(pod), **clusternet.map_extras(pod)})
     out_ws, unplaced = [], []
     for w in workspaces:
         build = w.get("latest_build") or {}
@@ -4403,7 +4409,7 @@ def network_report(token):
         }
         pod = by_ws.pop(w.get("id"), None)
         if pod:
-            out_ws.append({**entry, **{"pod": pod_brief(pod)}})
+            out_ws.append({**entry, **{"pod": {**pod_brief(pod), **clusternet.map_extras(pod)}}})
         else:
             unplaced.append(entry)
     # Workspace pods Coder does not list as running (stopping, orphaned, or the API could not be read): still on the map,
@@ -4419,9 +4425,13 @@ def network_report(token):
                 "healthy": None,
                 "agents": [],
                 "orphan": True,
-                "pod": pod_brief(pod),
+                "pod": {**pod_brief(pod), **clusternet.map_extras(pod)},
             }
         )
+    try:
+        services = clusternet.services_report(hit["pods"])
+    except Exception as e:  # noqa: BLE001 - the map without its Services
+        services = {"services": [], "error": str(e)[:300]}
     return {
         "generatedAt": now(),
         "kubernetesVersion": hit["version"],
@@ -4436,6 +4446,8 @@ def network_report(token):
         ),
         "unplaced": unplaced,
         "workspacesApi": status == 200,
+        "services": services["services"],
+        "servicesError": services["error"],
     }
 
 
@@ -8500,6 +8512,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 log(event="network-report-failed", error=str(e)[:300])
                 return self.send_json(503, {"error": str(e)[:300]})
+        if clusternet.handle(self, "GET", path, url.query):
+            return
         if path == BASE + "/api/persistence":
             user, err = self.user(admin=True)
             if err:
@@ -9749,6 +9763,8 @@ def main():
     workspacevolumes.start()
     lockdown.setup(log, KUBE, workspace_info, ADMIN_ROLES, CODER_ACCESS_URL)
     provisioners.setup(log, KUBE, ADMIN_ROLES, _coder_get, _coder_send)
+    clusternet.setup(log, KUBE, _coder_get, cluster_snapshot, lambda: LOGOS.pool if LOGOS else None, quantity,
+                     safe=safe, tls=TLS)
     dr.setup(log, KUBE)
     dr.start()
     lockdown.start()

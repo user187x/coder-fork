@@ -159,7 +159,10 @@ settings() {
 	 userDefaults: {listing: {showHidden: true}, account: {disableUpdateNotifications: true}}}'
 }
 
-# A link in the sidebar for each source (Quantum gives a new user one for its first source only), the rest as it was.
+# A link in the sidebar for each source (Quantum gives a new user one for its first source only), the rest as it was;
+# and the sidebar not pinned open, so File Browser always opens with it hidden (its menu button shows it): the user's
+# own setting, set again at every start as they may have pinned it (Quantum's config has no default for it - its
+# userDefaults refuse stickySidebar, and File Browser would not start).
 sidebar() {
  local url="http://127.0.0.1:$port$APPS/filebrowser/" user body
  for _ in $(seq 300); do
@@ -175,6 +178,10 @@ sidebar() {
 		  then empty else {which: ["sidebarLinks"], data: {sidebarLinks: .}} end' "$config")"
  if [ -n "$body" ]; then
   curl -fsS -o /dev/null -X PATCH -H 'Content-Type: application/json' --data "$body" "${url}api/users" || true
+ fi
+ if [ "$(printf '%s' "$user" | jq -r '.stickySidebar')" != false ]; then
+  curl -fsS -o /dev/null -X PATCH -H 'Content-Type: application/json' \
+   --data '{"which":["stickySidebar"],"data":{"stickySidebar":false}}' "${url}api/users" || true
  fi
 }
 
