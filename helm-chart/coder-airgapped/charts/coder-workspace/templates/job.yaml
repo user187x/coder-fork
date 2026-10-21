@@ -122,6 +122,18 @@ spec:
                                        ("icon", "TEMPLATE_ICON", "/shared/icon")):
                   value = os.environ.get(key, "") if current is not None and not current.get(field) else ""
                   open(path, "w").write(value)
+
+              # code-server HA (the template's code_server_ha, switched in Settings > Network > code-server HA): kept as
+              # the template has it - a push with the variable's default would switch it off at every upgrade.
+              ha = "false"
+              try:
+                  if current and current.get("active_version_id"):
+                      for v in get("/api/v2/templateversions/%s/variables" % current["active_version_id"]):
+                          if v.get("name") == "code_server_ha" and str(v.get("value", "")).lower() == "true":
+                              ha = "true"
+              except Exception as e:
+                  print(f"Could not read the template's code_server_ha ({e}): pushing it off.")
+              open("/shared/code-server-ha", "w").write(ha)
           env:
             - name: CODER_URL
               value: {{ $url | quote }}
@@ -196,6 +208,7 @@ spec:
               TEMPLATE="$(cat /shared/template)"
               coder templates push "${TEMPLATE}" \
                 --directory "${WORKSPACE}" \
+                --variable code_server_ha="$(cat /shared/code-server-ha 2>/dev/null || echo false)" \
                 --message {{ $j.message | quote }} \
                 {{- with $j.image }}
                 --variable workspace_image="{{ . }}" \

@@ -891,6 +891,12 @@ def main():
           and '"/__icons/ghostty.png"' in app.group(1), {"pushes": pushes, "fork slug": fork_slug})
     check("template: no script left inline in the .tf files (heredocs)", not any("<<" in t for t in tf.values()),
           [n for n, t in tf.items() if "<<" in t])
+    # code-server HA is switched per template in Settings > Network (a new version with code_server_ha changed): the
+    # chart's push carries the template's value forward, else every upgrade would switch it off (its default).
+    job = open(os.path.join(chart, "charts/coder-workspace/templates/job.yaml")).read()
+    check("template push: keeps each template's code_server_ha (switched in Settings > Network)",
+          'open("/shared/code-server-ha", "w").write(ha)' in job and '"/api/v2/templateversions/%s/variables"' in job
+          and job.count('--variable code_server_ha="$(cat /shared/code-server-ha 2>/dev/null || echo false)"') == 1, "")
     # File Browser Quantum refuses a config with a key it does not know (it does not start): its userDefaults take
     # groups (listing, account, ...), not the user's own settings such as stickySidebar, which filebrowser.sh sets per
     # user at every start (2026-10-21: a stickySidebar default stopped File Browser in every restarted workspace).

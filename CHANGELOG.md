@@ -2,8 +2,31 @@
 
 ## 1.46.0 – unreleased
 
-Coder `2.0.0-platform.106` (fork `a14d152f7`).
+Coder `2.0.0-platform.107` (fork `4a18b5603`).
 
+* **platform.107:**
+  * **The attached chat** runs up to the classification bar (the window's top without one). The navbar narrows
+    beside it like the page, its items sizing to what is left. On a wide screen only: below 1024px the panel lies
+    over the page's right edge, from below the navbar.
+  * **code-server HA, switched per template** in Settings › Network › code-server HA:
+    * every template with a `code_server_ha` variable has a switch;
+    * a switch makes a new version of the template (the active one's files and variables, the variable changed),
+      made active, and its workspaces follow at their next start;
+    * the chart's template push keeps each template's setting (it used to push the default, off);
+    * on the dev cluster, DEFAULT now runs it: its workspace's code-server is an instance of its own, behind a relay;
+      with that instance lost, a new generation served again 6.8 s later.
+  * **The workspace page's Cloud Drive glyph** is grey like "Open ports":
+    * connected, a green glow sweeps across it every 2 s;
+    * disconnected (it now shows), its edge pulses red and the cloud frowns, crossed out.
+  * **The Workspaces table's attaching cloud** is bigger (32px), its plug drawn bold enough to read, and centred on
+    the whole status, so in the middle of the row.
+  * **Cluster Network:** the mesh's components carry the same icons as the map's chips.
+  * **Drawers** (an entity's details, ...) open inside the classification bars, not under them.
+  * **The Appearance backgrounds** (the dashboard's and the sign-in page's): Upload with an arrow. The arrow opens
+    the image store in a centred dialog (five columns, four rows in view, scrolling) instead of its tiles on the page,
+    so the animated previews load only while it is open.
+  * **The image store** has 24 more pictures (54 in all; the owner's `baked-in-images`), each with its preview.
+  * **The announcement terminal's broken screen** has no note or button: any key (or a click) restores it.
 * **platform.106:**
   * **The announcement banner could not be turned on.** On an empty banner (the chart's defaults, or after a reset)
     the Show banner switch refused, and said why only at the bottom of the page. Now:
