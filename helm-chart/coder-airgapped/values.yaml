@@ -483,6 +483,23 @@ codeServerHA:
   replicas: 2
 
 # ---------------------------------------------------------------------------------------------------------------
+# The workspace pods' admission webhook (ADR-0002): Lock Down, the cluster's CA, the Cloud Drive and the code-server
+# relay added to ANY workspace's pod as Kubernetes creates it (Coder's own Kubernetes example too) - not spliced into
+# the template's Terraform. The platform service's image (/app/webhook.py), its own Deployment. What a pod already
+# has is left alone, so it runs beside the template decorator until the bake-in replaces it.
+# ---------------------------------------------------------------------------------------------------------------
+platformWebhook:
+  enabled: false
+  replicas: 2
+  # Fail: while no replica answers, workspace pods are refused and their Deployment retries - none starts without
+  # Lock Down. (Ignore would start them without it.)
+  failurePolicy: Fail
+  timeoutSeconds: 5
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 96Mi}
+
+# ---------------------------------------------------------------------------------------------------------------
 # The Cloud Drive (global.userStorage.enabled): each account's own storage, a prefix users/<user id>/ in one S3 bucket. The
 # platform service makes every account's volume (a PersistentVolume of the CSI driver below, its claim coder-safe-<id>)
 # and serves the Workspaces page's Cloud Drive; every workspace of the account mounts it (ReadWriteMany). The files are on the
@@ -538,7 +555,7 @@ uiUpdates:
   # (+ its database) and regctl (development/image-tools), which the Images view lints, formats and scans with -
   # tagged with the code's hash (development/tools/build-ui-image.sh builds and pins it). The chart carries no code:
   # Helm keeps each release in a Secret of at most 1 MiB.
-  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-648d05aac648") }}'
+  image: &platformServiceImage '{{ include "platform.image" (list . "ghcr.io/user187x/coder-ui-updates:code-ce89d58f84a7") }}'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   hostname: '{{ include "platform.coderHost" . }}'

@@ -3356,5 +3356,124 @@ class CloudDrivePeersTest(unittest.TestCase):
         self.assertEqual(call(self.ANN, "drive=" + self.BOB["id"])[0], 403)
 
 
+
+class WebhookTest(unittest.TestCase):
+    """The workspace pods' admission webhook (ADR-0002): any template's pod gets Lock Down, the cluster's CA, the Cloud
+    Drive and (asked for) the code-server relay; what a pod already has is left alone."""
+
+    WID, OWNER = "5250ca5d-f2a9-4d0d-8153-5960fbb9fb02", "c42fdf75-0000-4000-8000-000000000001"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.wh = load("webhook", "webhook.py")
+        cls.wh.USER_STORAGE, cls.wh.CODER_HOST = True, "coder.example.com"
+        cls.wh.CSHA_IMAGE, cls.wh.CSHA_DB_CA_SECRET = "reg/user187x/coder-ui-updates:x", "coder-db-ca"
+
+    def example_pod(self, token=True, annotations=None):
+        """Coder's own Kubernetes example: a "dev" container with the agent's token, the home claim, no platform."""
+        env = [{"name": "CODER_AGENT_TOKEN", "value": "tok"}] if token else []
+        return {"metadata": {"labels": {"app.kubernetes.io/name": "coder-workspace", "com.coder.workspace.id": self.WID,
+                                        "com.coder.user.id": self.OWNER}, **({"annotations": annotations} if annotations else {})},
+                "spec": {"containers": [{"name": "dev", "image": "reg/ws:1", "env": env,
+                                         "volumeMounts": [{"name": "home", "mountPath": "/home/coder"}]}],
+                         "volumes": [{"name": "home", "persistentVolumeClaim": {"claimName": "coder-%s-home" % self.WID}}]}}
+
+    def apply(self, pod, ops):
+        pod = json.loads(json.dumps(pod))
+        for op in ops:
+            self.assertIn(op["op"], ("add", "replace"))
+            *parents, last = op["path"].strip("/").split("/")
+            node = pod
+            for k in parents:
+                node = node[k]
+            node[last] = op["value"]
+        return pod
+
+    def test_a_plain_pod_gets_every_piece(self):
+        pod = self.example_pod()
+        after = self.apply(pod, self.wh.patch(pod, {"cloudDrive": {}, "homeSize": "10Gi"}, "LOCKDOWN"))
+        spec, dev = after["spec"], after["spec"]["containers"][0]
+        self.assertEqual([c["name"] for c in spec["initContainers"]], ["trust-local-ca", "lockdown"])
+        lock = spec["initContainers"][1]
+        self.assertEqual(lock["image"], "reg/ws:1", "the agent's own image")
+        self.assertEqual(lock["command"], ["sh", "-c", "LOCKDOWN", "lockdown", "file:/etc/coder-lockdown/" + self.WID,
+                                           "coder.example.com", ""])
+        self.assertEqual(lock["securityContext"]["capabilities"]["add"], ["NET_ADMIN", "NET_RAW"])
+        mounts = {m["mountPath"]: m for m in dev["volumeMounts"]}
+        for path in ("/etc/coder-lockdown", "/etc/ssl/certs/ca-certificates.crt", "/mnt/cloud-drive", "/etc/platform",
+                     "/home/coder/isos"):
+            self.assertIn(path, mounts)
+        volumes = {v["name"]: v for v in spec["volumes"]}
+        self.assertEqual(volumes["safe"]["persistentVolumeClaim"]["claimName"], "coder-safe-" + self.OWNER)
+        self.assertEqual(volumes["lockdown"]["configMap"], {"name": "coder-lockdown", "optional": True})
+        self.assertEqual({e["name"]: e.get("value") for e in dev["env"]}["CODER_HOME_DISK_SIZE"], "10Gi")
+        notes = after["metadata"]["annotations"]
+        self.assertEqual(notes["platform.coder/cloud-drive"], "on")
+        self.assertEqual(json.loads(notes["platform.coder/cloud-drive-mounts"]),
+                         {"mode": "mount", "link": self.wh.STORAGE_PATH, "mount": "/mnt/cloud-drive", "items": []})
+        self.assertNotIn("code-server-relay", [c["name"] for c in spec["containers"]], "not asked for")
+
+    def test_what_a_pod_has_is_left_alone(self):
+        pod = self.apply(self.example_pod(), self.wh.patch(self.example_pod(), {"cloudDrive": {}}, "LOCKDOWN"))
+        self.assertEqual(self.wh.patch(pod, {"cloudDrive": {}}, "LOCKDOWN"), [], "a decorated or mutated pod: no change")
+
+    def test_the_cloud_drive_modes(self):
+        cd = self.wh.cloud_drive
+        self.assertEqual(cd({"shared": [self.WID]}, self.WID, self.OWNER)["mode"], "shared")
+        src = {"sources": {self.OWNER: {"workspace": self.WID, "path": "/home/coder/drive", "running": True}}}
+        self.assertEqual((cd(src, self.WID, self.OWNER)["mode"], cd(src, self.WID, self.OWNER)["annotation"]),
+                         ("source", "source:/home/coder/drive"))
+        other = cd(src, "other-ws", self.OWNER)
+        self.assertEqual((other["mode"], other["claim"]), ("mount", "coder-drive-src-" + self.OWNER))
+        down = {"sources": {self.OWNER: {"workspace": "x", "running": False}}}
+        self.assertEqual((cd(down, self.WID, self.OWNER)["mode"], cd(down, self.WID, self.OWNER)["claim"]), ("offline", ""))
+
+    def test_what_is_shared_with_the_owner(self):
+        claim = "coder-safe-bob"
+        state = {"peers": {self.OWNER: [
+            {"owner": "bob", "name": "bob", "claim": claim, "readOnly": True},
+            {"id": "i1", "owner": "bob", "name": "bob", "claim": claim, "readOnly": False, "kind": "item",
+             "path": "docs", "item": "docs"}]}}
+        pod = self.example_pod()
+        after = self.apply(pod, self.wh.patch(pod, {"cloudDrive": state}, "L"))
+        vol = self.wh.peer_volume(claim)
+        volumes = {v["name"]: v for v in after["spec"]["volumes"]}
+        self.assertFalse(volumes[vol]["persistentVolumeClaim"]["readOnly"], "read only only when all of it is")
+        mounts = {m["mountPath"]: m for m in after["spec"]["containers"][0]["volumeMounts"]}
+        self.assertTrue(mounts["/mnt/cloud-drive-peers/bob"]["readOnly"])
+        self.assertEqual((mounts["/mnt/cloud-drive-items/i1"]["subPath"], mounts["/mnt/cloud-drive-items/i1"]["readOnly"]),
+                         ("docs", False))
+        self.assertEqual(json.loads(after["metadata"]["annotations"]["platform.coder/cloud-drive-mounts"])["items"],
+                         [{"id": "i1", "owner": "bob", "item": "docs"}])
+
+    def test_the_agents_container_and_the_relay(self):
+        pod = self.example_pod(annotations={"platform.coder/code-server-ha": "on"})
+        pod["spec"]["containers"].insert(0, {"name": "sidecar", "image": "reg/side:1"})
+        pod["spec"]["containers"][1]["name"] = "workspace"
+        pod["spec"]["containers"][1]["env"] = [{"name": "CODER_AGENT_TOKEN", "valueFrom": {"secretKeyRef": {"name": "t", "key": "k"}}}]
+        self.assertEqual(self.wh.agent_container(pod), 1, "the one given the agent's token")
+        after = self.apply(pod, self.wh.patch(pod, {"cloudDrive": {}}, "L"))
+        names = [c["name"] for c in after["spec"]["containers"]]
+        self.assertEqual(names, ["sidecar", "workspace", "code-server-relay"])
+        relay = after["spec"]["containers"][2]
+        token = next(e for e in relay["env"] if e["name"] == "CSHA_AGENT_TOKEN")
+        self.assertEqual(token["valueFrom"], {"secretKeyRef": {"name": "t", "key": "k"}})
+        self.assertIn({"name": "CODER_CODE_SERVER_HA", "value": "1"}, after["spec"]["containers"][1]["env"])
+        self.assertEqual(after["spec"]["initContainers"][1]["image"], "reg/ws:1", "Lock Down runs the agent's image")
+
+    def test_an_admission_review(self):
+        import base64
+        body = {"apiVersion": "admission.k8s.io/v1", "request": {
+            "uid": "u1", "operation": "CREATE", "kind": {"kind": "Pod"}, "object": self.example_pod()}}
+        with mock.patch.object(self.wh, "log"):
+            out = self.wh.review(body, lambda pod: {"cloudDrive": {}}, "L")
+        self.assertEqual((out["kind"], out["response"]["uid"], out["response"]["allowed"]), ("AdmissionReview", "u1", True))
+        ops = json.loads(base64.b64decode(out["response"]["patch"]))
+        self.assertEqual(self.apply(self.example_pod(), ops)["spec"]["initContainers"][1]["name"], "lockdown")
+        body["request"]["operation"] = "UPDATE"
+        out = self.wh.review(body, lambda pod: {}, "L")
+        self.assertNotIn("patch", out["response"], "CREATE only")
+
+
 if __name__ == "__main__":
     unittest.main()

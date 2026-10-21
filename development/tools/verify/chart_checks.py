@@ -186,6 +186,48 @@ def install_checks(B, chart, default_render):
           and "global.inClusterDNS.enabled: true" in doc, "")
 
 
+def webhook_checks(B, chart):
+    """The workspace pods' admission webhook (ADR-0002): off by default; on, it reaches only the release namespace's
+    workspace pods, fails closed (no workspace pod without Lock Down), runs two replicas of the platform service's
+    image and only reads."""
+    import yaml
+    rc, out, err = run(["helm", "template", "cf", chart, "-n", "cf"])
+    check("webhook: off by default (the decorator still adds the pods' pieces)",
+          rc == 0 and "coder-platform-webhook" not in out, err.strip()[-200:])
+    rc, out, err = run(["helm", "template", "cf", chart, "-n", "cf", "--set", "platformWebhook.enabled=true"])
+    docs = [d for d in yaml.safe_load_all(out) if d] if rc == 0 else []
+    by = {(d["kind"], d["metadata"]["name"]): d for d in docs}
+    conf = by.get(("MutatingWebhookConfiguration", "coder-platform-webhook-cf"), {}).get("webhooks", [{}])[0]
+    sel = conf.get("objectSelector", {})
+    check("webhook: workspace pods of the release's namespace only, CREATE, fails closed",
+          conf.get("namespaceSelector") == {"matchLabels": {"kubernetes.io/metadata.name": "cf"}}
+          and sel.get("matchLabels") == {"app.kubernetes.io/name": "coder-workspace"}
+          and sel.get("matchExpressions") == [{"key": "com.coder.workspace.id", "operator": "Exists"}]
+          and conf.get("rules") == [{"operations": ["CREATE"], "apiGroups": [""], "apiVersions": ["v1"],
+                                     "resources": ["pods"], "scope": "Namespaced"}]
+          and conf.get("failurePolicy") == "Fail" and conf.get("sideEffects") == "None", conf or err.strip()[-200:])
+    secret = by.get(("Secret", "coder-platform-webhook-tls"), {}).get("data", {})
+    import base64
+    ca_ok = secret and conf.get("clientConfig", {}).get("caBundle") == secret.get("ca.crt")
+    crt = base64.b64decode(secret.get("tls.crt", "")).decode() if secret else ""
+    check("webhook: its own CA in the caBundle, the serving certificate for its Service",
+          ca_ok and "BEGIN CERTIFICATE" in crt and conf.get("clientConfig", {}).get("service", {}).get("name")
+          == "coder-platform-webhook", "")
+    dep = by.get(("Deployment", "coder-platform-webhook"), {})
+    c = (dep.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or [{}])[0]
+    ui = by.get(("Deployment", "coder-ui-updates"), {}).get("spec", {}).get("template", {}).get("spec", {}).get("containers", [{}])[0]
+    check("webhook: two replicas of the platform service's image (/app/webhook.py), a PodDisruptionBudget",
+          dep.get("spec", {}).get("replicas") == 2 and c.get("image") == ui.get("image")
+          and c.get("command") == ["python3", "/app/webhook.py"]
+          and by.get(("PodDisruptionBudget", "coder-platform-webhook"), {}).get("spec", {}).get("minAvailable") == 1,
+          c.get("image"))
+    rules = by.get(("Role", "coder-platform-webhook"), {}).get("rules", [])
+    check("webhook: it only reads (get: the Cloud Drive's state, claims)",
+          rules and all(r["verbs"] == ["get"] for r in rules), rules)
+    here = os.path.join(B, "coder-airgapped", "files", "ui-updates", "webhook.py")
+    check("webhook: its code is in the platform service's files (the image's /app)", os.path.isfile(here), here)
+
+
 def one_step_checks(B, chart):
     """The one-step install (the owner's goal, 2026-10-20): push the release's images, then one `helm install` with
     one values file, any release name, any namespace - the chart bringing its prerequisites on a bare cluster."""
@@ -1081,6 +1123,7 @@ def main():
         check("argocd/update-application.sh: no AI template (no --ai, no aiTemplates written)", ok,
               (err2 or out2 or err or out).strip()[-300:] if not ok else "")
     one_step_checks(B, chart)
+    webhook_checks(B, chart)
     # the layer bundle's helper (Python): compiles, and answers --help
     rc, out, err = run([sys.executable, os.path.join(B, "layer-support"), "--help"])
     check("layer-support: runs (--help)", rc == 0 and "layer-support build" in out, (err or "").strip()[-200:])

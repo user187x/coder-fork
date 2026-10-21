@@ -109,8 +109,9 @@ What each feature needs (survey, 2026-10-20):
 - **The scripts take their context from the environment, not from templating.**
   - The agent already exports `CODER_WORKSPACE_ID`, `CODER_WORKSPACE_OWNER_NAME`, `CODER_WORKSPACE_NAME` and
     `CODER_WORKSPACE_AGENT_NAME` to every script.
-  - The webhook adds what only the pod knows (§2): Coder's host, and the Cloud Drive's mode, claim and peers in
-    `/etc/platform/cloud-drive`, now JSON.
+  - The webhook adds what only the pod knows (§2): the Cloud Drive's mode, mount and shared items, as JSON in the
+    annotation `platform.coder/cloud-drive-mounts`, which the downward API shows at `/etc/platform/cloud-drive-mounts`
+    beside today's `/etc/platform/cloud-drive`.
   - A pod recreated without a new build, such as a ReplicaSet replacing a pod, is mutated again from the current state.
     The script reads that state, so it cannot disagree with the pod. Today's build-time values could.
 - **Per feature on or off.** `agent.json` holds the deployment's choice: `global.userStorage` decides the Cloud Drive,
@@ -136,13 +137,12 @@ What each feature needs (survey, 2026-10-20):
     downward-API file. They are computed from ConfigMap `coder-cloud-drive`, which the platform service already writes
     (`safe.py`). The webhook reads its own process's copy, so there is no lookup per pod.
   - **code-server HA** (per template): the `code-server-relay` sidecar, its env (the agent token copied from the agent
-    container), the database CA volume and `CODER_CODE_SERVER_HA=1` on the agent container. The template's switch moves
-    from a Terraform variable to the platform's runtime config, set in the template's settings. The webhook finds the
-    template through the workspace id in Coder's database (cached).
-  - **Base pieces** a plain template lacks, which the agent needs on a private CA:
-    - the `trust-local-ca` init container with the CA bundle (`tls-ca`);
-    - `CODER_HOME_DISK_SIZE`;
-    - `CODER_PLATFORM_HOST` (Coder's host, for Lock Down).
+    container), the database CA volume and `CODER_CODE_SERVER_HA=1` on the agent container. The template asks for it
+    with the pod annotation `platform.coder/code-server-ha: "on"` – a flag, not injected code – so the webhook needs no
+    database lookup. A switch in the template's settings can set it later.
+  - **Base pieces** a plain template lacks:
+    - the `trust-local-ca` init container with the CA bundle (`tls-ca`), which the agent needs on a private CA;
+    - `CODER_HOME_DISK_SIZE`: the size of the claim mounted at `/home/coder`, for the Disk metric.
 - **Its own Deployment.** `coder-platform-webhook` runs the same image with `python3 /app/webhook.py`.
   - It is stateless. 2 replicas with a soft anti-affinity and a PodDisruptionBudget (`minAvailable: 1`), behind its
     own Service.
@@ -156,8 +156,8 @@ What each feature needs (survey, 2026-10-20):
   - The narrow selectors keep the blast radius to workspace pods. The webhook's own pods, Coder and the platform service
     are never selected.
   - A webhook bug fails safe: workspaces don't start. It does not fail open.
-- **RBAC.** It reads ConfigMaps `coder-cloud-drive` and `coder-lockdown` and Secret `coder-code-server-ha-relay` in
-  the workspace namespace, and Coder's database through the platform service's role. It writes nothing.
+- **RBAC.** It reads the ConfigMap `coder-cloud-drive` and the workspace's home claim in the workspace namespace. It
+  writes nothing.
 
 ### 3. The decorator goes, in two steps
 
@@ -255,7 +255,7 @@ start under `Fail`. Under `Ignore`, pods would start without Lock Down.
        winning on a clash, imports and dry runs untouched.
 2. [ ] Fork: the agent-container rule for templates with several agents. Only agents of Kubernetes workload resources
        get the platform's pieces.
-3. [ ] Platform service: `webhook.py` (admission review in, JSON patch out). Unit tests on:
+3. [x] Platform service: `webhook.py` (admission review in, JSON patch out). Unit tests on:
        - Coder's Kubernetes example pod;
        - the DEFAULT pod;
        - an already-decorated pod (no change);
@@ -269,8 +269,8 @@ start under `Fail`. Under `Ignore`, pods would start without Lock Down.
        - the decorator off.
 
        Static checks for each.
-6. [ ] Templates: DEFAULT without its sections; `cloud-drive.sh` reads `/etc/platform/cloud-drive` as JSON;
-       `lockdown.sh` takes Coder's host from `CODER_PLATFORM_HOST`.
+6. [ ] Templates: DEFAULT without its sections; `cloud-drive.sh` reads `/etc/platform/cloud-drive-mounts` when the
+       template gave it no values.
 7. [ ] Prove it:
        - a plain upstream Kubernetes template on the dev cluster gets Lock Down, the Cloud Drive, metrics and
          certificates;
