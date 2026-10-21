@@ -313,9 +313,12 @@ def one_step_checks(B, chart):
     # the owner's choice (1.45.0): the release carries only ours (its CVE gate covers them); INSTALL.md lists the
     # public images the registry must hold
     selection = release_sh.split("# ours, outside [rollback]/[reference], rendered by the chart")[-1][:800]
-    check("one step: the release ships values.example.yaml and our images only; INSTALL.md lists the public ones",
+    check("one step: the release ships values.example.yaml and our images only; INSTALL.md lists the public ones "
+          "(pull-public-images.sh saves them, push-images.sh pushes them); helm install --timeout 20m",
           'cp "${bundle}/values.example.yaml"' in release_sh and '[[ "$img" == ghcr.io/user187x/* ]] || continue' in selection
-          and "@PUBLIC_IMAGES@" in install and "--ours-only" in push_sh
+          and "@PUBLIC_IMAGES@" in install and "--ours-only" in push_sh and "IMAGES-public.txt" in push_sh
+          and 'install -m 0755 "${templates}/pull-public-images.sh"' in release_sh and "PUBLIC-IMAGES.txt" in release_sh
+          and "--timeout 20m" in install
           and "helm install coder-fork coder-airgapped-@VERSION@.tgz" in install and "prereqs/" not in release_sh.split("# the one values file")[1][:400], "")
 
 

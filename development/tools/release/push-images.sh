@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Pushes this release's images into your registry, on the far side of the air gap. Needs bash, docker and coreutils
-# (the aws CLI too for ECR=1); no internet. It reads IMAGES.txt and SHA256SUMS next to it, from any directory.
+# (the aws CLI too for ECR=1); no internet. It reads IMAGES.txt and SHA256SUMS next to it, from any directory - and,
+# when pull-public-images.sh saved the public images the chart runs into this folder (on a connected machine),
+# IMAGES-public.txt and SHA256SUMS.public: those are pushed too.
 #   ./push-images.sh REGISTRY [--dry-run] [--rm] [--ours-only] [NAME...]
 # REGISTRY: host[:port][/prefix], the chart's global.registry - e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com or
 # harbor.example.com/coder. Each image goes to REGISTRY/<its path without the source host>, where the chart pulls it:
@@ -11,8 +13,8 @@
 # Ends with a summary; exits non-zero if any image failed.
 #   --dry-run   check the files and print what it would do (no docker command)
 #   --rm        after each push remove the loaded image and its new tag (a push host with little disk)
-#   --ours-only only the fork's images (ghcr.io/user187x/...): your registry already holds the public ones, at the
-#               paths INSTALL.md lists
+#   --ours-only only the fork's images (ghcr.io/user187x/...), not the public ones pull-public-images.sh saved here:
+#               your registry already holds them, at the paths INSTALL.md lists
 #   NAME...     only these images, by name (e.g. coder-platform coder-workspace); default: all of IMAGES.txt
 #   ECR=1 ./push-images.sh ...   create missing ECR repositories first (region from REGISTRY)
 # Log in first: docker login REGISTRY
@@ -51,13 +53,19 @@ sumcheck() { # SHA256SUMS lines on stdin, checked from this folder
 }
 
 # IMAGES.txt: image  files(,-separated, in order)  size  config-digest  manifest-digest
+# (IMAGES-public.txt, when pull-public-images.sh made it: the same, for the public images)
+lists=("${here}/IMAGES.txt") sums=("${here}/SHA256SUMS")
+if ((!ours_only)) && [[ -f "${here}/IMAGES-public.txt" ]]; then
+	[[ -f "${here}/SHA256SUMS.public" ]] || { echo "ERROR: IMAGES-public.txt without SHA256SUMS.public: run pull-public-images.sh again" >&2; exit 1; }
+	lists+=("${here}/IMAGES-public.txt") sums+=("${here}/SHA256SUMS.public")
+fi
 imgs=() files=() sizes=() configs=() manifests=()
 while read -r img fs size cfg man _; do
 	[[ -z "$img" || "$img" == \#* ]] && continue
 	if ((${#names[@]})) && [[ " ${names[*]} " != *" $(name_of "$img") "* ]]; then continue; fi
 	if ((ours_only)) && [[ "$img" != ghcr.io/user187x/* ]]; then continue; fi
 	imgs+=("$img") files+=("$fs") sizes+=("$size") configs+=("$cfg") manifests+=("$man")
-done <"${here}/IMAGES.txt"
+done < <(cat "${lists[@]}")
 for n in "${names[@]}"; do
 	found=0; for img in "${imgs[@]}"; do [[ "$(name_of "$img")" != "$n" ]] || found=1; done
 	((found)) || { echo "ERROR: no image named $n in IMAGES.txt" >&2; exit 2; }
@@ -68,12 +76,12 @@ done
 echo "checking the files against SHA256SUMS ..."
 if ((${#names[@]})); then
 	want=" $(printf '%s ' "${files[@]}" | tr ',' ' ')"
-	lines=$(awk -v want="$want" 'index(want, " " $2 " ")' "${here}/SHA256SUMS")
+	lines=$(cat "${sums[@]}" | awk -v want="$want" 'index(want, " " $2 " ")')
 	[[ $(grep -c . <<<"$lines") -eq $(wc -w <<<"$want") ]] ||
 		{ echo "ERROR: SHA256SUMS does not list every file of these images" >&2; exit 1; }
 	sumcheck <<<"$lines" || { echo "ERROR: checksum mismatch (above): nothing pushed" >&2; exit 1; }
 else
-	sumcheck <"${here}/SHA256SUMS" || { echo "ERROR: checksum mismatch (above): nothing pushed" >&2; exit 1; }
+	cat "${sums[@]}" | sumcheck || { echo "ERROR: checksum mismatch (above): nothing pushed" >&2; exit 1; }
 fi
 echo "ok: the files match SHA256SUMS"
 

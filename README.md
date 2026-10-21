@@ -28,13 +28,15 @@ The release is one folder (download every asset of the GitHub release into it): 
 service, the DEFAULT and DATAFLOW workspace images, MinIO, the image registry) and the one Helm chart. The public
 images the chart runs (PostgreSQL, PgBouncer, Python, BuildKit, the CSI driver, metrics-server, Traefik, the
 CloudNativePG operator) come from your registry - `INSTALL.md` lists each one's path and tested digest; their CVEs are
-their projects', the release's CVE gate covers ours. With those in the registry, one push and one install:
+their projects', the release's CVE gate covers ours. `pull-public-images.sh` saves them into the folder on a connected
+machine, so the push takes them too. Then one push and one install:
 
 ```bash
+./pull-public-images.sh                                   # connected side, optional: the public images into the folder
 sha256sum -c SHA256SUMS                                   # every file: OK
-./push-images.sh $REGISTRY                                # our images, where the chart pulls them
+./push-images.sh $REGISTRY                                # our images (and those public ones), where the chart pulls them
 cp values.example.yaml values.yaml                        # set every CHANGE-ME (domain, registry)
-helm install coder-fork coder-airgapped-1.45.0.tgz -n coder-fork --create-namespace -f values.yaml
+helm install coder-fork coder-airgapped-1.46.0.tgz -n coder-fork --create-namespace -f values.yaml --timeout 20m
 ```
 
 The chart brings Traefik (with the Gateway API) and the CloudNativePG operator where the cluster has none
@@ -478,8 +480,8 @@ next to the fork's. [`development/tools/verify/`](development/tools/verify/) run
 
 | Check | Result |
 |---|---|
-| Static checks | **148/148** (1.45.0) |
-| Platform service unit tests | **156/156** (1.45.0) |
+| Static checks | **154/154** (1.46.0) |
+| Platform service unit tests | **163/163** (1.46.0) |
 | Air-gapped install, egress blocked | Argo CD Synced / Healthy in 297 s; step 8 **39/39**; image builder offline **12/12**; Keycloak down **3/3** (1.28.0) |
 | Argo CD decorator install (`./make --argocd`; kind, egress blocked, Gateway API v1.6.0, Argo CD 3.5.2) | decorated: Synced / Healthy in ~3 min, **7/7**; layer off: **7/7** (upstream Coder, data kept); layer back: **7/7**, every volume the same (1.38.0) |
 | A real Harbor 2.15.2 with a private CA (`harbor-setup.sh`; installing machine: docker-in-docker, no images) | `./make --push-images`: CA trusted, project created, 11 images (all from the bundle) and 5 charts, all checked; a single-chart Argo CD install (robot account, Harbor's CA) migrated to the decorated one by `./make --argocd` in place: **23/23** objects kept, **7/7** (1.39.0) |

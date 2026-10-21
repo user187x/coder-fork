@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.46.0 – unreleased
+
+Coder `2.0.0-platform.105` (fork `8409a8430`).
+
+* **The template lock-down** (the owner's report: the template settings' Permissions card said "Template permissions
+  is not enabled on this deployment"). Coder's template permissions are a Premium feature, and the platform runs the
+  open-source build. So the card is now the platform's own lock-down:
+  * a switch locks the template to the members listed and its admins;
+  * members are added and removed in the card;
+  * it uses the same access list as the Templates table's Access menu, which gains a `restricted` flag: locked with
+    nobody listed means admins only.
+* **The workspace page:** the Build timeline is the last agent card's footer, under its last panel, made like the
+  table cards' footer. A grip with jimping in its middle is pulled down to open it (a click works too). It starts
+  collapsed.
+* **The Workspaces page:**
+  * the search's left edge and the Cloud Drive's right edge line up with the table's;
+  * the Cloud Drive's usage sits in a pill;
+  * files dropped on the Cloud Drive upload to it;
+  * while the user's own drive is shared, its cloud's outline is a line of blue dots marching round it, with a
+    breathing blue glow.
+* **The chat:** the Chats bar raises into a small window, as in Gmail. From there it can be:
+  * attached to the right side, from the navbar down (the page narrows beside it; conversations open in it);
+  * made full screen;
+  * minimized back to the bar;
+  * opened in the admin chat console (admins).
+* **Bake-in, step 1 (ADR-0002):** the workspace pods' admission webhook (`platformWebhook`, off by default). It adds
+  Lock Down, the cluster's CA, the Cloud Drive and the code-server relay to any workspace's pod, including Coder's own
+  Kubernetes example. It runs as two replicas with `failurePolicy: Fail`. On the dev cluster a plain upstream template
+  got every piece and its agent connected (9/9).
+* **The VM's 1.45.0 findings:**
+  * `pull-public-images.sh` saves the public images into the release folder on a connected machine;
+    `push-images.sh` pushes them with ours (`IMAGES-public.txt`, `SHA256SUMS.public`).
+  * `INSTALL.md`:
+    * `helm install --timeout 20m` (Helm waits for the first owner and the templates; past its 5-minute default
+      the release is marked failed);
+    * the local-path helper image to pull before going offline;
+    * the issuer's DNS from inside the cluster;
+    * Released Cloud Drive volumes of former accounts.
+
 ## 1.45.0 – 2026-10-20
 
 Coder `2.0.0-platform.104` (fork `ad1866e1c`). **The one-step install** (the owner's goal): on any air-gapped cluster

@@ -13,6 +13,11 @@
 #                                    then docker load / tag / push each image as REGISTRY/<its path without the source
 #                                    host> (release/push-images.sh; it would push public ones too, were any here)
 #   IMAGES.txt                       per image: its reference, file(s), size, config digest, manifest digest
+#   PUBLIC-IMAGES.txt                the public images the chart runs: their path under REGISTRY and the public image
+#                                    by its tested digest (INSTALL.md step 1 lists them too)
+#   pull-public-images.sh            the connected side, optional: saves those public images into the folder
+#                                    (public/, IMAGES-public.txt, SHA256SUMS.public), so push-images.sh pushes them too
+#                                    (release/pull-public-images.sh)
 #   INSTALL.md                       the public images your registry must hold, push, values, the one helm install,
 #                                    sign-in, uninstall (release/INSTALL.md.in)
 #   values.example.yaml              the one values file to start from; values-ha.example.yaml, high availability on top
@@ -300,6 +305,14 @@ build_release() {
 	# prerequisites (Traefik, the Gateway API CRDs, CloudNativePG) are in the chart (global.bundled)
 	cp "${bundle}/values.example.yaml" "${bundle}/values-ha.example.yaml" "$stage/"
 	install -m 0755 "${templates}/push-images.sh" "$stage/push-images.sh"
+	install -m 0755 "${templates}/pull-public-images.sh" "$stage/pull-public-images.sh"
+	# the public images the chart runs: path under REGISTRY, the public image by digest (pull-public-images.sh)
+	{
+		echo "# coder-fork ${version}: the public images the chart runs (with high availability and its own prerequisites"
+		echo "# too) - their path under your registry, and the public image by its tested digest. pull-public-images.sh"
+		echo "# saves them into this folder on a connected machine; push-images.sh then pushes them with ours."
+		((${#public[@]} == 0)) || printf '%s\n' "${public[@]}" | awk -F'\t' '{print $1 "  " $2}'
+	} >"$stage/PUBLIC-IMAGES.txt"
 
 	# INSTALL.md from its template
 	local cnpg traefik line
