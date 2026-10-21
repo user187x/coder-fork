@@ -830,7 +830,7 @@ def main():
                              env=dict(os.environ, CODER_DECORATOR_PROTOTYPE=tf_dir, GOPROXY="off", GOFLAGS="-mod=mod"))
         check("template: Coder's decorator reads its platform sections (the fork's extraction, on this template)",
               dec.returncode == 0 and dec.stdout.startswith("ok"), (dec.stdout + dec.stderr).strip()[-300:])
-    shipped = re.findall(r"^  ([\w.-]+\.(?:sh|py)): \|$", r, re.M)
+    shipped = re.findall(r"^  ([\w.-]+\.(?:sh|py|c)): \|$", r, re.M)
     df_refs = sorted(set(re.findall(r'templatefile\("\$\{path\.module\}/scripts/([^"]+)"', tf["dataflow.tf"])))
     check("template: every script the .tf files read is in files/scripts/ (DATAFLOW's: files/dataflow/) and in the "
           "push's ConfigMaps",

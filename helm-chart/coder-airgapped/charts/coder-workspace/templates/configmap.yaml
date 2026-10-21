@@ -19,7 +19,7 @@ data:
   # The template's scripts (files/scripts/, read by the .tf files with file() / templatefile()): the push Job puts
   # them in scripts/ next to the .tf files. cloud-drive-cli.py is the workspace's `cloud-drive` command (a link to
   # files/ui-updates/clouddrive_cli.py, which the platform service also runs in workspaces).
-  {{- range $path, $_ := .Files.Glob "files/scripts/*.{sh,py}" }}
+  {{- range $path, $_ := .Files.Glob "files/scripts/*.{sh,py,c}" }}
   {{- $name := base $path }}
   {{- if or $.Values.agentAudit (ne $name "agent-audit.sh") }}
   {{ $name }}: |

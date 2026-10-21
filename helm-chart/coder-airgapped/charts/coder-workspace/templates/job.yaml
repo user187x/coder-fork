@@ -196,7 +196,7 @@ spec:
               # Copy the ConfigMap's files as physical files: the .tf files, and their scripts in scripts/
               cp /tmp/tf-code/*.tf "${WORKSPACE}"/
               mkdir -p "${WORKSPACE}/scripts"
-              cp /tmp/tf-code/*.sh /tmp/tf-code/*.py "${WORKSPACE}/scripts"/
+              cp /tmp/tf-code/*.sh /tmp/tf-code/*.py /tmp/tf-code/*.c "${WORKSPACE}/scripts"/
               {{- if $j.dataflow }}
               # This template's own part: dataflow.tf, and NiFi's and Airflow's scripts
               cp /tmp/tf-dataflow/*.tf "${WORKSPACE}"/

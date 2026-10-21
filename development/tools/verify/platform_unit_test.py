@@ -819,6 +819,21 @@ class PeerChatTest(unittest.TestCase):
         self.assertFalse(ui.ChatStore(self.path).settings["peers"])
         self.assertEqual(ui.ChatStore(self.path).settings["updatedBy"], "boss")
 
+    def test_export(self):
+        """Admin Controls > Chat > Export: every message (an attachment's metadata, not its bytes), the settings,
+        counted, with who exported it."""
+        self.chat.put_settings({"peers": True}, "boss")
+        self.chat.send(self.ANN, False, self.BOB, "hi bob")
+        self.chat.send(self.ADMIN, True, self.ANN, "hello ann")
+        record = self.chat.export("boss")
+        self.assertEqual(record["exportedBy"], "boss")
+        self.assertEqual(record["counts"], {"messages": 2, "groups": 0})
+        self.assertEqual([m["text"] for m in record["messages"]], ["hi bob", "hello ann"])
+        self.assertEqual(record["messages"][0]["from_name"], "ann")
+        self.assertEqual(record["settings"]["peers"], True)
+        json.dumps(record)  # a file to save as it is
+        self.assertNotIn("data", record["messages"][0])
+
     def test_invisible(self):
         self.chat.put_settings({"peers": True}, "boss")
         self.chat.set_invisible(self.BOB["id"], True)

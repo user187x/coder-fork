@@ -5891,6 +5891,29 @@ class ChatStore:
             self.changed.notify_all()
         return n
 
+    def export(self, by):
+        """Every record, for Admin Controls > Chat > Export: the messages (an attachment's name, type and size, not its
+        bytes), the groups and their members, the read marks and focus acknowledgements, and the settings - with when
+        and by whom it was exported."""
+        with self.lock, self.connect() as db:
+            rows = lambda sql: [dict(r) for r in db.execute(sql)]  # noqa: E731 - four reads alike
+            messages = rows("SELECT * FROM chat_messages ORDER BY id")
+            groups = rows("SELECT * FROM chat_groups ORDER BY created_at")
+            members = rows("SELECT * FROM chat_group_members ORDER BY group_id, username")
+            reads = rows("SELECT * FROM chat_read ORDER BY user_id, peer_id")
+            acks = rows("SELECT * FROM chat_focus_ack ORDER BY group_id, user_id")
+        return {
+            "exportedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "exportedBy": by,
+            "settings": {k: self.settings.get(k) for k in ("peers", "keepDays")},
+            "counts": {"messages": len(messages), "groups": len(groups)},
+            "messages": messages,
+            "groups": groups,
+            "groupMembers": members,
+            "readMarks": reads,
+            "focusAcknowledgements": acks,
+        }
+
     def stats(self):
         """How much is kept: messages (and between developers), screenshots, their size, the oldest; the file's size."""
         with self.connect() as db:
@@ -8723,6 +8746,21 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "enabled": bool(CHAT.settings.get("peers")),
                     "people": chat_people_for(user, admin),
+                },
+            )
+        if what == "export":  # Admin Controls > Chat > Export: every record, as a file to save
+            if not admin:
+                return self.send_json(403, {"error": "Only admins can export the chats."})
+            record = CHAT.export(user["username"])
+            log(event="chat-exported", user=user["username"], messages=record["counts"]["messages"])
+            return self.send(
+                200,
+                json.dumps(record, indent=2),
+                "application/json",
+                {
+                    "Cache-Control": "no-store",
+                    "Content-Disposition": 'attachment; filename="chats-%s.json"'
+                    % time.strftime("%Y%m%d-%H%M%S", time.gmtime()),
                 },
             )
         if what in ("settings", "pairs"):  # Admin Controls > Chat

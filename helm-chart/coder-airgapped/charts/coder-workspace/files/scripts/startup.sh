@@ -114,13 +114,18 @@ if [ -d /usr/share/coder-image/home ]; then
  cp -an /usr/share/coder-image/home/. ~/ 2>/dev/null || true
 fi
 
-# btop refreshes every 100 ms instead of its default 2000: for users without a btop configuration, or whose
-# configuration still has btop's default (a value someone chose is left alone).
+# btop refreshes every 100 ms instead of its default 2000, and its disks panel shows the home's disk - the workspace's
+# own (the others are the node's): btop's default reads the disks from /etc/fstab, which a container leaves
+# unconfigured (an empty panel), and counts "physical" filesystems only (not the overlay a node folder's volume is).
+# For users without a btop configuration, or whose configuration still has btop's defaults (a value someone chose is
+# left alone).
 BTOP_CONF=~/.config/btop/btop.conf
 if [ ! -e "$BTOP_CONF" ]; then
- mkdir -p ~/.config/btop && echo "update_ms = 100" >"$BTOP_CONF"
-elif grep -qx 'update_ms = 2000' "$BTOP_CONF"; then
- sed -i 's/^update_ms = 2000$/update_ms = 100/' "$BTOP_CONF"
+ mkdir -p ~/.config/btop
+ printf '%s\n' "update_ms = 100" "use_fstab = false" "only_physical = false" "disks_filter = \"$HOME\"" >"$BTOP_CONF"
+else
+ sed -i -e 's/^update_ms = 2000$/update_ms = 100/' -e 's/^use_fstab = true$/use_fstab = false/' \
+  -e 's/^only_physical = true$/only_physical = false/' -e "s|^disks_filter = \"\"\$|disks_filter = \"$HOME\"|" "$BTOP_CONF"
 fi
 
 # tmux (in the workspace image): the bundled configuration, for users who have none yet.
@@ -320,6 +325,34 @@ else
   --baseurl "$APPS/filebrowser" \
   >/tmp/filebrowser.log 2>&1 &
  log "File Browser: started in $START_DIR (log: /tmp/filebrowser.log)"
+fi
+
+# btop's disk: where the cluster's volumes are folders of the node's disk (local-path, hostpath: minikube, kind), the
+# home's statvfs() answers for the node's whole disk. A small library (scripts/home-statfs.c), built here once a
+# version, answers for the home volume instead - its size and the home's usage, as the Disk metric measures them
+# (metadata.sh) - preloaded by a btop wrapper in ~/.local/bin. On a real volume it changes nothing.
+# The image's btop: the first on the PATH but the wrapper's folder.
+btop_bin=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | paste -sd: -) command -v btop)
+if [ -n "$btop_bin" ] && command -v gcc >/dev/null; then
+ statfs_dir="$HOME/.cache/coder"
+ mkdir -p "$statfs_dir" "$HOME/.local/bin"
+ echo '${home_statfs}' | base64 -d >"$statfs_dir/home-statfs.c.new"
+ if ! cmp -s "$statfs_dir/home-statfs.c.new" "$statfs_dir/home-statfs.c" || [ ! -f "$statfs_dir/home-statfs.so" ]; then
+  mv "$statfs_dir/home-statfs.c.new" "$statfs_dir/home-statfs.c"
+  if gcc -shared -fPIC -O2 -o "$statfs_dir/home-statfs.so" "$statfs_dir/home-statfs.c" -ldl 2>/tmp/home-statfs.log; then
+   log "btop: answers for the home volume (home-statfs built)"
+  else
+   rm -f "$statfs_dir/home-statfs.c"
+   log "btop: home-statfs not built (/tmp/home-statfs.log)"
+  fi
+ else
+  rm -f "$statfs_dir/home-statfs.c.new"
+ fi
+ printf '%s\n' '#!/bin/sh' '# btop answering for the home volume, not the whole node disk (startup.sh: home-statfs)' \
+  'so="$HOME/.cache/coder/home-statfs.so"' \
+  '[ -r "$so" ] && export LD_PRELOAD="$so$${LD_PRELOAD:+:$LD_PRELOAD}"' \
+  "exec '$btop_bin' \"\$@\"" >"$HOME/.local/bin/btop"
+ chmod +x "$HOME/.local/bin/btop"
 fi
 
 log "Startup done: the apps open once they answer their health checks"

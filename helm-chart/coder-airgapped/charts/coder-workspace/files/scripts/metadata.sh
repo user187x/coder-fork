@@ -52,6 +52,10 @@ disk() {
  if [ -n "$vol" ] && [ "$vol" -gt 0 ] && awk -v t="$total" -v v="$vol" 'BEGIN { exit !(t > v * 1.1) }'; then
   used=$(nice -n 19 du -sxB1 "$HOME" 2>/dev/null | awk '{ print $1 }')
   total=$vol
+  # for btop (startup.sh's home-statfs): the volume as this measures it
+  printf '%s %s\n' "$total" "$used" >/tmp/coder-home-disk.$$ && mv -f /tmp/coder-home-disk.$$ /tmp/coder-home-disk
+ else
+  rm -f /tmp/coder-home-disk
  fi
  _gb "$used" "$total"
 }

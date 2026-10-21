@@ -2,8 +2,63 @@
 
 ## 1.46.0 – unreleased
 
-Coder `2.0.0-platform.107` (fork `4a18b5603`).
+Coder `2.0.0-platform.108` (fork `9cdab4358`).
 
+* **platform.108:**
+  * **The workspace grid.** Lock the Controls menu's Workspaces list open (hold through the ring, or double-click):
+    * a workspace's row then ticks it (its arrow, at the row's end, still opens its page), with Select all / Clear;
+    * "View N in a grid" opens the ticked workspaces together in a window over the page, the page blurred behind it;
+    * each cell is the workspace's dashboard alone, live - its agent card(s), the rest of its page (top bar, side
+      bar, resource strip, notes) left behind - scaled to fit the cell's width and height, whole (never a
+      scrollbar), and centred in it; one fills the window, two sit side by side, three or four make a 2x2;
+    * the grid sits over the floating chat bar too: the bar goes under the blur with the rest of the page;
+    * with more than four, the cells keep that size and a hand grabs and drags the grid round to the others (the
+      wheel scrolls it too); the dashboards are pictures to drag by until one is clicked, which makes it usable;
+    * the browser remembers the choice; a link out of a dashboard, or a cell's arrow, goes to that page and closes
+      the grid;
+    * a dashboard page in the platform's own frame has no navbar, banners or deployment bar. A page never knew it
+      was in such a frame (the check compared the frame with the wrong window's element type), so the frame also
+      showed its own classification bars, chat and background.
+  * **The Workspaces list** shows each workspace's template in a pill beside its name (the grid's cells too). Each
+    template keeps one colour wherever its pill shows: DEFAULT green, the others picked from their names among
+    colours clear of green (DATAFLOW sky blue).
+  * **The Workspaces list's template pills line up** in one column: every name is as wide as the widest (up to
+    120px, cut short beyond and whole on hover).
+  * **The Controls menu**, Settings down to the Network graph, sits in one rounded, bordered box under the
+    Workspaces row (the separator above it is gone).
+  * **The locked Workspaces list** lets go of a press elsewhere in the menu when the press ends. Sliding shut at once,
+    it brought another item under the pointer, which the release then chose (Appearance, in a test).
+  * **The Workspaces table has a Resources column**, right beside the names (Name is as wide as they are) and
+    centred, for each running workspace:
+    * its CPU and RAM as small live bar graphs (its last 12 readings, each bar coloured by its level, as on its page),
+      each with its share now, their corners rounded and the bars cut to them;
+    * its disk as a segmented bar of what is used of what it was given: 16 segments, as many lit as the share used,
+      each in the theme's success, warning or destructive colour for where it sits, the bar's ends rounded, with both
+      figures under it;
+    * the readings are its agent's (the page's Workspace group), a new bar about every 10 s away from its page; a
+      workspace that is not running shows a dash.
+  * **Toasts** show in the bottom left corner, clear of the chat bar, and smaller (288px wide, smaller text).
+  * **The announcement terminal** (the banner's arrow):
+    * its title bar says "Broadcast Announcement", centred, without the red, yellow and green window buttons or the
+      file name;
+    * the `cat broadcast.md` line is gone: the message, then the one prompt;
+    * a hidden command, `time`, prints the time now on a dot-matrix display (5x7 dots a character, the lit ones
+      glowing in the terminal's ink, the colons blinking with the seconds), ticking, with the date and time zone.
+  * **Chats settings: Export**, beside Purge all Chats, downloads every record as one JSON file: messages, groups and
+    their members, read marks, focus acknowledgements and the settings. Admins only; logged as `chat-exported`.
+  * **The workspace page's Cloud Drive glyph** opens the user's Cloud Drive window, centred over the blurred page.
+  * **The workspace page's metric readings** (`0.2 / 2 cores`...) are centred under their graphs.
+  * **btop's disks panel shows the workspace's own disk.**
+    * It was empty: btop takes its disks from `/etc/fstab`, which a container leaves unconfigured, and counts
+      "physical" filesystems only. A btop configuration still on btop's defaults now gets `use_fstab = false`,
+      `only_physical = false` and `disks_filter` = the home (the workspace's own disk; the others are the node's).
+    * Only the user's `~/.config/btop/btop.conf` changes: `/etc/fstab`, the mounts and their permissions are
+      untouched.
+    * Where the cluster's volumes are folders of the node's disk (local-path, hostpath: minikube, kind), the home
+      read as the node's whole disk (935G). A small library built at start (`scripts/home-statfs.c`, preloaded by a
+      btop wrapper in `~/.local/bin`) answers for the home with the volume's size and the home's use, as the Disk
+      metric measures them (`metadata.sh` writes them to `/tmp/coder-home-disk`). On a real volume (EBS...) there is
+      no such file and nothing changes. Only btop's own process loads it.
 * **platform.107:**
   * **The attached chat** runs up to the classification bar (the window's top without one). The navbar narrows
     beside it like the page, its items sizing to what is left. On a wide screen only: below 1024px the panel lies
