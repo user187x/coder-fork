@@ -3474,6 +3474,29 @@ class WebhookTest(unittest.TestCase):
         out = self.wh.review(body, lambda pod: {}, "L")
         self.assertNotIn("patch", out["response"], "CREATE only")
 
+    def test_the_server_answers_the_api_servers_path(self):
+        """The API server calls /mutate?timeout=5s: the query is not part of the route (a 404 there refused every
+        workspace pod, failurePolicy Fail)."""
+        import http.client
+        srv = self.wh.server(lambda pod: {"cloudDrive": {}}, "L", port=0, tls_dir=None)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            body = json.dumps({"apiVersion": "admission.k8s.io/v1", "request": {
+                "uid": "u2", "operation": "CREATE", "kind": {"kind": "Pod"}, "object": self.example_pod()}})
+            conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+            with mock.patch.object(self.wh, "log"):
+                conn.request("POST", "/mutate?timeout=5s", body=body, headers={"Content-Type": "application/json"})
+                r = conn.getresponse()
+                out = json.loads(r.read())
+            self.assertEqual((r.status, out["response"]["uid"], out["response"]["patchType"]), (200, "u2", "JSONPatch"))
+            conn.request("GET", "/healthz")
+            r = conn.getresponse()
+            r.read()
+            self.assertEqual(r.status, 200)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

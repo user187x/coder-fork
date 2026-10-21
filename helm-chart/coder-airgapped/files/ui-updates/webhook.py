@@ -330,27 +330,29 @@ def review(body, state_of, lockdown_sh):
             "response": response}
 
 
-def main():
-    kube = Kube()
-    lockdown_sh = lockdown_script()
+def server(state_of, lockdown_sh, port=PORT, tls_dir=TLS_DIR):
+    """The HTTPS server: POST /mutate (the API server adds ?timeout=...), GET /healthz. tls_dir None: plain HTTP (tests)."""
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
+        def route(self):
+            return urllib.parse.urlsplit(self.path).path
+
         def do_GET(self):
             # readiness: serving
-            self.send_response(200 if self.path == "/healthz" else 404)
+            self.send_response(200 if self.route() == "/healthz" else 404)
             self.end_headers()
 
         def do_POST(self):
-            if self.path != "/mutate":
+            if self.route() != "/mutate":
                 self.send_response(404)
                 self.end_headers()
                 return
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
-                out = review(body, kube.state, lockdown_sh)
+                out = review(body, state_of, lockdown_sh)
             except Exception as e:  # refused: failurePolicy Fail keeps the pod out, the Deployment retries
                 log(event="webhook-error", error=str(e)[:300])
                 self.send_response(500)
@@ -363,13 +365,20 @@ def main():
             self.end_headers()
             self.wfile.write(data)
 
-    server = http.server.ThreadingHTTPServer(("", PORT), Handler)
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.load_cert_chain(os.path.join(TLS_DIR, "tls.crt"), os.path.join(TLS_DIR, "tls.key"))
-    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    srv = http.server.ThreadingHTTPServer(("", port), Handler)
+    if tls_dir:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(os.path.join(tls_dir, "tls.crt"), os.path.join(tls_dir, "tls.key"))
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    return srv
+
+
+def main():
+    kube = Kube()
+    srv = server(kube.state, lockdown_script())
     log(event="webhook-start", port=PORT, namespace=NAMESPACE, userStorage=USER_STORAGE)
-    server.serve_forever()
+    srv.serve_forever()
 
 
 if __name__ == "__main__":
