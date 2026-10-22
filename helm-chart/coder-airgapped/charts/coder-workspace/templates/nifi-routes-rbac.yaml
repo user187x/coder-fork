@@ -1,9 +1,9 @@
 {{- include "coder-workspace.platform.values" . -}}
 {{- /*
-The dataflow template's NiFi route (files/main.tf: kubernetes_manifest nifi_route): Coder's provisioner, which runs
-as Coder's service account, creates each dataflow workspace's HTTPRoute in this namespace and deletes it with the
-workspace: HTTPRoutes in this namespace, and reading the cluster's CRDs, where Terraform's kubernetes_manifest looks up
-the HTTPRoute's type before it plans (definitions only, no custom resources).
+The dataflow template's old per-workspace NiFi route (before 1.46.0, kubernetes_manifest nifi_route; now one route
+for all, templates/nifi-route.yaml): Coder's provisioner, which runs as Coder's service account, deletes each old
+workspace's HTTPRoute at its next build - HTTPRoutes in this namespace, and reading the cluster's CRDs, where
+Terraform's kubernetes_manifest looks up the HTTPRoute's type first. Kept until every workspace has been rebuilt.
 */ -}}
 {{- if .Values.dataflowTemplate.enabled }}
 {{- $ns := .Values.namespace | default .Release.Namespace }}

@@ -48,10 +48,10 @@ dataflowTemplate:
   terminal: "ghostty"
 # Its image: the workspace image + NiFi, a Java runtime and Airflow.
 dataflowImage: "ghcr.io/user187x/coder-workspace-dataflow:1.1.4"
-# Its NiFi under Coder's app path: each dataflow workspace gets an HTTPRoute of its own (files/main.tf, nifi_route) on
-# the Gateway in icons.gateway, to Coder's Service, setting the proxy headers NiFi reads; Coder's service account may
-# manage HTTPRoutes in the namespace, and read the cluster's CRDs (templates/nifi-routes-rbac.yaml), to create and
-# delete them.
+# Its NiFi under Coder's app path: ONE HTTPRoute for every dataflow workspace, coder-enhanced-nifi
+# (templates/nifi-route.yaml), on the Gateway in icons.gateway, to Coder's Service, setting the proxy headers NiFi reads
+# (scheme, host, port; its path is Coder's X-Forwarded-Prefix). Coder's service account may still manage HTTPRoutes
+# (templates/nifi-routes-rbac.yaml): workspaces from before 1.46.0 delete their own route at their next build.
 nifiRoute:
   coderService:
     name: coder

@@ -433,8 +433,9 @@ def template_checks(B, chart, default_render):
           and "tf-dataflow" in vols.get("coder-workspace-push-template-dataflow", [])
           and "tf-dataflow" not in vols.get("coder-workspace-push-template", ["tf-dataflow"])
           and "/tmp/tf-dataflow" in dflow and "/tmp/tf-dataflow" not in dflt
-          and all(v in dflow for v in ("--variable code_server=false", "--variable default_memory=6",
-                                       "--variable gateway_name=", "--variable coder_service="))
+          and all(v in dflow for v in ("--variable code_server=false", "--variable default_memory=6"))
+          # the NiFi route's variables went with the per-workspace route (one route now: coder-enhanced-nifi)
+          and not any(v in dflow or v in dflt for v in ("--variable gateway_name=", "--variable coder_service="))
           and not re.search(r"--variable (code_server|default_memory|terminal_app|terminal|gateway_\w+|coder_service\w*|app_set)=",
                             dflt), sorted(jobs))
     ui_env = {e["name"]: e.get("value") for c in docs[("Deployment", "coder-ui-updates")]["spec"]["template"]["spec"]["containers"]
@@ -1029,8 +1030,22 @@ def main():
                         r'  script = templatefile\("\$\{path\.module\}/scripts/apache_airflow\.sh"', tf["dataflow.tf"])
           and "nifi.web.proxy.context.path=$NIFI_PATH" in nifi_sh and "exec airflow standalone" in airflow_sh
           and all(("moved {\n  from = %s[0]\n  to   = %s\n}" % (a, a)) in tf["dataflow.tf"] for a in (
-              "coder_app.nifi", "coder_script.nifi", "coder_script.airflow", "kubernetes_manifest.nifi_route",
-              "coder_app.airflow")), "")
+              "coder_app.nifi", "coder_script.nifi", "coder_script.airflow", "coder_app.airflow")), "")
+    # NiFi's route: ONE for every dataflow workspace (coder-enhanced-nifi), not one per workspace; NiFi's path is
+    # Coder's X-Forwarded-Prefix (the fork's app proxy), so the route removes a client's own context-path headers.
+    import yaml
+    nifi = [d for d in yaml.safe_load_all(r) if isinstance(d, dict) and d.get("kind") == "HTTPRoute"
+            and d["metadata"]["name"] == "coder-enhanced-nifi"]
+    rule = (nifi[0]["spec"]["rules"] if nifi else [{}])[0]
+    hdr = ((rule.get("filters") or [{}])[0].get("requestHeaderModifier") or {})
+    check("template: DATAFLOW's NiFi has ONE route for every workspace (coder-enhanced-nifi: a regular expression on "
+          "any workspace's NiFi path, to Coder), none of a workspace's own; the path is Coder's X-Forwarded-Prefix",
+          len(nifi) == 1 and not re.search(r"^resource \"kubernetes_manifest\"", tf["dataflow.tf"], re.M)
+          and (rule.get("matches") or [{}])[0].get("path", {}).get("type") == "RegularExpression"
+          and "/apps/nifi" in (rule.get("matches") or [{}])[0].get("path", {}).get("value", "")
+          and {"X-ProxyContextPath", "X-Forwarded-Context"} <= set(hdr.get("remove") or [])
+          and {h["name"] for h in hdr.get("set") or []} == {"X-ProxyScheme", "X-ProxyHost", "X-ProxyPort"},
+          nifi[0]["spec"] if nifi else "no coder-enhanced-nifi")
     # Beside the startup script, Airflow's line in ~/.bashrc waits for the startup script's default ~/.bashrc (added
     # first, it would keep the default out).
     check("apache_airflow.sh: its ~/.bashrc line after the startup script's default ~/.bashrc",

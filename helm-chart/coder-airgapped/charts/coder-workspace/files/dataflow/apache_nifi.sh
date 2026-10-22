@@ -5,8 +5,9 @@
 # From /opt/nifi as the workspace image installed it (its NARs unpacked there, read-only); everything it writes is a
 # link into ~/.nifi: conf (the image's, the first time; then the user's flows and settings), logs, state, repositories,
 # work areas. Unsecured HTTP on 127.0.0.1:8080, for this workspace only (the app is its owner's alone). The app's path
-# reaches it in the proxy headers the cluster's Gateway adds (the template's HTTPRoute), so its pages and API calls go
-# through Coder's proxy; it accepts them for this path and Coder's host only.
+# reaches it in X-Forwarded-Prefix (Coder's app proxy), the scheme, host and port in the headers the chart's one NiFi
+# route adds (coder-enhanced-nifi), so its pages and API calls go through Coder's proxy; it accepts them for this path
+# and Coder's host only.
 # main.tf renders this with templatefile(): path and access_host are the template's values (a shell variable in braces
 # is written with two dollar signs).
 set -e

@@ -2,8 +2,18 @@
 
 ## 1.46.0 – unreleased
 
-Coder `2.0.0-platform.108` (fork `517028e87`).
+Coder `2.0.0-platform.108` (fork `75ba612f4`).
 
+* **DATAFLOW's NiFi: one HTTPRoute for every workspace, `coder-enhanced-nifi`** (was one per workspace,
+  `coder-<id>-nifi`, made by the template):
+  * a regular expression matches any workspace's NiFi path (`/@<owner>/<workspace>.<agent>/apps/nifi...`) and sends it
+    to Coder, which proxies it to that workspace's NiFi as for any app (and decides who may open it);
+  * the route sets what is the same for all (the proxy scheme, host and port) and removes a client's own context-path
+    headers; each workspace's path comes from Coder: the fork's app proxy now sends every path-based app
+    `X-Forwarded-Prefix`, its base path (NiFi 2.12 reads it);
+  * a workspace's old route goes at its next build (Coder's service account keeps its HTTPRoute permissions until
+    every workspace has been rebuilt); the template's route variables are gone.
+  * On the dev cluster: skibbity rebuilt, its route deleted, NiFi's UI and its 16 API calls answered under its path.
 * **A workspace being deleted shines in the Workspaces table:** a soft band sweeps across its row, left to right
   every 1.2 s, over a faint tint of the theme's destructive colour, until it is gone (still with animations off). The
   table asks again every 10 s when no build is active (was 30), so a delete started elsewhere shows too.

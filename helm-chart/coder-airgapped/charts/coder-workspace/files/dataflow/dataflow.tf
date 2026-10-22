@@ -17,27 +17,6 @@ variable "terminal_app" {
 }
 
 # The Gateway that serves Coder (the NiFi route below attaches to it), and Coder's Service behind it.
-variable "gateway_name" {
-  type        = string
-  description = "The Gateway serving Coder's host (its NiFi route attaches to it)."
-  default     = "traefik-gateway"
-}
-
-variable "gateway_namespace" {
-  type    = string
-  default = "traefik"
-}
-
-variable "coder_service" {
-  type        = string
-  description = "Coder's Service in this namespace, as Coder's own HTTPRoute names it."
-  default     = "coder"
-}
-
-variable "coder_service_port" {
-  type    = number
-  default = 80
-}
 
 # Its apps, in place of code-server: path-based like the others, so they open in the
 # dashboard's panels (same origin). Each started by a script of its own (coder_script.nifi and coder_script.airflow
@@ -62,11 +41,12 @@ resource "coder_app" "nifi" {
   }
 }
 
-# NiFi under Coder's app path: NiFi builds its pages' links and API calls from the proxy headers it is sent
-# (X-ProxyContextPath, -Scheme, -Host, -Port), which Coder's app proxy passes on but does not add. The cluster's Gateway
-# (Traefik) adds them, by an HTTPRoute of this workspace's own on Coder's host: only its NiFi path, to Coder as Coder's
-# own route does (the longest path wins), with these headers set. Nothing else in front of NiFi; Coder still decides
-# who may open the app. Needs Coder's service account to manage HTTPRoutes in the namespace (the chart's Role).
+# NiFi under Coder's app path: NiFi builds its pages' links and API calls from the proxy headers it is sent. Its path
+# comes from Coder (the fork's app proxy sends every path-based app X-Forwarded-Prefix, its base path); the scheme, host
+# and port from ONE HTTPRoute for every DATAFLOW workspace, the chart's coder-enhanced-nifi (templates/nifi-route.yaml):
+# a regular expression on any workspace's NiFi path, to Coder, which proxies to the right workspace as for any app.
+# Before 1.46.0 each workspace had an HTTPRoute of its own (kubernetes_manifest.nifi_route): gone, its next build
+# deletes it. Nothing else in front of NiFi; Coder still decides who may open the app.
 locals {
   nifi_path    = "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/nifi"
   airflow_path = "/@${data.coder_workspace_owner.me.name}/${data.coder_workspace.me.name}.main/apps/airflow"
@@ -97,49 +77,6 @@ resource "coder_script" "airflow" {
     path        = local.airflow_path
     access_host = local.access_host
   })
-}
-
-resource "kubernetes_manifest" "nifi_route" {
-  manifest = {
-    apiVersion = "gateway.networking.k8s.io/v1"
-    kind       = "HTTPRoute"
-    metadata = {
-      name      = "coder-${data.coder_workspace.me.id}-nifi"
-      namespace = var.namespace
-      labels = {
-        "app.kubernetes.io/name"    = "coder-workspace"
-        "app.kubernetes.io/part-of" = "coder"
-        "com.coder.resource"        = "true"
-        "com.coder.workspace.id"    = data.coder_workspace.me.id
-        "com.coder.workspace.name"  = data.coder_workspace.me.name
-        "com.coder.user.username"   = data.coder_workspace_owner.me.name
-      }
-    }
-    spec = {
-      hostnames = [local.coder_host]
-      parentRefs = [{
-        group     = "gateway.networking.k8s.io"
-        kind      = "Gateway"
-        name      = var.gateway_name
-        namespace = var.gateway_namespace
-      }]
-      rules = [{
-        matches = [{ path = { type = "PathPrefix", value = local.nifi_path } }]
-        filters = [{
-          type = "RequestHeaderModifier"
-          requestHeaderModifier = {
-            set = [
-              { name = "X-ProxyContextPath", value = local.nifi_path },
-              { name = "X-ProxyScheme", value = local.coder_https ? "https" : "http" },
-              { name = "X-ProxyHost", value = local.coder_host },
-              { name = "X-ProxyPort", value = local.coder_https ? "443" : "80" },
-            ]
-          }
-        }]
-        backendRefs = [{ name = var.coder_service, port = var.coder_service_port }]
-      }]
-    }
-  }
 }
 
 resource "coder_app" "airflow" {
@@ -186,11 +123,6 @@ moved {
 moved {
   from = coder_script.airflow[0]
   to   = coder_script.airflow
-}
-
-moved {
-  from = kubernetes_manifest.nifi_route[0]
-  to   = kubernetes_manifest.nifi_route
 }
 
 moved {

@@ -221,10 +221,6 @@ spec:
                 {{- end }}
                 --variable code_server=false \
                 --variable default_memory=6 \
-                --variable gateway_name="{{ $.Values.icons.gateway.name }}" \
-                --variable gateway_namespace="{{ $.Values.icons.gateway.namespace }}" \
-                --variable coder_service="{{ $.Values.nifiRoute.coderService.name }}" \
-                --variable coder_service_port="{{ $.Values.nifiRoute.coderService.port }}" \
                 {{- end }}
                 --variable home_storage_class="{{ $.Values.storageClass | default "" }}" \
                 {{- with $.Values.codeServerHA }}{{ if .image }}
