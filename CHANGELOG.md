@@ -23,6 +23,32 @@ Coder `2.0.0-platform.108` (fork `9e83f6bb7`).
   * **A deleted workspace lets go of its cable:** the plug pops off its row and the cord reels back into the Cloud
     Drive like a retractable one, while the row is still there (shining), before it goes. Cables are no longer
     remade when the list re-sorts.
+* **Restore workspace** (a workspace's ⋮ menu, beside Back up home): a home backup - a file, or one of the owner's
+  workspaces' backups in S3 - restored into **a new workspace** made as the backup's (its template and parameters),
+  or **over this workspace's home** (stopped, its home replaced, started again). Each backup now starts with what it
+  was taken from (`.coder-backup.json`: the workspace, template, parameters - CPU, memory, disk - in a small gzip
+  member of its own), so the dialog reads only a file's first 256 KB, or a range of the S3 object, and asks the user
+  quota **before anything is uploaded, downloaded or created**; over quota it says why and Restore stays off, and the
+  platform service refuses an upload over quota from its first bytes as well. A backup from before carries none: a
+  new workspace gets this one's template and parameters. The backup is read to its end first - a damaged file, or an
+  entry outside the home, is refused before anything changes; owners and modes come back as they were.
+* **The quota pill** (Workspaces, above the search): the signed-in user's limits (Health › User Quota) - what their
+  workspaces take of each and what is left, amber from 80%, red at the limit - shown only where a limit applies to
+  them (`/api/quota/me`). It follows the table: a workspace made, deleted, rebuilt or started updates it at once;
+  else every 10 s.
+* **The workspace page's top bar floats** - a smoothly rounded rectangle like the dashboards' cards (18 px) - as wide as the dashboard (its 1200 px), every part kept,
+  evenly spaced (the same gap to the navbar above and the dashboard below), staying in view as the dashboard
+  scrolls. **The left sidebar is gone:** Resources and History are a toggle pair at
+  the pill's start, each dropping its list as a card over the dashboard (again, Escape or a click elsewhere closes;
+  `?sidebar=` links still open them); an admin's note button sits beside them.
+* **Chromium as a workspace app** (DEFAULT and DATAFLOW, with the Desktop app): a maximized browser - its tabs and
+  address bar - on an X display of its own (`:2`, xfwm4 with settings of its own: no title bar), shown through noVNC
+  on port 6902, so it fits a dashboard panel and follows its size. Its profile is `~/.config/chromium-panel`;
+  closed, it comes back.
+* **The dashboard's Add a panel (+) button** lists the workspace's apps only (no ports, no web address) and takes the
+  theme's own add colour, so it changes with the theme.
+* **Workspaces in the latency menu** (a member's narrower menu): template names give way to the room each row has, so
+  none is clipped under the menu's edge.
 * **Images is for admins only:** its menu items (Resources, the mobile menu, the quick access wheel) and pages are
   theirs alone, and its API refuses anyone else (template admins included).
 * **Workspace pods are named `coder-<username>-<template>-<workspace>`** (Kubernetes' letters, cut to 52 characters

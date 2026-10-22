@@ -2236,6 +2236,162 @@ class ArchiveLayoutTest(unittest.TestCase):
             self.assertFalse(ib.complete_layout(path))                     # complete now: left alone
 
 
+class WorkspaceRestoreTest(unittest.TestCase):
+    """Restore a workspace from a home backup: the backup says what it was taken from in its first bytes, the quota is
+    asked from those alone, the archive is checked whole, and the Job unpacks it without that entry."""
+
+    def setUp(self):
+        import tempfile
+        self.wv = load("workspacevolumes", "workspacevolumes.py")
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.home = os.path.join(self.dir.name, "home")
+        os.makedirs(os.path.join(self.home, "src"))
+        with open(os.path.join(self.home, "src", "a.txt"), "w") as f:
+            f.write("hello")
+        self.meta = {"version": 1, "workspace": "old", "owner": "dev", "template": {"id": "t1", "displayName": "DEFAULT"},
+                     "parameters": [{"name": "cpu", "value": "4"}, {"name": "memory", "value": "8"},
+                                    {"name": "gone", "value": "x"}]}
+
+    def backup(self, meta=True):
+        """A backup as receive_archive writes it: the metadata member, then tar -czf of the home."""
+        import subprocess
+        home = subprocess.run(["tar", "-czf", "-", "-C", self.home, "."], capture_output=True, check=True).stdout
+        path = os.path.join(self.dir.name, "b.tar.gz")
+        with open(path, "wb") as f:
+            f.write((self.wv.meta_member(self.meta) if meta else b"") + home)
+        return path
+
+    def test_metadata_from_the_first_bytes_and_one_archive(self):
+        path = self.backup()
+        with open(path, "rb") as f:
+            self.assertEqual(self.wv.read_meta(f.read(4096))["workspace"], "old")   # its first few KB say it
+        self.assertEqual(self.wv.check_archive(path), 3)   # ./ src/ src/a.txt - the metadata not counted
+        with open(self.backup(meta=False), "rb") as f:
+            self.assertIsNone(self.wv.read_meta(f.read()))   # a backup from before: none
+
+    def test_damaged_or_escaping_archives_are_refused(self):
+        path = self.backup()
+        with open(path, "rb") as f:
+            data = f.read()
+        with open(path, "wb") as f:
+            f.write(data[:-40])
+        with self.assertRaises(ValueError):
+            self.wv.check_archive(path)
+        import tarfile
+        bad = os.path.join(self.dir.name, "bad.tar.gz")
+        with tarfile.open(bad, "w:gz") as tf:
+            info = tarfile.TarInfo("../etc/x")
+            tf.addfile(info, io.BytesIO(b""))
+        with self.assertRaisesRegex(ValueError, "outside the home"):
+            self.wv.check_archive(bad)
+
+    def plan(self, allowed, mode="new", name="restored"):
+        calls = {}
+
+        def coder(token, method, path, body=None, timeout=20):
+            if path.startswith("/api/v2/users/dev/workspace/"):
+                return 404, None
+            if path == "/api/v2/templates/t1":
+                return 200, {"id": "t1", "display_name": "DEFAULT", "active_version_id": "v2"}
+            if path == "/api/v2/templateversions/v2/rich-parameters":
+                return 200, [{"name": "cpu"}, {"name": "memory"}]
+            raise AssertionError(path)
+
+        def quota(token, user, body):
+            calls["quota"] = body
+            return {"allowed": allowed, "message": "over" if not allowed else "within quota"}
+        with mock.patch.object(self.wv, "coder", coder), mock.patch.object(self.wv, "QUOTA_CHECK", quota):
+            plan = self.wv.restore_plan("t", {"username": "dev"}, {"owner_name": "dev", "template_id": "t9"},
+                                        self.meta, mode, name)
+        return plan, calls
+
+    def test_the_quota_is_asked_with_the_backups_template_and_parameters(self):
+        plan, calls = self.plan(False)
+        self.assertFalse(plan["quota"]["allowed"])
+        self.assertEqual(calls["quota"]["template_id"], "t1")
+        self.assertEqual(calls["quota"]["rich_parameter_values"], [{"name": "cpu", "value": "4"},
+                                                                   {"name": "memory", "value": "8"}])   # "gone" dropped
+        plan, calls = self.plan(True, mode="replace")
+        self.assertTrue(plan["quota"]["allowed"])
+        self.assertNotIn("quota", calls)   # replacing a home keeps the workspace's parameters
+        with self.assertRaises(ValueError):
+            self.plan(True, name="-bad-")
+
+    def test_an_s3_restore_over_quota_downloads_nothing(self):
+        head = self.wv.meta_member(self.meta)
+        fetched = []
+        with mock.patch.object(self.wv, "s3_key_ok", lambda ws, key: {"bucket": "b"}), \
+                mock.patch.object(self.wv, "s3_head", lambda cfg, key: head), \
+                mock.patch.object(self.wv, "fetch_s3", lambda *a: fetched.append(a)), \
+                mock.patch.object(self.wv, "restore_plan", lambda *a: {"quota": {"allowed": False, "message": "over"},
+                                                                     "meta": self.meta}):
+            with self.assertRaisesRegex(self.wv.Refused, "over"):
+                self.wv.start_restore("t", {"id": "w1", "owner_name": "dev", "name": "x"}, {"username": "dev"},
+                                      "new", "restored", key="workspaces/dev/old/1.tar.gz")
+        self.assertEqual(fetched, [])
+
+    def test_the_service_routes_every_restore_request(self):
+        """The browser's PUTs (first bytes, the file) and the Job's GET of its backup reach workspacevolumes."""
+        import inspect
+        get, put = inspect.getsource(ui.Handler.do_GET), inspect.getsource(ui.Handler.do_PUT)
+        self.assertIn('workspacevolumes.handle_internal(self, "GET"', get)
+        self.assertIn('workspacevolumes.handle(self, "PUT"', put)
+        self.assertIn('workspacevolumes.handle_internal(self, "PUT"', put)
+
+    def test_the_job_unpacks_it_without_the_metadata(self):
+        import http.server
+        import threading
+        path = self.backup()
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                data = open(path, "rb").read()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.handle_request, daemon=True).start()
+        dst = os.path.join(self.dir.name, "dst")
+        os.makedirs(os.path.join(dst, "stale"))
+        self.wv.restore(dst, "http://127.0.0.1:%d/" % srv.server_port)
+        srv.server_close()
+        self.assertEqual(open(os.path.join(dst, "src", "a.txt")).read(), "hello")
+        self.assertFalse(os.path.exists(os.path.join(dst, "stale")))
+        self.assertFalse(os.path.exists(os.path.join(dst, ".coder-backup.json")))
+
+
+class QuotaMeTest(unittest.TestCase):
+    """The Workspaces page's quota pill: a user's own limits, usage and what is left; nothing for no limit or an
+    exempt admin."""
+
+    def me(self, saved, roles=(), workspaces=()):
+        with mock.patch.object(ui, "STORE", mock.Mock(get_setting=lambda key, default=None: saved)), \
+                mock.patch.object(ui, "quota_workspaces", lambda token, owner=None: list(workspaces)):
+            return ui.quota_me("t", {"username": "dev", "id": "1", "roles": set(roles)})
+
+    def test_no_limit_or_exempt_admin_shows_nothing(self):
+        self.assertFalse(self.me(None)["limited"])
+        admin = self.me({"default": {"workspaces": 2}}, roles={"owner"})
+        self.assertFalse(admin["limited"])
+        self.assertTrue(admin["exempt"])
+
+    def test_limits_usage_and_left(self):
+        out = self.me({"default": {"workspaces": 3, "cpu": 8}, "users": {"dev": {"memory": 16}}},
+                      workspaces=[{"cpu": 2, "memory": 4}, {"cpu": 4, "memory": 8}])
+        self.assertTrue(out["limited"])
+        self.assertEqual(out["usage"], {"workspaces": 2, "cpu": 6, "memory": 12})
+        self.assertEqual(out["left"], {"workspaces": 1, "cpu": 2, "memory": 4})
+        self.assertFalse(out["atLimit"])
+        full = self.me({"default": {"workspaces": 2}}, workspaces=[{"cpu": 1, "memory": 1}] * 2)
+        self.assertEqual(full["left"], {"workspaces": 0, "cpu": None, "memory": None})
+        self.assertTrue(full["atLimit"])
+
+
 class CloudDriveQuotaTest(unittest.TestCase):
     """Cloud Drive > Settings: every account's capacity, as an admin sets it, over the chart's."""
 

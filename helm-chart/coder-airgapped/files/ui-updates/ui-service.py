@@ -86,6 +86,7 @@
   User quota (Health > User Quota; admins, and Coder's own check before it creates a workspace)
   GET  /__coder-ui/api/quota               limits, every user's usage (built with / running / live) and the cluster
   POST /__coder-ui/api/quota               {"default": {workspaces, cpu, memory}, "users": {name: {...}}, "exemptAdmins"}
+  GET  /__coder-ui/api/quota/me            anyone signed in: their own limits and what their workspaces take (the Workspaces pill)
   POST /__coder-ui/api/quota/check         {owner, template_id | template_version_id, rich_parameter_values}: allowed?
   Global Workspace Scheduler (Health > User Quota; admins, and Coder's own check before it creates or reschedules)
   GET  /__coder-ui/api/scheduler           admins: the settings and the workspaces that break them
@@ -6743,6 +6744,20 @@ def quota_report(token):
             "parameters": dict(QUOTA_PARAMS), "generatedAt": now()}
 
 
+def quota_me(token, user):
+    """The Workspaces page's quota pill: the caller's own limits and what their workspaces take. "limited" is false
+    for no limit at all, or an exempt admin - the pill then stays away."""
+    settings = quota_settings()
+    limits = quota_limits(settings, user["username"])
+    exempt = bool(settings["exemptAdmins"] and set(user["roles"]) & ADMIN_ROLES)
+    if exempt or all(limits[k] is None for k in QUOTA_KEYS):
+        return {"limited": False, "exempt": exempt, "limits": limits}
+    mine = quota_workspaces(token, owner=user["username"])
+    usage = {"workspaces": len(mine), "cpu": sum(w["cpu"] for w in mine), "memory": sum(w["memory"] for w in mine)}
+    left = {k: (None if limits[k] is None else max(limits[k] - usage[k], 0)) for k in QUOTA_KEYS}
+    return {"limited": True, "exempt": False, "limits": limits, "usage": usage, "left": left,
+            "atLimit": any(left[k] is not None and left[k] <= 0 for k in QUOTA_KEYS)}
+
 def quota_check(token, user, body):
     """Before Coder creates a workspace: would it pass the owner's limits? {"allowed", "message", ...}. Asked by Coder
     with the requester's own session, so it sees exactly what they may see."""
@@ -8202,6 +8217,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, "ok\n")
         if path.startswith(BASE + "/internal/") and imagebuilder.handle_internal(self, "GET", path):
             return
+        if path.startswith(BASE + "/internal/") and workspacevolumes.handle_internal(self, "GET", path):
+            return   # a restore Job fetching its backup
         if imagebuilder.handle(self, "GET", path, url.query, ADMIN_ROLES):
             return
         if workspacevolumes.handle(self, "GET", path, url.query):
@@ -8524,6 +8541,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, monitoring_posture(self.token()))
             except Exception as e:  # noqa: BLE001
                 log(event="posture-failed", error=str(e)[:300])
+                return self.send_json(503, {"error": str(e)[:300]})
+        if path == BASE + "/api/quota/me":
+            user, err = self.user()
+            if err:
+                return
+            try:
+                return self.send_json(200, quota_me(self.token(), user))
+            except Exception as e:  # noqa: BLE001
                 return self.send_json(503, {"error": str(e)[:300]})
         if path == BASE + "/api/scheduler/me":
             user, err = self.user()
@@ -9269,10 +9294,13 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def do_PUT(self):
-        """Uploads: the Images view's (files of an image being built), the Cloud Drive's and libraries', a chat's file."""
+        """Uploads: the Images view's (files of an image being built), the Cloud Drive's and libraries', a chat's file,
+        a workspace's home backup to restore."""
         self.close_connection = True
         url = urllib.parse.urlsplit(self.path)
         if url.path.startswith(BASE + "/internal/") and workspacevolumes.handle_internal(self, "PUT", url.path):
+            return
+        if workspacevolumes.handle(self, "PUT", url.path, url.query):   # a home backup to restore
             return
         if url.path == BASE + "/api/chat/upload":
             return self.chat_upload(url.query)
@@ -9841,6 +9869,7 @@ def main():
     imagebuilder.setup(log, http_json, KUBE)
     imagebuilder.start()
     workspacevolumes.setup(log, http_json, KUBE)
+    workspacevolumes.QUOTA_CHECK = quota_check   # a restore asks the user quota before it creates a workspace
     workspacevolumes.CODER_URL = CODER_URL
     workspacevolumes.start()
     lockdown.setup(log, KUBE, workspace_info, ADMIN_ROLES, CODER_ACCESS_URL)

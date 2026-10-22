@@ -956,6 +956,12 @@ def _sign(key, msg):
 
 
 def s3_request(cfg, method, key, query="", body=b"", headers=None):
+    with s3_open(cfg, method, key, query, body, headers) as r:
+        return r.status, dict(r.headers), r.read()
+
+
+def s3_open(cfg, method, key, query="", body=b"", headers=None):
+    """The open response (read it as it comes: a large object is never held whole); query canonical (sorted, encoded)."""
     endpoint = (cfg.get("endpoint") or "https://s3.%s.amazonaws.com" % cfg["region"]).rstrip("/")
     u = urllib.parse.urlsplit(endpoint)
     path_style = cfg.get("pathStyle", True)
@@ -977,8 +983,7 @@ def s3_request(cfg, method, key, query="", body=b"", headers=None):
                                  method=method, headers={k: v for k, v in h.items() if k != "host"})
     import ssl
     ctx = ssl.create_default_context(cafile=os.environ.get("CA_FILE") or None) if u.scheme == "https" else None
-    with urllib.request.urlopen(req, timeout=300, context=ctx) as r:
-        return r.status, dict(r.headers), r.read()
+    return urllib.request.urlopen(req, timeout=300, context=ctx)
 
 
 class S3Upload:

@@ -9,6 +9,11 @@ workspace's ⋮ menu and its Settings.
   POST /__coder-ui/api/workspace-volumes/<id>/backup       {target: download | s3}
   GET  /__coder-ui/api/workspace-volumes/<id>/backups/<n>/download
   POST /__coder-ui/api/workspace-volumes/<id>/expand       {size: GB}
+  GET  /__coder-ui/api/workspace-volumes/<id>/restore      the S3 backups its owner's workspaces have, to restore from
+  POST /__coder-ui/api/workspace-volumes/<id>/restore/inspect  {key, mode, name} (S3), or PUT a file's first bytes
+                                                           (?mode=&name=): what the backup holds, the quota's answer
+  PUT  /__coder-ui/api/workspace-volumes/<id>/restore      ?mode=new|replace&name=: a backup file (the body), restored
+  POST /__coder-ui/api/workspace-volumes/<id>/restore      {key, mode, name}: that S3 backup, restored
 
 Backups: a Job mounts the home volume read-only (beside the running workspace: the volume is ReadWriteOnce, and pods
 on its node share it) and streams a .tar.gz of it to the service, which writes it to S3 (Images > Settings) or keeps
@@ -18,9 +23,21 @@ one that does not (local-path, hostPath) the workspace is stopped, its home copi
 the old one's name, and started again. The template ignores the volume's size afterwards (lifecycle ignore_changes),
 so a later build never shrinks it back.
 
-The Jobs run this file: `python3 workspacevolumes.py archive SRC URL` (a .tar.gz of SRC, PUT to URL, chunked).
+Each backup starts with what it was taken from (.coder-backup.json: the workspace, its template and parameters - CPU,
+memory, disk), a gzip member of its own ahead of the home's: its first few KB say it, so a restore reads it (a range
+of the S3 object, the first bytes of a file being uploaded) and asks the user quota (Health > User Quota) before
+anything is downloaded or created. A restore makes a new workspace from it (the template and parameters it names; a
+backup from before had none: this workspace's), or replaces this workspace's home. The backup is read to its end
+first - a damaged or cut-off file, or one with an entry outside the home, is refused before anything changes; the
+workspace is stopped, a Job (as root, so every owner and mode comes back) empties its home volume and unpacks the
+backup into it, and the workspace starts.
+
+The Jobs run this file: `python3 workspacevolumes.py archive SRC URL` (a .tar.gz of SRC, PUT to URL, chunked) and
+`python3 workspacevolumes.py restore DST URL` (DST emptied, then the .tar.gz at URL unpacked into it).
 """
 import datetime
+import gzip
+import io
 import http.client
 import json
 import os
@@ -30,10 +47,13 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import urllib.parse
 import urllib.request
+import zlib
+import xml.etree.ElementTree as ET
 
 import imagebuilder as ib
 
@@ -44,7 +64,12 @@ KEEP_DOWNLOADS = int(os.environ.get("WORKSPACE_BACKUP_KEEP_HOURS", "24")) * 3600
 MAX_DISK_GB = int(os.environ.get("WORKSPACE_DISK_MAX_GB", "2000"))   # sizes are decimal GB (10^9 bytes)
 ICON_RE = re.compile(r"^(/[A-Za-z0-9_./%+-]{1,500}|https://[^\s\"'<>]{1,500})$")
 
+META_NAME = ".coder-backup.json"   # the backup's first entry: what it was taken from
+HEAD_BYTES = 256 * 1024           # enough to hold it
+NAME_RE = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,30}[a-zA-Z0-9])?$")   # Coder's workspace names
+
 LOG = HTTP_JSON = KUBE = None
+QUOTA_CHECK = None   # ui-service's quota_check(token, user, body): {"allowed", "message", ...}
 STORE = None
 OPS = {}           # workspace id -> the running backup / disk operation (one at a time per workspace)
 OPS_LOCK = threading.Lock()
@@ -72,6 +97,8 @@ class Store:
                     key TEXT, token TEXT, from_gi INTEGER, to_gi INTEGER, mode TEXT, by TEXT, created_at TEXT,
                     finished_at TEXT, label TEXT);
             """)
+            if "meta" not in [r[1] for r in db.execute("PRAGMA table_info(ops)")]:
+                db.execute("ALTER TABLE ops ADD COLUMN meta TEXT")
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -124,6 +151,7 @@ def public(op):
     out = {k: op.get(k) for k in ("id", "kind", "target", "status", "message", "error", "bytes", "bucket", "key",
                                   "mode", "by", "created_at", "finished_at")}
     out["fromGB"], out["toGB"] = op.get("from_gi"), op.get("to_gi")   # (columns named before sizes were GB)
+    out["label"] = op.get("label")
     out["downloadable"] = bool(op.get("path") and op.get("status") == "done" and os.path.exists(op["path"]))
     return out
 
@@ -299,14 +327,56 @@ def start_backup(token, ws, target, user):
         raise ValueError("This workspace has no home volume.")
     with OPS_LOCK:
         if wid in OPS:
-            raise ValueError("Another backup or disk change of this workspace is running.")
+            raise ValueError("Another backup, restore or disk change of this workspace is running.")
         tok = secrets.token_urlsafe(32)
         op_id = STORE.new_op(wid, "backup", user, target=target, token=tok, message="Starting the copy",
-                             label="%s/%s" % (ws["owner_name"], ws["name"]))
+                             label="%s/%s" % (ws["owner_name"], ws["name"]), meta=json.dumps(backup_meta(token, ws)))
         OPS[wid] = op_id
     threading.Thread(target=run_backup, args=(ws, op_id, tok), daemon=True).start()
     LOG(event="workspace-backup", workspace=ws["name"], owner=ws["owner_name"], target=target, by=user)
     return op_id
+
+
+def build_parameters(token, ws):
+    build_id = (ws.get("latest_build") or {}).get("id")
+    status, params = coder(token, "GET", "/api/v2/workspacebuilds/%s/parameters" % build_id) if build_id else (0, None)
+    return [{"name": p.get("name"), "value": p.get("value")} for p in params if isinstance(p, dict)] \
+        if status == 200 and isinstance(params, list) else []
+
+
+def backup_meta(token, ws):
+    """What a backup is taken from: a restore makes a workspace like it, and asks the quota first."""
+    b = ws.get("latest_build") or {}
+    info = volume_info(ws["id"]) or {}
+    return {"version": 1, "workspace": ws.get("name"), "owner": ws.get("owner_name"),
+            "template": {"id": ws.get("template_id"), "name": ws.get("template_name"),
+                         "displayName": ws.get("template_display_name") or ws.get("template_name")},
+            "templateVersionId": b.get("template_version_id"), "parameters": build_parameters(token, ws),
+            "homeGB": info.get("sizeGB"), "takenAt": now()}
+
+
+def meta_member(meta):
+    """The backup's first gzip member: a tar entry ./.coder-backup.json (no end marker - the home's entries follow,
+    in a member of their own; gzip and tar read the two as one)."""
+    data = json.dumps(meta, indent=1).encode()
+    info = tarfile.TarInfo("./" + META_NAME)
+    info.size, info.mode, info.mtime, info.uid, info.gid = len(data), 0o600, int(time.time()), 1000, 1000
+    return gzip.compress(info.tobuf(format=tarfile.GNU_FORMAT) + data + b"\0" * (-len(data) % 512))
+
+
+def read_meta(head):
+    """A backup's .coder-backup.json, from its first bytes; None for a backup without one (from before)."""
+    try:
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        raw = d.decompress(head, 64 * 1024)
+        with tarfile.open(fileobj=io.BytesIO(raw + b"\0" * 1024), mode="r:") as tf:
+            m = tf.next()
+            if m is None or m.name.removeprefix("./") != META_NAME or not m.isfile() or m.size > 60 * 1024:
+                return None
+            meta = json.loads(tf.extractfile(m).read())
+        return meta if isinstance(meta, dict) else None
+    except (zlib.error, tarfile.TarError, ValueError, OSError, EOFError):
+        return None
 
 
 def run_backup(ws, op_id, tok):
@@ -378,6 +448,13 @@ def receive_archive(h, op):
 
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     total = 0
+    meta = json.loads(op.get("meta") or "null")
+
+    def with_meta():
+        if meta:
+            yield meta_member(meta)
+        yield from chunks()
+
     try:
         if op["target"] == "s3":
             cfg = ib.s3_settings(True)
@@ -385,7 +462,7 @@ def receive_archive(h, op):
             key = "%sworkspaces/%s/%s.tar.gz" % (cfg.get("prefix") or "", label, stamp)
             up = ib.S3Upload(cfg, key)
             try:
-                for d in chunks():
+                for d in with_meta():
                     up.write(d)
                     total += len(d)
                     if total % (256 * 1024 * 1024) < len(d):
@@ -401,7 +478,7 @@ def receive_archive(h, op):
             os.makedirs(folder, exist_ok=True)
             path = os.path.join(folder, "%d-%s.tar.gz" % (op["id"], stamp))
             with open(path + ".part", "wb") as f:
-                for d in chunks():
+                for d in with_meta():
                     f.write(d)
                     total += len(d)
                     if total % (256 * 1024 * 1024) < len(d):
@@ -442,7 +519,7 @@ def start_expand(token, ws, size, user):
     mode = "online" if info["expandable"] else "copy"
     with OPS_LOCK:
         if wid in OPS:
-            raise ValueError("Another backup or disk change of this workspace is running.")
+            raise ValueError("Another backup, restore or disk change of this workspace is running.")
         op_id = STORE.new_op(wid, "disk", user, from_gi=info["sizeGB"], to_gi=size, mode=mode,
                              message="Starting")
         OPS[wid] = op_id
@@ -581,14 +658,305 @@ def expand_by_copy(token, ws, op_id, info, size):
         build(token, workspace(token, ws["id"]), "start")
 
 
+# --------------------------------------------------------------------------- restores
+def s3_ready(cfg):
+    return bool(cfg.get("bucket") and cfg.get("accessKey") and cfg.get("secretKey") and cfg.get("region"))
+
+
+def s3_prefix(cfg, owner):
+    """Where the backups of `owner`'s workspaces are (receive_archive's key: <prefix>workspaces/<owner>/<name>/)."""
+    return "%sworkspaces/%s/" % (cfg.get("prefix") or "", re.sub(r"[^A-Za-z0-9_./-]", "-", owner))
+
+
+def s3_backups(ws):
+    """The S3 backups a restore for `ws` may use - its owner's workspaces' - newest first; None without S3."""
+    cfg = ib.s3_settings(True)
+    if not s3_ready(cfg):
+        return None
+    prefix = s3_prefix(cfg, ws["owner_name"])
+    _, _, body = ib.s3_request(cfg, "GET", "", "list-type=2&prefix=" + urllib.parse.quote(prefix, safe="-_.~"))
+    out = []
+    for c in ET.fromstring(body).iter():
+        if not c.tag.endswith("Contents"):
+            continue
+        f = {e.tag.rsplit("}", 1)[-1]: e.text for e in c}
+        key = f.get("Key") or ""
+        if key.endswith(".tar.gz"):
+            out.append({"key": key, "workspace": key[len(prefix):].split("/")[0], "bytes": int(f.get("Size") or 0),
+                        "modified": f.get("LastModified")})
+    return sorted(out, key=lambda x: x["modified"] or "", reverse=True)
+
+
+def s3_key_ok(ws, key):
+    cfg = ib.s3_settings(True)
+    if not s3_ready(cfg):
+        raise ValueError("S3 is not set up (Templates > Images > Settings).")
+    if not (isinstance(key, str) and key.startswith(s3_prefix(cfg, ws["owner_name"])) and key.endswith(".tar.gz")
+            and ".." not in key.split("/")):
+        raise ValueError("Only a backup of %s's workspaces can be restored here." % ws["owner_name"])
+    return cfg
+
+
+def s3_head(cfg, key):
+    """The first bytes of an S3 backup (a range: the rest is not downloaded)."""
+    with ib.s3_open(cfg, "GET", key, headers={"Range": "bytes=0-%d" % (HEAD_BYTES - 1)}) as r:
+        return r.read(HEAD_BYTES)
+
+
+def restore_plan(token, user, ws, meta, mode, name):
+    """What a restore would do, and the quota's answer - before anything is downloaded or created.
+    mode new: a workspace `name` from the backup's template and parameters (a backup without them: this workspace's);
+    mode replace: this workspace's home replaced (its template and parameters kept: the quota is not changed)."""
+    if mode not in ("new", "replace"):
+        raise ValueError("A restore makes a new workspace or replaces this one's home.")
+    source = "backup" if meta and (meta.get("template") or {}).get("id") else "this workspace"
+    template_id = (meta.get("template") or {}).get("id") if source == "backup" else ws.get("template_id")
+    params = meta.get("parameters") if source == "backup" else build_parameters(token, ws)
+    plan = {"mode": mode, "meta": meta, "source": source, "templateId": template_id, "parameters": params or []}
+    if mode == "replace":
+        plan["quota"] = {"allowed": True, "message": "This workspace keeps its template and parameters: the quota "
+                                                     "does not change."}
+        return plan
+    if not NAME_RE.match(name or ""):
+        raise ValueError("A workspace name: letters, digits and dashes, up to 32, not starting or ending with a dash.")
+    status, _ = coder(token, "GET", "/api/v2/users/%s/workspace/%s" % (urllib.parse.quote(ws["owner_name"]),
+                                                                       urllib.parse.quote(name)))
+    if status == 200:
+        raise ValueError("%s already has a workspace named %s." % (ws["owner_name"], name))
+    st, t = coder(token, "GET", "/api/v2/templates/%s" % template_id) if template_id else (0, None)
+    if st != 200 or not isinstance(t, dict):
+        raise ValueError("The backup's template (%s) is not here any more: restore it into this workspace instead." %
+                         ((meta or {}).get("template") or {}).get("displayName", "unknown"))
+    plan["template"] = {"id": t["id"], "name": t.get("display_name") or t.get("name"), "activeVersionId": t.get(
+        "active_version_id")}
+    # only the parameters the template's current version still has (a newer one may have dropped some)
+    st, rich = coder(token, "GET", "/api/v2/templateversions/%s/rich-parameters" % t.get("active_version_id"))
+    names = {p.get("name") for p in rich} if st == 200 and isinstance(rich, list) else set()
+    plan["parameters"] = [p for p in plan["parameters"] if p.get("name") in names]
+    plan["quota"] = QUOTA_CHECK(token, user, {"owner": ws["owner_name"], "template_id": t["id"],
+                                              "rich_parameter_values": plan["parameters"]}) if QUOTA_CHECK else \
+        {"allowed": True, "message": "no quota service"}
+    return plan
+
+
+def restore_path(op_id):
+    folder = os.path.join(ib.FILES, "workspace-restores")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, "%d.tar.gz" % op_id)
+
+
+def check_archive(path):
+    """A home backup: a gzip'd tar, read to its end (a damaged or cut-off file fails here, before anything is
+    replaced), every entry inside the home (no absolute path, no ..). How many entries it has."""
+    n = 0
+    try:
+        with tarfile.open(path, "r:gz") as tf:
+            for m in tf:
+                parts = m.name.split("/")
+                if m.name.startswith("/") or ".." in parts or (m.islnk() and (
+                        m.linkname.startswith("/") or ".." in m.linkname.split("/"))):
+                    raise ValueError("It has an entry outside the home: %s" % m.name[:200])
+                n += m.name.removeprefix("./") != META_NAME
+        with gzip.open(path, "rb") as g:   # every gzip member to its end (their checksums), past tar's end marker
+            while g.read(1024 * 1024):
+                pass
+    except (tarfile.TarError, OSError, EOFError) as e:
+        raise ValueError("Not a home backup (.tar.gz): %s" % e)
+    if n == 0:
+        raise ValueError("The backup is empty.")
+    return n
+
+
+class Refused(Exception):
+    """The quota (or the plan) refuses the restore: nothing was created or changed."""
+
+
+def receive_upload(h, path, on_head):
+    """A backup file the browser sends (the PUT's body), to `path`; on_head(first bytes) is asked before the rest is
+    taken (it raises to refuse). Its size."""
+    left = int(h.headers.get("Content-Length") or 0)
+    if left <= 0:
+        raise ValueError("No file was sent.")
+    total, head, asked = 0, b"", False
+    try:
+        with open(path + ".part", "wb") as f:
+            while left > 0:
+                d = h.rfile.read(min(1024 * 1024, left))
+                if not d:
+                    raise ValueError("The upload ended early.")
+                left -= len(d)
+                total += len(d)
+                if not asked:
+                    head += d
+                    if len(head) >= HEAD_BYTES or left == 0:
+                        on_head(head)
+                        asked = True
+                f.write(d)
+        os.replace(path + ".part", path)
+    except BaseException:
+        try:
+            os.remove(path + ".part")
+        except OSError:
+            pass
+        raise
+    return total
+
+
+def fetch_s3(cfg, key, path):
+    total = 0
+    with ib.s3_open(cfg, "GET", key) as r, open(path + ".part", "wb") as f:
+        while True:
+            d = r.read(1024 * 1024)
+            if not d:
+                break
+            f.write(d)
+            total += len(d)
+    os.replace(path + ".part", path)
+    return total
+
+
+def start_restore(token, ws, user, mode, name, h=None, key=None):
+    """From the file in the PUT `h` or the S3 backup `key`: the quota asked first (from the backup's first bytes),
+    then checked and restored in the background."""
+    wid = ws["id"]
+    if mode == "replace" and not get_pvc(pvc_name(wid)):
+        raise ValueError("This workspace has no home volume.")
+    cfg = s3_key_ok(ws, key) if key is not None else None
+    plan = None
+    if cfg:   # S3: the plan (and the quota) from a range of the object, before it is downloaded
+        plan = restore_plan(token, user, ws, read_meta(s3_head(cfg, key)), mode, name)
+        if not plan["quota"].get("allowed"):
+            raise Refused(plan["quota"].get("message") or "Over your quota.")
+    with OPS_LOCK:
+        if wid in OPS:
+            raise ValueError("Another backup, restore or disk change of this workspace is running.")
+        op_id = STORE.new_op(wid, "restore", user["username"], target="s3" if key else "upload", key=key, mode=mode,
+                             message="Fetching the backup from S3" if key else "Receiving the backup",
+                             label="%s/%s" % (ws["owner_name"], name if mode == "new" else ws["name"]))
+        OPS[wid] = op_id
+    path = restore_path(op_id)
+    try:
+        if h is not None:
+            def on_head(head):   # an upload: the plan from its first bytes, before the rest is taken
+                nonlocal plan
+                plan = restore_plan(token, user, ws, read_meta(head), mode, name)
+                if not plan["quota"].get("allowed"):
+                    raise Refused(plan["quota"].get("message") or "Over your quota.")
+            STORE.update(op_id, bytes=receive_upload(h, path, on_head))
+    except Exception as e:
+        STORE.update(op_id, status="failed", error=str(e)[:1000], finished_at=now())
+        with OPS_LOCK:
+            OPS.pop(wid, None)
+        if isinstance(e, (Refused, ValueError)):
+            raise
+        raise ValueError("The upload failed: %s" % e)
+    STORE.update(op_id, meta=json.dumps(plan["meta"]) if plan["meta"] else None)
+    threading.Thread(target=run_restore, args=(token, ws, op_id, path, cfg, key, plan, name), daemon=True).start()
+    LOG(event="workspace-restore", workspace=ws["name"], owner=ws["owner_name"], source="s3" if key else "upload",
+        mode=mode, name=name, by=user["username"])
+    return op_id
+
+
+def restore_job(op_id, wid, url):
+    return job_body("coder-home-restore-%d" % op_id, op_id, [tools_container(
+        "restore", ["python3", "/app/workspacevolumes.py", "restore", "/home/coder", url],
+        [{"name": "home", "mountPath": "/home/coder"}], root=True)],
+        [{"name": "home", "persistentVolumeClaim": {"claimName": pvc_name(wid)}}], root=True)
+
+
+def wait_build(token, build_id, what):
+    deadline = time.time() + 1800
+    while time.time() < deadline:
+        time.sleep(3)
+        _, cur = coder(token, "GET", "/api/v2/workspacebuilds/" + build_id)
+        job = (cur or {}).get("job") or {}
+        if job.get("status") == "succeeded":
+            return
+        if job.get("status") in ("failed", "canceled"):
+            raise RuntimeError("%s failed: %s" % (what, job.get("error") or job.get("status")))
+    raise RuntimeError("%s did not finish in 30 minutes." % what)
+
+
+def create_workspace(token, ws, plan, name):
+    """The new workspace, as the backup's: its template (active version) and parameters. Coder asks the quota again."""
+    status, new = coder(token, "POST", "/api/v2/users/%s/workspaces" % urllib.parse.quote(ws["owner_name"]), {
+        "name": name, "template_id": plan["template"]["id"], "rich_parameter_values": plan["parameters"]}, timeout=60)
+    if status not in (200, 201) or not isinstance(new, dict):
+        raise RuntimeError("Coder did not create %s: %s" % (name, (new or {}).get("message") or status))
+    wait_build(token, new["latest_build"]["id"], "Creating %s" % name)
+    return workspace(token, new["id"])
+
+
+def run_restore(token, ws, op_id, path, cfg, key, plan, name):
+    target = ws
+    try:
+        if key:
+            STORE.update(op_id, bytes=fetch_s3(cfg, key, path))
+        STORE.update(op_id, message="Checking the backup")
+        entries = check_archive(path)
+        if plan["mode"] == "new":
+            STORE.update(op_id, message="Creating the workspace %s" % name)
+            target = create_workspace(token, ws, plan, name)
+        fresh = workspace(token, target["id"])
+        if is_running(fresh):
+            STORE.update(op_id, message="Stopping %s" % target["name"])
+            build(token, fresh, "stop")
+        wait_no_pods(target["id"])
+        if not get_pvc(pvc_name(target["id"])):
+            raise RuntimeError("%s has no home volume." % target["name"])
+        tok = secrets.token_urlsafe(32)
+        STORE.update(op_id, token=tok, path=path, message="Restoring the home (%d files and folders)" % entries)
+        err = run_job(restore_job(op_id, target["id"], "%s%s/internal/volumes/%s/restore" % (ib.SERVICE_URL, BASE,
+                                                                                          tok)))
+        STORE.update(op_id, token=None)
+        if err:
+            raise RuntimeError("The restore did not finish (%s stays stopped): %s" % (target["name"], err))
+        STORE.update(op_id, message="Starting %s" % target["name"])
+        build(token, workspace(token, target["id"]), "start")
+        STORE.update(op_id, status="done", finished_at=now(),
+                     message="Restored into %s (%d files and folders); it is starting" % (target["name"], entries))
+    except Exception as e:  # noqa: BLE001
+        STORE.update(op_id, status="failed", token=None, error=str(e)[:1500], finished_at=now())
+        LOG(event="workspace-restore-failed", workspace=target.get("name"), error=str(e)[:300])
+    finally:
+        for p in (path, path + ".part"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        STORE.update(op_id, path=None)
+        with OPS_LOCK:
+            OPS.pop(ws["id"], None)
+
+
+def send_restore(h, op):
+    """The Job's GET: the backup being restored."""
+    path = op.get("path")
+    if not path or not os.path.exists(path):
+        h.send(404, "not found\n")
+        return
+    h.send_response(200)
+    h.send_header("Content-Type", "application/gzip")
+    h.send_header("Content-Length", str(os.path.getsize(path)))
+    h.send_header("Connection", "close")
+    h.end_headers()
+    h.close_connection = True
+    with open(path, "rb") as f:
+        shutil.copyfileobj(f, h.wfile, 1024 * 1024)
+
+
 # --------------------------------------------------------------------------- HTTP
 def handle_internal(h, method, path):
-    m = re.match(r"^%s/internal/volumes/([A-Za-z0-9_-]{20,})/archive$" % BASE, path)
+    m = re.match(r"^%s/internal/volumes/([A-Za-z0-9_-]{20,})/(archive|restore)$" % BASE, path)
     if not m or not STORE:
         return False
     op = STORE.op(token=m.group(1))
-    if not op or op["status"] != "running" or method != "PUT":
+    want = {"archive": ("backup", "PUT"), "restore": ("restore", "GET")}[m.group(2)]
+    if not op or op["status"] != "running" or (op["kind"], method) != want:
         h.send(404, "not found\n")
+        return True
+    if op["kind"] == "restore":
+        send_restore(h, op)   # the token stays until the Job ends (it may be retried)
         return True
     STORE.update(op["id"], token=None)   # one upload per token
     receive_archive(h, op)
@@ -602,7 +970,10 @@ def handle(h, method, path, query):
     if not STORE:
         h.send_json(404, {"error": "Workspace volumes need the image builder's volume (imageBuilder.enabled)."})
         return True
-    if method == "POST" and not h.csrf_ok():
+    # a backup file (or its first bytes) is the body, not JSON: the uploads' check for those
+    binary = method == "PUT" or (method == "POST" and not (h.headers.get("Content-Type") or "").startswith(
+        "application/json"))
+    if method in ("POST", "PUT") and not (ib.upload_csrf_ok(h) if binary else h.csrf_ok()):
         h.send_json(403, {"error": "Request rejected (cross-site protection)."})
         return True
     user, err = h.user()
@@ -610,7 +981,7 @@ def handle(h, method, path, query):
         return True
     token = h.token()
     try:
-        return route(h, method, path, user, token)
+        return route(h, method, path, user, token, query)
     except LookupError as e:
         h.send_json(404, {"error": str(e)})
     except PermissionError:
@@ -628,7 +999,7 @@ def read_json(h):
     return data
 
 
-def route(h, method, path, user, token):
+def route(h, method, path, user, token, query=""):
     if path == BASE + "/api/workspace-icons" and method == "GET":
         return h.send_json(200, {"icons": STORE.icons()}) or True
     m = re.match(r"^%s/api/workspace-icons/([0-9a-f-]{36})$" % BASE, path)
@@ -657,11 +1028,35 @@ def route(h, method, path, user, token):
             "busy": ws["id"] in OPS,
             "backups": [public(o) for o in STORE.ops(ws["id"], "backup")],
             "disk": [public(o) for o in STORE.ops(ws["id"], "disk", 1)],
+            "restores": [public(o) for o in STORE.ops(ws["id"], "restore", 3)],
             "s3": bool(s3.get("bucket") and s3.get("accessKey") and s3.get("secretKey")),
             "keepHours": KEEP_DOWNLOADS // 3600, "maxGB": MAX_DISK_GB}) or True
     if sub == "/backup" and method == "POST":
         op_id = start_backup(token, ws, str(read_json(h).get("target") or ""), user["username"])
         return h.send_json(200, {"backup": op_id}) or True
+    if sub == "/restore" and method == "GET":
+        return h.send_json(200, {"s3": s3_backups(ws)}) or True
+    if sub == "/restore/inspect" and method in ("POST", "PUT"):
+        if method == "POST":
+            body = read_json(h)
+            head = s3_head(s3_key_ok(ws, body.get("key")), body.get("key"))
+        else:   # a file's first bytes
+            q = urllib.parse.parse_qs(query)
+            body = {"mode": (q.get("mode") or [""])[0], "name": (q.get("name") or [""])[0]}
+            head = h.rfile.read(min(int(h.headers.get("Content-Length") or 0), HEAD_BYTES))
+        plan = restore_plan(token, user, ws, read_meta(head), str(body.get("mode") or "new"), str(body.get("name") or ""))
+        return h.send_json(200, {k: plan.get(k) for k in ("mode", "meta", "source", "template", "quota")}) or True
+    if sub == "/restore" and method in ("PUT", "POST"):
+        q = urllib.parse.parse_qs(query)
+        body = {"mode": (q.get("mode") or ["new"])[0], "name": (q.get("name") or [""])[0]} if method == "PUT" \
+            else read_json(h)
+        try:
+            op_id = start_restore(token, ws, user, str(body.get("mode") or "new"), str(body.get("name") or ""),
+                                  h=h if method == "PUT" else None, key=body.get("key") if method == "POST" else None)
+        except Refused as e:
+            h.close_connection = True   # the rest of an upload is not read
+            return h.send_json(403, {"error": str(e), "quota": True}) or True
+        return h.send_json(200, {"restore": op_id}) or True
     if sub == "/expand" and method == "POST":
         size = read_json(h).get("size")
         op_id = start_expand(token, ws, int(size) if isinstance(size, (int, float)) else None, user["username"])
@@ -720,8 +1115,29 @@ def archive(src, url):
     print("sent:", out)
 
 
+def restore(dst, url):
+    """DST emptied (the home's own folder kept: its owner and mode), then the .tar.gz at URL unpacked into it, every
+    owner and mode as in the backup."""
+    for name in os.listdir(dst):
+        p = os.path.join(dst, name)
+        if os.path.isdir(p) and not os.path.islink(p):
+            shutil.rmtree(p)
+        else:
+            os.remove(p)
+    tar = subprocess.Popen(["tar", "-xzpf", "-", "--numeric-owner", "--exclude=./" + META_NAME, "-C", dst],
+                           stdin=subprocess.PIPE)
+    with urllib.request.urlopen(url, timeout=600) as r:
+        shutil.copyfileobj(r, tar.stdin, 1024 * 1024)
+    tar.stdin.close()
+    if tar.wait() != 0:
+        sys.exit("tar failed (%d)" % tar.returncode)
+    print("restored:", sum(len(f) + len(d) for _, d, f in os.walk(dst)), "files and folders")
+
+
 if __name__ == "__main__":
     if sys.argv[1:2] == ["archive"]:
         archive(sys.argv[2], sys.argv[3])
+    elif sys.argv[1:2] == ["restore"]:
+        restore(sys.argv[2], sys.argv[3])
     else:
         sys.exit(__doc__)

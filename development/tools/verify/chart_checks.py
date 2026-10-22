@@ -457,9 +457,9 @@ def template_checks(B, chart, default_render):
     named = sorted(set(w.lower() for w in re.findall(
         r"nifi|airflow|dataflow|ghostty|terminal_app|opencode|unsloth|context_length|coder-models|lmstudio|LM Studio|"
         r"obsidian|app_set", shared, re.I)))
-    check("DEFAULT (main.tf + shared scripts): only Desktop, File Browser, code-server, the web terminal and Ports; no "
+    check("DEFAULT (main.tf + shared scripts): only Desktop, Chromium, File Browser, code-server, the web terminal and Ports; no "
           "other template's app named (NiFi, Airflow, Ghostty, OpenCode...)",
-          sorted(apps) == ["code-server", "filebrowser", "novnc"] and display
+          sorted(apps) == ["chromium", "code-server", "filebrowser", "novnc"] and display
           and "web_terminal = var.terminal" in display.group(1) and "vscode       = false" in display.group(1)
           and "ssh_helper   = false" in display.group(1) and "port_forwarding_helper" not in display.group(1)
           and not named, {"apps": apps, "named": named})
