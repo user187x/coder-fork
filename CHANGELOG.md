@@ -2,7 +2,7 @@
 
 ## 1.46.0 – unreleased
 
-Coder `2.0.0-platform.108` (fork `7984216b5`).
+Coder `2.0.0-platform.108` (fork `7e349ac79`).
 
 * **platform.108:**
   * **The workspace grid.** Lock the Controls menu's Workspaces list open (hold through the ring, or double-click):
@@ -40,7 +40,9 @@ Coder `2.0.0-platform.108` (fork `7984216b5`).
       figures under it;
     * the readings are its agent's (the page's Workspace group), a new bar about every 10 s away from its page; a
       workspace that is not running shows a dash.
-  * **Toasts** show in the bottom left corner, clear of the chat bar, and smaller (288px wide, smaller text).
+  * **Toasts** show in the bottom left corner, clear of the chat bar, and smaller (288px wide, smaller text), 12px
+    above whatever bars run along the bottom (the deployment's bar, the classification bar), measured as the chat
+    dock measures them.
   * **The announcement terminal** (the banner's arrow):
     * its title bar says "Broadcast Announcement", centred, without the red, yellow and green window buttons or the
       file name;
@@ -62,6 +64,9 @@ Coder `2.0.0-platform.108` (fork `7984216b5`).
       btop wrapper in `~/.local/bin`) answers for the home with the volume's size and the home's use, as the Disk
       metric measures them (`metadata.sh` writes them to `/tmp/coder-home-disk`). On a real volume (EBS...) there is
       no such file and nothing changes. Only btop's own process loads it.
+    * The startup script keeps that file fresh itself too, every minute (the Disk metric's own measurement): an agent
+      without its metadata (a DATAFLOW workspace on the dev cluster, after the database lost its rows) had none, so
+      its btop still read the node's disk.
 * **platform.107:**
   * **The attached chat** runs up to the classification bar (the window's top without one). The navbar narrows
     beside it like the page, its items sizing to what is left. On a wide screen only: below 1024px the panel lies

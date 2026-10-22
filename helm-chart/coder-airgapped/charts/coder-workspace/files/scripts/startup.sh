@@ -348,6 +348,16 @@ if [ -n "$btop_bin" ] && command -v gcc >/dev/null; then
  else
   rm -f "$statfs_dir/home-statfs.c.new"
  fi
+ # The home's size and use for the library, kept fresh here too (each minute, quietly): the Disk metric writes them
+ # as it measures, but an agent can be without its metadata (a lost database row) - btop is right all the same.
+ echo '${platform_metadata}' | base64 -d >"$statfs_dir/metadata.sh"
+ (
+  while :; do
+   nice -n 19 bash -c "$(cat "$statfs_dir/metadata.sh")
+disk" >/dev/null 2>&1
+   sleep 60
+  done
+ ) </dev/null >/dev/null 2>&1 &
  printf '%s\n' '#!/bin/sh' '# btop answering for the home volume, not the whole node disk (startup.sh: home-statfs)' \
   'so="$HOME/.cache/coder/home-statfs.so"' \
   '[ -r "$so" ] && export LD_PRELOAD="$so$${LD_PRELOAD:+:$LD_PRELOAD}"' \
