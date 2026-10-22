@@ -272,12 +272,14 @@ spec:
   ports:
     - {name: http, port: 80, protocol: TCP, targetPort: http}
 ---
-# /__coder-ui/ goes to the service; Coder's entry chunk and HTML pages are routed to Coder explicitly so this route
+# coder-enhanced: the platform's one route beside Coder's own. /__coder-ui/ goes to the service, and so does /__icons/
+# (the workspace template's icons, from coder-workspace's ConfigMap: that chart's own route is off here,
+# coder-workspace.icons.httpRoute); Coder's entry chunk and HTML pages are routed to Coder explicitly so this route
 # (more specific than Coder's own) owns them (native mode: the platform image renders the add-ons itself).
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: coder-ui-updates
+  name: coder-enhanced
   namespace: {{ $ns }}
   labels:
     {{- include "ca.uiLabels" . | nindent 4 }}
@@ -292,6 +294,7 @@ spec:
   rules:
     - matches:
         - path: {type: PathPrefix, value: /__coder-ui/}
+        - path: {type: PathPrefix, value: /__icons/}
       backendRefs:
         - {group: "", kind: Service, name: coder-ui-updates, port: 80, weight: 1}
     - matches:

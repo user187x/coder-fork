@@ -70,6 +70,9 @@ agentAudit: false
 # Custom app icons (files/icons/*), served at https://<host>/__icons/<file> (templates/icons.yaml)
 icons:
   host: ""            # default: coder.url without https://
+  # This chart's own HTTPRoute for /__icons/ (to icons.backend). Off in coder-airgapped: its platform route,
+  # coder-enhanced, carries /__icons/ with /__coder-ui/.
+  httpRoute: true
   # The Service that serves files/icons/ (mounted from the ConfigMap below) at /__icons/<file>. In coder-airgapped
   # that is the platform service, coder-ui-updates.
   backend:

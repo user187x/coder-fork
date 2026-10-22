@@ -4,6 +4,10 @@
 
 Coder `2.0.0-platform.108` (fork `7e349ac79`).
 
+* **One platform route, `coder-enhanced`:** the platform service's HTTPRoute (was `coder-ui-updates`) now also carries
+  `/__icons/`, the workspace template's icons, so coder-workspace's own `coder-workspace-icons` route is gone (its
+  new `icons.httpRoute`, on by default for the chart alone, is off in coder-airgapped). Routes beside Coder's own:
+  `coder-enhanced` only. A static check keeps it so (157).
 * **platform.108:**
   * **The workspace grid.** Lock the Controls menu's Workspaces list open (hold through the ring, or double-click):
     * a workspace's row then ticks it (its arrow, at the row's end, still opens its page), with Select all / Clear;

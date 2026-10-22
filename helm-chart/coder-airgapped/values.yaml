@@ -649,7 +649,9 @@ coder-workspace:
 
   icons:
     host: ""
-    # Served by the platform service (coder-ui-updates); Traefik routes /__icons/ there. No separate web server.
+    # Served by the platform service (coder-ui-updates); Traefik routes /__icons/ there - on the platform's own route,
+    # coder-enhanced (templates/ui-updates.yaml), not one of this chart's. No separate web server.
+    httpRoute: false
     backend:
       name: coder-ui-updates
       port: 80

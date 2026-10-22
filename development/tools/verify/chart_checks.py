@@ -374,6 +374,14 @@ def icon_checks(chart, default_render):
     every /__icons/ reference a file there, the ConfigMap well under Kubernetes' 1 MiB (it is mounted optional: one
     that fails to apply leaves every icon a 404)."""
     import ast, base64, yaml
+    # One platform route beside Coder's: coder-enhanced carries /__coder-ui/ and /__icons/ to the platform service
+    # (coder-workspace's own icons route off); no coder-ui-updates or coder-workspace-icons route.
+    routes = {d["metadata"]["name"]: d for d in yaml.safe_load_all(default_render) if d and d.get("kind") == "HTTPRoute"}
+    enhanced = [(m.get("path") or {}).get("value") for r in routes.get("coder-enhanced", {}).get("spec", {}).get("rules", [])
+                for m in r.get("matches", []) if any(b.get("name") == "coder-ui-updates" for b in r.get("backendRefs", []))]
+    check("routes: coder-enhanced, one route, sends /__coder-ui/ and /__icons/ to the platform service (and no other "
+          "platform route)", {"/__coder-ui/", "/__icons/"} <= set(enhanced)
+          and not ({"coder-ui-updates", "coder-workspace-icons"} & set(routes)), {"routes": sorted(routes), "to the service": enhanced})
     icons = os.path.join(chart, "charts", "coder-workspace", "files", "icons")
     files = sorted(os.listdir(icons))
     cms = [d for d in yaml.safe_load_all(default_render) if d and d.get("kind") == "ConfigMap"
