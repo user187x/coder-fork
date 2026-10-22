@@ -2,7 +2,7 @@
 
 ## 1.46.0 – unreleased
 
-Coder `2.0.0-platform.108` (fork `9cdab4358`).
+Coder `2.0.0-platform.108` (fork `7984216b5`).
 
 * **platform.108:**
   * **The workspace grid.** Lock the Controls menu's Workspaces list open (hold through the ring, or double-click):
@@ -24,6 +24,9 @@ Coder `2.0.0-platform.108` (fork `9cdab4358`).
     colours clear of green (DATAFLOW sky blue).
   * **The Workspaces list's template pills line up** in one column: every name is as wide as the widest (up to
     120px, cut short beyond and whole on hover).
+  * **The quick access wheel:** each petal lights in its own colour when pointed at, focused or chosen (emerald
+    first, then sky, violet, amber...; neighbours never alike), the hub's icon too; with nothing pointed at, the hub
+    shows a hamburger instead of the compass.
   * **The Controls menu**, Settings down to the Network graph, sits in one rounded, bordered box under the
     Workspaces row (the separator above it is gone).
   * **The locked Workspaces list** lets go of a press elsewhere in the menu when the press ends. Sliding shut at once,
