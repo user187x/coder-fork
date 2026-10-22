@@ -2,8 +2,11 @@
 
 ## 1.46.0 – unreleased
 
-Coder `2.0.0-platform.108` (fork `7e349ac79`).
+Coder `2.0.0-platform.108` (fork `517028e87`).
 
+* **A workspace being deleted shines in the Workspaces table:** a soft band sweeps across its row, left to right
+  every 1.2 s, over a faint tint of the theme's destructive colour, until it is gone (still with animations off). The
+  table asks again every 10 s when no build is active (was 30), so a delete started elsewhere shows too.
 * **Deleting a workspace with code-server HA no longer hangs for two minutes** on "Still destroying" its home volume.
   The code-server-replicator's instance pod mounts that volume, and was only removed after a stopped workspace's wait
   (two leases) plus the pod's 30 s to end. Now a workspace whose home volume is being deleted loses its instance on
