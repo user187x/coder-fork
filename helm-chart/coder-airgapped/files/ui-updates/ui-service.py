@@ -252,6 +252,12 @@ LOGO_MAX_BYTES = (
 DEFAULTS_DIR = os.environ.get(
     "DEFAULTS_DIR", "/app/defaults"
 )  # <dir>/logo/logo.<ext>, <dir>/avatar/avatar.<ext>
+# The install's own defaults, in this service's image (build-ui-image.sh: helm-chart/defaults/): where no ConfigMap
+# gives a kind (a one-step Helm install has none), these.
+BAKED_DEFAULTS_DIR = os.environ.get("BAKED_DEFAULTS_DIR", "/defaults")
+# The install's backgrounds, set once on a fresh install in the slots no one set (chart: uiUpdates.appearanceDefaults):
+# {slot: {"picture": <the image store's>, "opacity", "fit", "layer"}}.
+BACKGROUND_DEFAULTS = os.environ.get("BACKGROUND_DEFAULTS", "")
 BASE = "/__coder-ui"
 # Icons bundled with the workspace template (charts/coder-workspace/files/icons/, mounted from its ConfigMap), served
 # at /__icons/<file> on Coder's hostname for coder_app.icon (Traefik routes /__icons/ here).
@@ -2814,7 +2820,13 @@ class Defaults:
             return value
 
     def _read(self, kind):
-        folder = os.path.join(self.root, kind)
+        for root in (self.root, BAKED_DEFAULTS_DIR):
+            found = self._read_in(os.path.join(root, kind), kind)
+            if found:
+                return found
+        return None
+
+    def _read_in(self, folder, kind):
         try:
             names = sorted(
                 n
@@ -3414,6 +3426,37 @@ class BackgroundStore:
             self.pool.query("DELETE FROM coder_ui_updates.background WHERE slot = $1", [slot])
             self.loaded_at = 0
         self.all(fresh=True)
+
+
+def seed_background_defaults():
+    """The install's backgrounds (BACKGROUND_DEFAULTS), set once - in the slots no one has set - and never again (an
+    admin's Reset stays reset). Tried again a few times while the database or the image store are not up yet."""
+    try:
+        wanted = json.loads(BACKGROUND_DEFAULTS) if BACKGROUND_DEFAULTS else {}
+    except ValueError:
+        log(event="background-defaults-ignored", reason="not JSON")
+        return
+    if not wanted or not STORE or not BACKGROUNDS:
+        return
+    for attempt in range(20):
+        try:
+            if STORE.get_setting("background_defaults_seeded"):
+                return
+            have = BACKGROUNDS.all(fresh=True)
+            for slot, d in wanted.items():
+                if slot not in BG_SLOTS or slot in have or not isinstance(d, dict):
+                    continue
+                ctype, data = parse_background_picture("%s/image-store/%s" % (BASE, d.get("picture", "")))
+                settings = {"opacity": float(d.get("opacity", 0.06)), "fit": d.get("fit", "cover"),
+                            "layer": d.get("layer", "under"), "params": {}}
+                BACKGROUNDS.put(slot, ctype, data, settings, "install defaults")
+                log(event="background-default", slot=slot, picture=d.get("picture"))
+            STORE.put_setting("background_defaults_seeded", {"at": now()})
+            return
+        except Exception as e:  # noqa: BLE001 - the database or the image store not up yet: again soon
+            if attempt == 19:
+                log(event="background-defaults-failed", error=str(e)[:200])
+            time.sleep(15)
 
 
 def background_public(slot, bg):
@@ -9787,6 +9830,7 @@ def main():
     LOGOS = LogoStore()
     AVATARS = AvatarStore(LOGOS)
     BACKGROUNDS = BackgroundStore(LOGOS)
+    threading.Thread(target=seed_background_defaults, name="background-defaults", daemon=True).start()
     BANNER_PICTURES = BannerPictureStore(LOGOS)
     ICONS = IconStore(LOGOS)
     MONITOR = Monitor()

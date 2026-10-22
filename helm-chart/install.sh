@@ -121,6 +121,12 @@ for kind in logo avatar; do
 	f=$(ls "${here}/defaults/${kind}."* 2>/dev/null | head -n1 || true)
 	[[ -n "$f" ]] || { echo "    no defaults/${kind}.*"; continue; }
 	cm="coder-ui-updates-default-${kind}"
+	# past a ConfigMap's 1 MiB (the animated logo): the service's image has it (build-ui-image.sh), no ConfigMap
+	if (($(stat -c %s "$f") > 1000000)); then
+		echo "    defaults/$(basename "$f"): in the service's image (over a ConfigMap's 1 MiB)"
+		kubectl -n "$ns" delete configmap "$cm" --ignore-not-found >/dev/null
+		continue
+	fi
 	if exists configmap "$cm" && ! ((force)); then echo "    configmap/$cm exists (kept)"; continue; fi
 	kubectl -n "$ns" create configmap "$cm" --from-file="$(basename "$f")=$f" --dry-run=client -o yaml |
 		kubectl label --local -f - app.kubernetes.io/name=coder-ui-updates app.kubernetes.io/part-of=coder -o yaml | apply

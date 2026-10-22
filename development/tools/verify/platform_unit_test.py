@@ -2270,6 +2270,50 @@ class CloudDriveQuotaTest(unittest.TestCase):
         self.assertEqual(self.safe.save_quota(self.admin, {"quotaGiB": 40.0})["gib"], 40)
 
 
+class InstallDefaultsTest(unittest.TestCase):
+    """The install's look: the default logo and avatar from their ConfigMaps, else the service's image (the animated
+    logo is past a ConfigMap's 1 MiB); the backgrounds set once, in the slots no one set, never after a Reset."""
+
+    def test_the_image_s_defaults_where_no_configmap_gives_them(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as cm, tempfile.TemporaryDirectory() as baked:
+            gif = b"GIF89a" + b"\x00" * 20
+            os.makedirs(os.path.join(baked, "logo"))
+            os.makedirs(os.path.join(baked, "avatar"))
+            open(os.path.join(baked, "logo", "logo.gif"), "wb").write(gif)
+            open(os.path.join(baked, "avatar", "avatar.gif"), "wb").write(gif + b"a")
+            os.makedirs(os.path.join(cm, "avatar"))
+            open(os.path.join(cm, "avatar", "avatar.gif"), "wb").write(gif + b"cm")
+            with mock.patch.object(ui, "BAKED_DEFAULTS_DIR", baked):
+                d = ui.Defaults(cm)
+                self.assertEqual(d.get("logo")["data"], gif)  # none from a ConfigMap: the image's
+                self.assertEqual(d.get("avatar")["data"], gif + b"cm")  # the ConfigMap's, over the image's
+
+    def test_the_backgrounds_are_set_once_in_the_slots_no_one_set(self):
+        store = mock.Mock()
+        settings = {}
+        store.get_setting.side_effect = lambda k, d=None: settings.get(k, d)
+        store.put_setting.side_effect = lambda k, v: settings.__setitem__(k, v)
+        bgs = mock.Mock()
+        bgs.all.return_value = {"dashboard": {"type": "image/png"}}  # an admin set this one
+        wanted = {"login": {"picture": "minecraft-cube.gif", "opacity": 0.09, "fit": "cover", "layer": "over"},
+                  "dashboard": {"picture": "spiral.gif", "opacity": 0.03, "fit": "cover", "layer": "under"}}
+        with mock.patch.object(ui, "STORE", store), mock.patch.object(ui, "BACKGROUNDS", bgs), \
+                mock.patch.object(ui, "BACKGROUND_DEFAULTS", json.dumps(wanted)), \
+                mock.patch.object(ui, "parse_background_picture", lambda p: ("text/x-coder-picture", p.encode())):
+            ui.seed_background_defaults()
+            bgs.put.assert_called_once()
+            slot, ctype, data, opts, by = bgs.put.call_args[0]
+            self.assertEqual((slot, data, opts["opacity"], opts["layer"], by),
+                             ("login", b"/__coder-ui/image-store/minecraft-cube.gif", 0.09, "over", "install defaults"))
+            self.assertIn("background_defaults_seeded", settings)
+            # once only: after a Reset, nothing comes back
+            bgs.all.return_value = {}
+            bgs.put.reset_mock()
+            ui.seed_background_defaults()
+            bgs.put.assert_not_called()
+
+
 class ImagesAdminOnlyTest(unittest.TestCase):
     """Images is the admins' alone: the dashboard hides it from everyone else, and its API refuses them (a template
     admin too)."""

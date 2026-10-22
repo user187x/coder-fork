@@ -15,6 +15,10 @@ src="${top}/helm-chart/coder-airgapped/files/ui-updates"
 # The image store's baked pictures and their previews (development/image-store, image-store-thumbs.sh): in the image
 # at /image-store, a layer of their own under the code's, so a build of new code ships only the code's layer.
 store="${dev}/image-store"
+# The install's default logo and avatar (helm-chart/defaults/logo.*, avatar.*): in the image at /defaults/<kind>/, the
+# platform service's fallback where no ConfigMap gives them (a one-step Helm install has none; the logo is past a
+# ConfigMap's 1 MiB anyway).
+defaults="${top}/helm-chart/defaults"
 base="ghcr.io/user187x/coder-image-tools:1.2.0"
 repo="ghcr.io/user187x/coder-ui-updates"
 
@@ -24,7 +28,9 @@ mapfile -t pictures < <(cd "$store" && find pictures thumbs -type f -printf '%p\
 for p in "${pictures[@]}"; do
 	case "$p" in pictures/*) [ -s "${store}/thumbs/${p#pictures/}.webp" ] || { echo "ERROR: no preview for $p: run development/tools/image-store-thumbs.sh" >&2; exit 1; };; esac
 done
-hash=$({ (cd "$src" && sha256sum "${files[@]}"); (cd "$store" && sha256sum "${pictures[@]}"); } | sha256sum | cut -c1-12)
+mapfile -t baked < <(cd "$defaults" && find . -maxdepth 1 -type f \( -name 'logo.*' -o -name 'avatar.*' \) -printf '%P\n' | LC_ALL=C sort)
+hash=$({ (cd "$src" && sha256sum "${files[@]}"); (cd "$store" && sha256sum "${pictures[@]}");
+	(cd "$defaults" && sha256sum "${baked[@]}"); } | sha256sum | cut -c1-12)
 img="${repo}:code-${hash}"
 
 if docker image inspect "$img" >/dev/null 2>&1; then
@@ -32,15 +38,19 @@ if docker image inspect "$img" >/dev/null 2>&1; then
 else
 	docker image inspect "$base" >/dev/null 2>&1 || { echo "ERROR: $base is not in this docker (build-image-tools.sh, or load it from the bundle)" >&2; exit 1; }
 	ctx="$(mktemp -d)"; trap 'rm -rf "$ctx"' EXIT
-	mkdir "$ctx/app" "$ctx/image-store"
+	mkdir "$ctx/app" "$ctx/image-store" "$ctx/defaults"
+	for f in "${baked[@]}"; do
+		kind="${f%%.*}"; mkdir -p "$ctx/defaults/$kind"; cp -p "$defaults/$f" "$ctx/defaults/$kind/$f"
+	done
 	(cd "$src" && cp -- "${files[@]}" "$ctx/app/")
 	# as they are in the repository, times too: the same pictures make the same layer
 	cp -rp -- "${store}/pictures" "${store}/thumbs" "$ctx/image-store/"
 	touch -r "$store" "$ctx/image-store"
-	chmod -R a+rX,go-w "$ctx/app" "$ctx/image-store"
+	chmod -R a+rX,go-w "$ctx/app" "$ctx/image-store" "$ctx/defaults"
 	cat >"$ctx/Dockerfile" <<EOF
 FROM ${base}
 COPY image-store/ /image-store/
+COPY defaults/ /defaults/
 COPY app/ /app/
 LABEL org.opencontainers.image.title="coder-ui-updates" org.opencontainers.image.revision="code-${hash}"
 EOF
@@ -58,7 +68,8 @@ print(\"modules import\")"
 		trivy --version | grep -q "Vulnerability DB"
 		copa --version >/dev/null
 		shellcheck --version >/dev/null && shfmt --version >/dev/null
-		test "$(ls /image-store/pictures | wc -l)" -gt 0 && test "$(ls /image-store/thumbs | wc -l)" -gt 0'
+		test "$(ls /image-store/pictures | wc -l)" -gt 0 && test "$(ls /image-store/thumbs | wc -l)" -gt 0
+		test -s /defaults/logo/logo.gif && test -s /defaults/avatar/avatar.gif'
 	echo "built $img"
 fi
 

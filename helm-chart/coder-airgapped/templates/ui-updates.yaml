@@ -183,6 +183,8 @@ spec:
             - {name: LOGS_DB_SECRET, value: {{ .Values.secrets.logsDb.name | quote }}}
             - {name: LOGS_DB_URL, value: {{ printf "postgresql://logs:{password}@coder-ui-logs-db.%s.svc.cluster.local:5432/logs?sslmode=disable" $ns | quote }}}
             - {name: DEFAULTS_DIR, value: /app/defaults}
+            # the install's backgrounds, set once in the slots no one set (values: uiUpdates.appearanceDefaults)
+            - {name: BACKGROUND_DEFAULTS, value: {{ (.Values.uiUpdates.appearanceDefaults | default dict).backgrounds | default dict | toJson | quote }}}
             - {name: TEMPLATE_ICONS_DIR, value: /app/template-icons}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
             - {name: PYTHONUNBUFFERED, value: "1"}
