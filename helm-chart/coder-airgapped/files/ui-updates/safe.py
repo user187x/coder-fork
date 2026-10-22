@@ -32,6 +32,10 @@ account a PersistentVolume (Retain: removing it never removes files) and its cla
   POST /__coder-ui/api/safe/settings {endpoint, region, bucket, accessKey, secretKey} | {reset: true}   admins
   POST /__coder-ui/api/safe/settings/test {...}  admins: try a backend without saving it
   POST /__coder-ui/api/safe/settings/quota {quotaGiB} | {reset: true}   admins: every account's capacity
+  GET  /__coder-ui/api/safe/activity             the caller's own drive: seconds since its last upload and download
+       (MinIO's trace: the chart's MinIO only), for the pill's light flashing like an LED while it transfers
+  POST /__coder-ui/api/safe/settings/enabled {enabled}   admins: the Cloud Drive on or off for everyone (off: every
+       workspace's drive unlinked, the users' routes refused, the dashboard showing none; Admin Settings > Cloud Drive)
   GET  /__coder-ui/api/safe/connections       the caller's workspaces disconnected from it, those whose running pod
                                               predates the connections (their template version), those shared with
                                               others (never connected), whether it is encrypted, its source workspace;
@@ -144,6 +148,8 @@ SETTINGS_FILE = os.environ.get("SAFE_SETTINGS_FILE", "/data/cloud-drive.json")
 # Every account's capacity as an admin set it (Cloud Drive > Settings), over the chart's (QUOTA_BYTES).
 QUOTA_FILE = os.environ.get("SAFE_QUOTA_FILE", "/data/cloud-drive-quota.json")
 QUOTA_GIB_RANGE = (1, 10240)
+# An admin turned the Cloud Drive off for everyone (Admin Settings > Cloud Drive): {by, at}; none: on.
+OFF_FILE = os.environ.get("SAFE_OFF_FILE", "/data/cloud-drive-off.json")
 # The workspaces their owners disconnected: {workspace id: {owner, by, at}}.
 LINKS_FILE = os.environ.get("SAFE_LINKS_FILE", "/data/cloud-drive-links.json")
 LINK_ANNOTATION = "platform.coder/cloud-drive"
@@ -286,7 +292,8 @@ def settings_view(user, fresh=False):
             "endpoint": cfg["endpoint"], "region": cfg["region"], "bucket": cfg["bucket"],
             "accessKey": cfg["accessKey"] if IS_ADMIN and IS_ADMIN(user) else "", "hasSecret": bool(cfg["secretKey"]),
             "chart": {"kind": chart["kind"], "endpoint": chart["endpoint"], "bucket": chart["bucket"]},
-            "mountPath": MOUNT_PATH, "status": dict(_status), "quota": quota_view()}
+            "mountPath": MOUNT_PATH, "status": dict(_status), "quota": quota_view(),
+            "enabled": turned_off() is None, "turnedOff": turned_off()}
 
 
 def save_settings(user, body):
@@ -316,6 +323,41 @@ def save_settings(user, body):
     # every volume and the mount Secret looked at again now
     _volumes.clear()
     _status.update(check())
+    _wake.set()
+    return settings_view(user)
+
+
+def turned_off():
+    """{by, at} while an admin has the Cloud Drive off for everyone, else None."""
+    try:
+        with open(OFF_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {"by": "", "at": 0}
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {"by": "", "at": 0}
+
+
+def save_enabled(user, body):
+    """An admin turns the Cloud Drive on or off for everyone: off, every workspace's drive is unlinked (links_once)."""
+    if not (IS_ADMIN and IS_ADMIN(user)):
+        raise PermissionError
+    on = body.get("enabled")
+    if not isinstance(on, bool):
+        raise ValueError("enabled: true or false.")
+    if on:
+        try:
+            os.remove(OFF_FILE)
+        except FileNotFoundError:
+            pass
+    else:
+        _write_json(OFF_FILE, {"by": user["username"], "at": int(time.time())})
+    LOG(event="cloud-drive-enabled", enabled=on, by=user["username"])
+    try:
+        links_once()  # every workspace's drive linked or unlinked now, not at the watcher's next round
+    except Exception as e:  # noqa: BLE001 - the watcher's next round does it
+        LOG(event="cloud-drive-links-failed", error=str(e)[:200])
     _wake.set()
     return settings_view(user)
 
@@ -489,12 +531,14 @@ def links_once():
     templates read (publish_state)."""
     off = disconnected()
     shared = shared_now()
+    everyone_off = turned_off() is not None  # an admin turned the Cloud Drive off for everyone
     source_of = {src["workspace"]: src["path"] for src in sources().values()}
     linked, _ = link_pods()
     for pod in linked:
         wid = ((pod.get("metadata") or {}).get("labels") or {}).get("com.coder.workspace.id")
         # a source workspace links its own folder at once (source:<folder>), restarted or not
-        want = "off" if wid in off or wid in shared else ("source:" + source_of[wid]) if wid in source_of else "on"
+        want = "off" if everyone_off or wid in off or wid in shared else (
+            "source:" + source_of[wid]) if wid in source_of else "on"
         if wid and link(pod, want):
             LOG(event="cloud-drive-link", workspace=wid, pod=pod["metadata"]["name"], link=want,
                 shared=wid in shared, by="watcher")
@@ -1052,10 +1096,79 @@ def _loop():
 _wake = threading.Event()  # a new backend: the next round now
 
 
+# ---------------------------------------------------------------------------------------------------- activity
+# Each account's last transfer, from MinIO's admin trace (every S3 call, with its object's path - users/<id>/...):
+# {user id: {"up": time, "down": time}}. The chart's MinIO only (an S3 service an admin set has no such trace).
+_activity = {}
+_activity_lock = threading.Lock()
+UP_CALLS = ("s3.PutObject", "s3.PutObjectPart", "s3.CompleteMultipartUpload", "s3.CopyObject", "s3.CopyObjectPart")
+DOWN_CALLS = ("s3.GetObject", "s3.SelectObjectContent")
+
+
+def record_trace(line, bucket_name, now=None):
+    """One line of MinIO's trace: an upload or a download of an account's file is that account's activity."""
+    try:
+        t = json.loads(line)
+    except ValueError:
+        return None
+    fn = t.get("funcname") or t.get("funcName") or ""
+    way = "up" if fn in UP_CALLS else "down" if fn in DOWN_CALLS else None
+    parts = str(t.get("path") or "").split("/")
+    # /<bucket>/users/<id>/...
+    if not way or len(parts) < 4 or parts[1] != bucket_name or parts[2] + "/" != PREFIX:
+        return None
+    with _activity_lock:
+        _activity.setdefault(parts[3], {})[way] = now or time.time()
+    return parts[3], way
+
+
+def activity(user, now=None):
+    """Seconds since the caller's own last upload and download (None: none since the service started)."""
+    now = now or time.time()
+    with _activity_lock:
+        seen = dict(_activity.get(user["id"], {}))
+    return {way: (round(now - seen[way], 1) if way in seen else None) for way in ("up", "down")}
+
+
+def _trace_loop():
+    """Reads MinIO's admin trace (S3 calls only) for as long as the chart's MinIO is the backend; reconnects."""
+    last = None
+    while True:
+        try:
+            cfg = backend()
+            if cfg["source"] != "chart" or cfg["kind"] != "minio":
+                time.sleep(60)
+                continue
+            c = s3client.S3(cfg["endpoint"], cfg["region"], cfg["accessKey"], cfg["secretKey"], ca_file=S3_CA_FILE,
+                            timeout=None)
+            resp = c.request("GET", "minio/admin/v3/trace", query=[("s3", "true")])
+            last = None
+            buf = b""
+            try:
+                while True:
+                    chunk = resp.read1(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        if line.strip():
+                            record_trace(line, cfg["bucket"])
+            finally:
+                resp.close()
+                resp.conn.close()
+        except Exception as e:  # noqa: BLE001 - reported once, tried again
+            if str(e) != last:
+                LOG(event="cloud-drive-trace-failed", error=str(e)[:200])
+            last = str(e)
+        time.sleep(10)
+
+
 def start():
     if ENABLED and KUBE and KUBE.ok:
         threading.Thread(target=_loop, name="safe", daemon=True).start()
         threading.Thread(target=_links_loop, name="safe-links", daemon=True).start()
+        threading.Thread(target=_trace_loop, name="safe-trace", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------------------------------- encryption
@@ -2265,6 +2378,13 @@ def handle(h, method, path, query):
     if err:
         return True
     q = dict(urllib.parse.parse_qsl(query or "", keep_blank_values=True))
+    # Turned off for everyone by an admin: the dashboard shows no drive (its summary says so); only the settings stay.
+    if turned_off() is not None and path not in (BASE + "/api/safe/settings", BASE + "/api/safe/settings/enabled"):
+        if method == "GET" and path == BASE + "/api/safe":
+            h.send_json(200, {"enabled": False, "turnedOff": True})
+        else:
+            h.send_json(403, {"error": "The Cloud Drive is turned off for everyone (Admin Settings > Cloud Drive)."})
+        return True
     shared = False
     admin_view = False
     share = None
@@ -2337,6 +2457,10 @@ def handle(h, method, path, query):
             h.send_json(200, settings_view(user, fresh=q.get("check") == "1"))
         elif method == "POST" and path == BASE + "/api/safe/settings":
             h.send_json(200, save_settings(user, read_json(h)))
+        elif method == "GET" and path == BASE + "/api/safe/activity":
+            h.send_json(200, activity(user))
+        elif method == "POST" and path == BASE + "/api/safe/settings/enabled":
+            h.send_json(200, save_enabled(user, read_json(h)))
         elif method == "POST" and path == BASE + "/api/safe/settings/quota":
             h.send_json(200, save_quota(user, read_json(h)))
         elif method == "GET" and path == BASE + "/api/safe/connections":

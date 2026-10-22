@@ -1031,6 +1031,13 @@ def main():
           and "nifi.web.proxy.context.path=$NIFI_PATH" in nifi_sh and "exec airflow standalone" in airflow_sh
           and all(("moved {\n  from = %s[0]\n  to   = %s\n}" % (a, a)) in tf["dataflow.tf"] for a in (
               "coder_app.nifi", "coder_script.nifi", "coder_script.airflow", "coder_app.airflow")), "")
+    # The workspace's pods: coder-<username>-<template name>-<workspace name> (cut to 52, with a piece of the id),
+    # its home volume still coder-<id>-home (renamed, its files would be lost).
+    check("template: the workspace's pods named coder-<username>-<template>-<workspace>, its home volume by its id",
+          'name      = local.pod_name\n' in tf["main.tf"] and "data.coder_workspace.me.template_name" in tf["main.tf"]
+          and re.search(r'"coder", data\.coder_workspace_owner\.me\.name, data\.coder_workspace\.me\.template_name, '
+                        r'data\.coder_workspace\.me\.name', tf["main.tf"])
+          and 'name      = "coder-${data.coder_workspace.me.id}-home"' in tf["main.tf"], "")
     # NiFi's route: ONE for every dataflow workspace (coder-enhanced-nifi), not one per workspace; NiFi's path is
     # Coder's X-Forwarded-Prefix (the fork's app proxy), so the route removes a client's own context-path headers.
     import yaml

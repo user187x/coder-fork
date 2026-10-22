@@ -396,6 +396,16 @@ locals {
   cluster_kubeconfig = "/home/coder/.kube/coder-cluster.yaml"
   # The host the workspace's agent reaches Coder on (Lock Down's Network keeps it).
   coder_host = regex("^[a-z]+://([^/:]+)", data.coder_workspace.me.access_url)[0]
+  # Its pods named after whose and what it is: coder-<username>-<template name>-<workspace name>, in Kubernetes'
+  # letters (lowercase, digits, single dashes), cut to 52 characters - its ReplicaSet and pods add their hashes after
+  # it - with a piece of the workspace's id after a cut name, so two long names stay apart. (Its home volume keeps its
+  # name, coder-<workspace id>-home: renamed, its files would be lost.)
+  pod_name_full = trim(replace(replace(lower(join("-", [
+    "coder", data.coder_workspace_owner.me.name, data.coder_workspace.me.template_name, data.coder_workspace.me.name
+  ])), "/[^a-z0-9-]+/", "-"), "/-+/", "-"), "-")
+  pod_name = length(local.pod_name_full) <= 52 ? local.pod_name_full : join("-", [
+    trim(substr(local.pod_name_full, 0, 45), "-"), substr(data.coder_workspace.me.id, 0, 6)
+  ])
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -788,7 +798,7 @@ resource "kubernetes_deployment_v1" "main" {
   ]
   wait_for_rollout = false
   metadata {
-    name      = "coder-${data.coder_workspace.me.id}"
+    name      = local.pod_name
     namespace = var.namespace
     labels = {
       "app.kubernetes.io/name"     = "coder-workspace"

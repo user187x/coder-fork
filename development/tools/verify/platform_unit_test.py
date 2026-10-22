@@ -2270,6 +2270,53 @@ class CloudDriveQuotaTest(unittest.TestCase):
         self.assertEqual(self.safe.save_quota(self.admin, {"quotaGiB": 40.0})["gib"], 40)
 
 
+class ImagesAdminOnlyTest(unittest.TestCase):
+    """Images is the admins' alone: the dashboard hides it from everyone else, and its API refuses them (a template
+    admin too)."""
+
+    def test_only_admins_reach_the_images_api(self):
+        ib = load("imagebuilder", "imagebuilder.py")
+        ib.ENABLED, ib.STORE = True, mock.Mock()
+        ib.route = mock.Mock(return_value=True)
+        for roles, allowed in ((["owner"], True), (["template-admin"], False), ([], False)):
+            h = mock.Mock()
+            h.user.return_value = ({"id": "u", "username": "u", "roles": roles}, None)
+            ib.route.reset_mock()
+            self.assertTrue(ib.handle(h, "GET", ib.BASE + "/api/images", "", {"owner"}))
+            if allowed:
+                ib.route.assert_called_once()
+            else:
+                ib.route.assert_not_called()
+                h.send_json.assert_called_with(403, {"error": "Images is for admins only."})
+
+
+class CloudDriveActivityTest(unittest.TestCase):
+    """The pill's light flashes while an account's drive transfers: MinIO's trace, an upload or download of a file
+    under users/<id>/, is that account's activity; listings and others' files are not."""
+
+    def setUp(self):
+        self.safe = load("safe", "safe.py")
+        self.safe._activity.clear()
+
+    def line(self, fn, path):
+        return json.dumps({"type": 4, "funcname": fn, "path": path}).encode()
+
+    def test_uploads_and_downloads_of_an_account_s_files(self):
+        s = self.safe
+        self.assertEqual(s.record_trace(self.line("s3.PutObject", "/coder-user-storage/users/u1/a.txt"),
+                                        "coder-user-storage", now=100.0), ("u1", "up"))
+        self.assertEqual(s.record_trace(self.line("s3.GetObject", "/coder-user-storage/users/u1/a.txt"),
+                                        "coder-user-storage", now=103.0), ("u1", "down"))
+        for fn, path in (("s3.ListObjectsV2", "/coder-user-storage/users/u1/"),
+                         ("s3.HeadObject", "/coder-user-storage/users/u1/a.txt"),
+                         ("s3.PutObject", "/coder-user-storage/libraries/x.iso"),
+                         ("s3.PutObject", "/another-bucket/users/u1/a.txt")):
+            self.assertIsNone(s.record_trace(self.line(fn, path), "coder-user-storage"))
+        self.assertIsNone(s.record_trace(b"not json", "coder-user-storage"))
+        self.assertEqual(s.activity({"id": "u1"}, now=104.0), {"up": 4.0, "down": 1.0})
+        self.assertEqual(s.activity({"id": "u2"}, now=104.0), {"up": None, "down": None})
+
+
 class CloudDriveConnectionsTest(unittest.TestCase):
     """The owner connects and disconnects their workspaces from their Cloud Drive (safe.py): kept in LINKS_FILE, set
     at once on the running pod's annotation (the workspace links ~/cloud-drive by it), and kept so by the watcher."""
@@ -2407,6 +2454,38 @@ class CloudDriveConnectionsTest(unittest.TestCase):
         self.assertEqual(self.kube.patches, [("coder-ws-2", {"platform.coder/cloud-drive": "off"})])
         self.safe.links_once()  # nothing more to do
         self.assertEqual(len(self.kube.patches), 1)
+
+    def test_an_admin_turns_it_off_for_everyone_and_on_again(self):
+        # Admin Settings > Cloud Drive: off, every running workspace's drive unlinked at once and the users' routes
+        # refused (the summary says there is none, so the dashboard shows none); on again, linked again.
+        self.safe.OFF_FILE = os.path.join(self.dir.name, "cloud-drive-off.json")
+        self.safe.IS_ADMIN = lambda user: "owner" in user["roles"]
+        self.safe.settings_view = lambda user: {"enabled": self.safe.turned_off() is None}
+        admin = {"id": "a", "username": "admin", "roles": ["owner"]}
+        with self.assertRaises(PermissionError):
+            self.safe.save_enabled(self.OWNER, {"enabled": False})
+        with self.assertRaises(ValueError):
+            self.safe.save_enabled(admin, {"enabled": "no"})
+        self.kube.patches.clear()
+        self.assertEqual(self.safe.save_enabled(admin, {"enabled": False}), {"enabled": False})
+        self.assertEqual(self.safe.turned_off()["by"], "admin")
+        off = {name: a["platform.coder/cloud-drive"] for name, a in self.kube.patches}
+        self.assertEqual(off.get("coder-ws-1"), "off")
+        self.assertEqual(off.get("coder-bob-1"), "off")
+        # the users' routes refused; the summary: no drive
+        h = mock.Mock()
+        h.user.return_value = (self.OWNER, None)
+        self.safe.ENABLED = True
+        self.safe.upload_csrf_ok = lambda h: True
+        self.assertTrue(self.safe.handle(h, "GET", self.safe.BASE + "/api/safe", ""))
+        h.send_json.assert_called_with(200, {"enabled": False, "turnedOff": True})
+        self.assertTrue(self.safe.handle(h, "GET", self.safe.BASE + "/api/safe/list", ""))
+        self.assertEqual(h.send_json.call_args[0][0], 403)
+        # on again
+        self.kube.patches.clear()
+        self.assertEqual(self.safe.save_enabled(admin, {"enabled": True}), {"enabled": True})
+        self.assertIsNone(self.safe.turned_off())
+        self.assertIn(("coder-ws-1", {"platform.coder/cloud-drive": "on"}), self.kube.patches)
 
     def test_an_older_pod_is_recorded_not_patched(self):
         out = self.safe.set_connected(self.h, self.OWNER, self.OLD, {"connected": False})

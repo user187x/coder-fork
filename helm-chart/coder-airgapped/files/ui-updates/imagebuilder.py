@@ -3215,6 +3215,10 @@ def handle(h, method, path, query, admin_roles):
         return True
     editor = can_edit(user, admin_roles)
     admin = bool(set(user.get("roles") or []) & set(admin_roles))
+    # Images is the admins' alone (the dashboard shows it to no one else)
+    if not admin:
+        h.send_json(403, {"error": "Images is for admins only."})
+        return True
     rest = path[len(BASE + "/api/images"):]
     try:
         return route(h, method, rest, query, user, editor, admin)
