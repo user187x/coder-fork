@@ -872,7 +872,7 @@ def main():
     check("image store: the provided pictures, each with its preview, baked into the platform service's image under "
           "its code, served publicly and listed for every chooser",
           len(pics) > 0 and not no_preview
-          and re.search(r"COPY image-store/ /image-store/\nCOPY app/ /app/", build_ui)
+          and re.search(r"COPY image-store/ /image-store/\n(?:COPY defaults/ /defaults/\n)?COPY app/ /app/", build_ui)
           and 'BASE + "/image-store/"' in svc and 'BASE + "/api/image-store"' in svc,
           {"pictures": len(pics), "without a preview": no_preview[:5]})
     # Ghostty in place of the web terminal (the DATAFLOW template's): its push asks for it, the app's slug is the one
@@ -934,6 +934,12 @@ def main():
                          key=lambda x: x.encode())
     lines += "".join("%s  %s\n" % (hashlib.sha256(open(os.path.join(store_top, f), "rb").read()).hexdigest(), f)
                      for f in store_files)
+    # ... and the install's default logo and avatar (helm-chart/defaults/logo.*, avatar.*), baked in at /defaults
+    defaults_top = os.path.join(os.path.dirname(B), "helm-chart/defaults")
+    baked = sorted((f for f in os.listdir(defaults_top) if os.path.isfile(os.path.join(defaults_top, f))
+                    and f.split(".")[0] in ("logo", "avatar")), key=lambda x: x.encode())
+    lines += "".join("%s  %s\n" % (hashlib.sha256(open(os.path.join(defaults_top, f), "rb").read()).hexdigest(), f)
+                     for f in baked)
     want = "coder-ui-updates:code-" + hashlib.sha256(lines.encode()).hexdigest()[:12]
     values_txt = open(os.path.join(chart, "values.yaml")).read()
     pinned = re.search(r"ghcr\.io/user187x/(coder-ui-updates:code-[0-9a-f]+)", values_txt)

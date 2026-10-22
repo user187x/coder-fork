@@ -2,8 +2,51 @@
 
 ## 1.46.0 – unreleased
 
-Coder `2.0.0-platform.108` (fork `75ba612f4`).
+Coder `2.0.0-platform.108` (fork `9e83f6bb7`).
 
+* **Fixes:**
+  * **Ghostty's text size buttons** (the workspace page's Terminal panel) did nothing: on connecting, the terminal's
+    options were replaced by a plain object, which Ghostty's emulator then ignored. Now they resize it, as with xterm.
+  * **Ghostty fills its panel's width:** its fit kept 15px free for a scrollbar it draws over the text anyway, an
+    empty strip down the right.
+  * **No scrollbars in the workspace dashboard's panels** (Logs, Terminal, apps, ports); they still scroll.
+  * **The sign-in and sign-out page's announcement** was clipped at its right end: the banner above the sign-in made
+    the page 14px too tall, and its scrollbar covered the banner. The two now share the window's height.
+* **Cloud Drive:**
+  * **Admin Settings › Cloud Drive**, a category of its own: at its top the **Cloud Drive on or off for everyone**,
+    then where it keeps files and every account's capacity. Off, no one is shown a Cloud Drive, its routes refuse,
+    and it is unlinked from every running workspace at once; its files stay. On again, everything links back.
+  * **The Cloud Drive pill's green light flashes like an LED** while the user's drive uploads or downloads, from the
+    workspaces, the dashboard or File Browser alike. The platform service reads MinIO's admin trace (the chart's
+    MinIO only) and answers each user for their own drive (`/api/safe/activity`).
+  * **The Workspaces table's connecting cloud** is the `cloud-disconnect.svg` artwork (a cloud struck through).
+  * **A deleted workspace lets go of its cable:** the plug pops off its row and the cord reels back into the Cloud
+    Drive like a retractable one, while the row is still there (shining), before it goes. Cables are no longer
+    remade when the list re-sorts.
+* **Images is for admins only:** its menu items (Resources, the mobile menu, the quick access wheel) and pages are
+  theirs alone, and its API refuses anyone else (template admins included).
+* **Workspace pods are named `coder-<username>-<template>-<workspace>`** (Kubernetes' letters, cut to 52 characters
+  with a piece of the workspace id); the home volume keeps its id name, so no files move. A workspace takes the new
+  name at its next start.
+* **The Workspaces pill counts its hold** with chevrons each side of its words: one more each third of the hold, in
+  step with the ring, three when it locks; gone when it is let go or closed.
+* **The announcement terminal:**
+  * `ls` lists the user's workspaces with their state and uptime;
+  * `date` (or `data`) gives the date, `whoami` answers "Skynet", `clear` empties the screen, and anything else is
+    "command not found";
+  * the wagging finger answers only commands starting with `rm`, and fades away after 1.5 s;
+  * `matrix` pours the Matrix's rain over the screen until a key or a click;
+  * Skynet, the broken screen and the Matrix go fullscreen while they last.
+* **The install's look is the reference deployment's:**
+  * the logo (the Minecraft cube, animated) and the Doom face default avatar ship in the platform service's image,
+    so a one-step Helm install has them too (no ConfigMap needed; the logo is past a ConfigMap's 1 MiB);
+  * the sign-in background (`minecraft-cube.gif`) and the dashboard's (`spiral.gif`) are set once on a fresh install
+    (`uiUpdates.appearanceDefaults`), in slots no one has set;
+  * the colour theme for everyone who has not chosen one is `dark-tritan`;
+  * the sign-in page's effect and text were the defaults already.
+* **The workspace card:** the build's time sits just after "Build timeline", and the Uptime pill at the footer's right.
+  The Cloud Drive glyph sits left of the Lock Down shield, and the network pill between the RX/TX lights and the
+  latency, showing its graph's time span (`08:10–08:15`; the day and seconds on hover).
 * **DATAFLOW's NiFi: one HTTPRoute for every workspace, `coder-enhanced-nifi`** (was one per workspace,
   `coder-<id>-nifi`, made by the template):
   * a regular expression matches any workspace's NiFi path (`/@<owner>/<workspace>.<agent>/apps/nifi...`) and sends it
