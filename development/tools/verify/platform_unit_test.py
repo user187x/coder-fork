@@ -3119,6 +3119,44 @@ class CodeServerHATest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(OSError):
             self.c.wait_for_schema(DB([ConnectionRefusedError(111, "refused")] * 99), timeout=10, sleep=lambda s: None)
 
+    def test_a_deleted_workspace_lets_go_of_its_home_at_once(self):
+        # Its home volume being deleted: the instance (which mounts it) goes this round, pods with a 5 s grace -
+        # not after the stopped workspace's wait (two leases) and the pod's 30 s; a restart (volume still there) waits.
+        c = self.c
+        class Kube:
+            def __init__(self, pvc):
+                self.pvc, self.calls = pvc, []
+            def call(self, method, path, body=None, patch_type=None):
+                self.calls.append((method, path))
+                if "/persistentvolumeclaims/" in path:
+                    return (404, None) if self.pvc is None else (200, {"metadata": self.pvc})
+                if "labelSelector=com.coder.workspace.id" in path:
+                    return 200, {"items": []}  # the workspace's pod is gone
+                if method == "GET" and "/pods?" in path:
+                    return 200, {"items": [{"metadata": {"name": "coder-cs-ws-g3", "labels": {}}}]}
+                return 200, {}
+        class DB:
+            def __init__(self):
+                self.q = []
+            def query(self, sql, args=None):
+                self.q.append(sql)
+                return []
+        inst = {"workspace_id": "ws", "home_cluster": c.CLUSTER, "home_namespace": "coder", "home_pvc": "ws-home",
+                "registered_ago": 600.0, "seen_ago": 5.0, "active_cluster": c.CLUSTER, "generation": 3,
+                "lease_left": 20.0}
+        for pvc, gone in (({"deletionTimestamp": "2026-10-22T05:01:48Z"}, True), (None, True), ({}, False)):
+            kube, db = Kube(pvc), DB()
+            op = c.Operator(db, kube, cluster=c.CLUSTER, namespace="coder")
+            op.keep = lambda *a: None
+            op.fence = lambda *a: None
+            op.reconcile_one(dict(inst), {})
+            deletes = [p for m, p in kube.calls if m == "DELETE" and "/pods/" in p]
+            if gone:
+                self.assertEqual(deletes, ["/api/v1/namespaces/coder/pods/coder-cs-ws-g3?gracePeriodSeconds=5"], pvc)
+                self.assertTrue(any("DELETE FROM code_server_ha.instances" in q for q in db.q))
+            else:
+                self.assertEqual(deletes, [], "a volume still there: a restart, it waits")
+
     def test_an_instance_pod(self):
         inst = {"workspace_id": "11111111-2222-3333-4444-555555555555", "image": "ws:1", "home_pvc": "coder-x-home",
                 "home_node": "node-a", "folder": "/home/coder/src", "owner": "alice"}

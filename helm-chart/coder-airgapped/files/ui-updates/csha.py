@@ -449,9 +449,24 @@ class Operator:
             except Exception as e:  # noqa: BLE001 - one workspace's trouble must not hold the others up
                 log(event="code-server-reconcile-failed", workspace=inst["workspace_id"], error=str(e)[:300])
 
+    def home_volume_going(self, inst):
+        """The workspace's home volume is gone or being deleted: the workspace is being deleted, not restarted."""
+        if not inst.get("home_pvc"):
+            return False
+        status, out = self.kube.call("GET", "/api/v1/namespaces/%s/persistentvolumeclaims/%s" % (
+            inst["home_namespace"], inst["home_pvc"]))
+        if status == 404:
+            return True
+        return status == 200 and isinstance(out, dict) and bool(out["metadata"].get("deletionTimestamp"))
+
     def reconcile_one(self, inst, healthy):
         ws = inst["workspace_id"]
         home = inst["home_cluster"] == self.cluster
+        # the workspace is being deleted (its home volume going): its instance goes now - it holds that volume, and
+        # the deletion waits for it (it took two minutes: the stop's wait below, then the pod's 30 s to end)
+        if home and not self.workspace_pod_exists(inst) and self.home_volume_going(inst):
+            self.remove(ws, everywhere=True, grace=5)
+            return
         # the workspace stopped (its own cluster says so): its instance goes, wherever it runs
         if home and inst["registered_ago"] > LEASE_SECONDS and inst["seen_ago"] > 2 * LEASE_SECONDS \
                 and not self.workspace_pod_exists(inst):
@@ -551,9 +566,10 @@ class Operator:
             self.event(ws, "fenced", "%s (generation %d; the active one is %d in %s)" % (
                 p["metadata"]["name"], gen, inst["generation"], inst["active_cluster"]))
 
-    def remove(self, ws, everywhere=False):
+    def remove(self, ws, everywhere=False, grace=None):
         for p in self.pods(ws):
-            self.kube.call("DELETE", "/api/v1/namespaces/%s/pods/%s" % (self.ns, p["metadata"]["name"]))
+            self.kube.call("DELETE", "/api/v1/namespaces/%s/pods/%s%s" % (
+                self.ns, p["metadata"]["name"], "" if grace is None else "?gracePeriodSeconds=%d" % grace))
         self.kube.call("DELETE", "/api/v1/namespaces/%s/services/%s" % (self.ns, service_name(ws)))
         if everywhere:
             self.db.query("DELETE FROM code_server_ha.instances WHERE workspace_id = $1", [ws])

@@ -76,6 +76,10 @@ rules:
   - apiGroups: [""]
     resources: [services]
     verbs: [get, create, delete]
+  # read only: a workspace's home volume being deleted means the workspace is (its instance goes at once)
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

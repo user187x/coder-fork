@@ -4,6 +4,11 @@
 
 Coder `2.0.0-platform.108` (fork `7e349ac79`).
 
+* **Deleting a workspace with code-server HA no longer hangs for two minutes** on "Still destroying" its home volume.
+  The code-server-replicator's instance pod mounts that volume, and was only removed after a stopped workspace's wait
+  (two leases) plus the pod's 30 s to end. Now a workspace whose home volume is being deleted loses its instance on
+  the replicator's next round, its pod ending within 5 s (a restart, its volume still there, waits as before). The
+  replicator may read volume claims (get only). On the dev cluster: the volume went in 35 s (was 1m56s).
 * **One platform route, `coder-enhanced`:** the platform service's HTTPRoute (was `coder-ui-updates`) now also carries
   `/__icons/`, the workspace template's icons, so coder-workspace's own `coder-workspace-icons` route is gone (its
   new `icons.httpRoute`, on by default for the chart alone, is off in coder-airgapped). Routes beside Coder's own:
