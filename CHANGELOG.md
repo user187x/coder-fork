@@ -2,7 +2,7 @@
 
 ## 1.46.0 – unreleased
 
-Coder `2.0.0-platform.108` (fork `9e83f6bb7`).
+Coder `2.0.0-platform.108` (fork `866faf2ff`).
 
 * **Fixes:**
   * **Ghostty's text size buttons** (the workspace page's Terminal panel) did nothing: on connecting, the terminal's
